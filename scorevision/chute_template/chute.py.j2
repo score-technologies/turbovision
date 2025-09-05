@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+
+{{ schema_defs }}
+
+{{ setup_utils }}
+
+{{ load_utils }}
+
+{{ predict_utils }}
+
+from typing import Any
+
+chute = init_chute(
+    username="{{ chute_user }}",
+    name="{{ chute_name }}",
+)
+
+@chute.on_startup()
+async def load_model(self):    
+    global model
+    model = _load_model(
+        repo_name="{{ repo_name }}", 
+        revision="{{ revision }}", 
+    )
+
+@chute.cord(public_api_path="/health", method="GET", public_api_method="GET")
+async def health_check(self) -> dict[str, Any]:
+    return health(
+        model=model, 
+        repo_name="{{ chute_name }}", 
+    )
+
+
+@chute.cord(
+    public_api_path="/{{ predict_endpoint }}",
+    method="POST",
+    public_api_method="POST"
+)
+async def predict_scorevision(self, data: SVPredictInput) -> SVPredictOutput:
+    return model_predict(
+        model=model,
+        data=data, 
+        model_name= "{{ chute_name }}", 
+    )

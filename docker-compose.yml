@@ -1,0 +1,55 @@
+version: "3.9"
+
+x-common: &common
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  mem_reservation: "6g"
+  mem_limit: "8g"
+
+services:
+  validator:
+    <<: *common
+    container_name: scorevision-validator
+    environment:
+      - SCOREVISION_CACHE_DIR=/app/data/blocks
+    volumes:
+      - validator-cache:/app/data/blocks
+    ports:
+      - "8001:8000"
+    depends_on:
+      signer:
+        condition: service_healthy
+    command: ["sv", "-v", "validate"]
+
+  runner:
+    <<: *common
+    container_name: scorevision-runner
+    ports:
+      - "8002:8000"
+    environment:
+      SCOREVISION_METRICS_PORT: 8000
+      SCOREVISION_METRICS_ADDR: 0.0.0.0
+      SIGNER_URL: http://signer:8080
+    command: ["sv", "-v", "runner"]
+
+  signer:
+    <<: *common
+    container_name: scorevision-signer
+    ports:
+      - "8080:8080"
+    environment:
+      SIGNER_HOST: 0.0.0.0
+      SIGNER_PORT: 8080
+    volumes:
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    command: ["sv", "-v", "signer"]
+
+volumes:
+  validator-cache:
