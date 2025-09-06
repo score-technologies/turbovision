@@ -1,26 +1,43 @@
-def predict_ultralytics_model(model, images: list[Image.Image]) -> list[SVFrameResult]:
+def model_predict(model, images: list[Image.Image]) -> list[SVFrameResult]:
     frame_results = []
-    detections = model(images)
-    for i, detection in enumerate(detections):
-        boxes = []
-        if hasattr(detection, "boxes") and detection.boxes is not None:
-            for box in detection.boxes.data:
-                x1, y1, x2, y2, conf, cls = box.tolist()
-                boxes.append(
+    for i in range(750):
+        frame_results.append(
+            SVFrameResult(
+                frame_id=i,
+                boxes=[
                     SVBox(
-                        x1=int(x1),
-                        y1=int(y1),
-                        x2=int(x2),
-                        y2=int(y2),
+                        x1=10,
+                        y1=20,
+                        x2=50,
+                        y2=33,
                         cls="player",
-                        conf=float(conf),
+                        conf=0.0,
                     )
-                )
-            frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
+                ],
+            )
+        )
+    # ---- example using YOLO------
+    # detections = model(images)
+    # for i, detection in enumerate(detections):
+    #     boxes = []
+    #     if hasattr(detection, "boxes") and detection.boxes is not None:
+    #         for box in detection.boxes.data:
+    #             x1, y1, x2, y2, conf, cls = box.tolist()
+    #             boxes.append(
+    #                 SVBox(
+    #                     x1=int(x1),
+    #                     y1=int(y1),
+    #                     x2=int(x2),
+    #                     y2=int(y2),
+    #                     cls="player",
+    #                     conf=float(conf),
+    #                 )
+    #             )
+    #         frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
     return frame_results
 
 
-def model_predict(
+def _predict(
     model: Any | None, data: SVPredictInput, model_name: str
 ) -> SVPredictOutput:
     try:
@@ -45,7 +62,7 @@ def model_predict(
                     model=model_name,
                 )
 
-        frame_results = predict_ultralytics_model(model=model, images=images)
+        frame_results = model_predict(model=model, images=images)
 
         return SVPredictOutput(
             success=True, model=model_name, predictions={"frames": frame_results}
