@@ -61,15 +61,15 @@ def deploy_mock_chute(huggingface_repo: str, huggingface_revision: str) -> None:
         )
 
     @chute.get("/health")
-    async def health_check() -> dict[str, Any]:
-        return chute_template_load.health(
+    async def health() -> dict[str, Any]:
+        return chute_template_load._health(
             model=model,
             repo_name=huggingface_repo,
         )
 
     @chute.post("/" + settings.CHUTES_MINER_PREDICT_ENDPOINT)
-    async def predict_scorevision(data: SVPredictInput) -> SVPredictOutput:
-        return chute_template_predict.model_predict(
+    async def predict(data: SVPredictInput) -> SVPredictOutput:
+        return chute_template_predict._predict(
             model=model,
             data=data,
             model_name=huggingface_repo,

@@ -14,15 +14,14 @@ def init_chute(username: str, name: str) -> Chute:
             name=name,
             tag="latest",
         )
-        .from_base("parachutes/python:3.12")
+        .from_base("python:3.12-bullseye")
+        .run_command("python -m pip install --upgrade pip setuptools wheel")
         .run_command(
-            """pip install \
-            opencv-python==4.8.0.76 \
+            """pip install --no-cache-dir \
             pillow==10.0.1 \
-            numpy>=1.25.0 \ 
             huggingface_hub==0.19.4"""
         )
-        .run_command("pip install ultralytics==8.0.206")  # YOLO support
+        # .run_command("pip install ultralytics==8.0.206")  # YOLO support
         .set_workdir("/app")
     )
 

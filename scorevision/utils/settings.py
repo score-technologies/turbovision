@@ -183,7 +183,7 @@ def get_settings() -> Settings:
             "https://{slug}.chutes.ai",
         ),
         CHUTES_MINER_PREDICT_ENDPOINT=getenv(
-            "CHUTES_MINER_PREDICT_ENDPOINT", "scorevision/predict"
+            "CHUTES_MINER_PREDICT_ENDPOINT", "predict"
         ),
         BITTENSOR_SUBTENSOR_ENDPOINT=getenv("BITTENSOR_SUBTENSOR_ENDPOINT", "finney"),
         BITTENSOR_SUBTENSOR_FALLBACK=getenv(
