@@ -1,39 +1,22 @@
 def model_predict(model, images: list[Image.Image]) -> list[SVFrameResult]:
     frame_results = []
-    for i in range(750):
-        frame_results.append(
-            SVFrameResult(
-                frame_id=i,
-                boxes=[
+    detections = model(images)
+    for i, detection in enumerate(detections):
+        boxes = []
+        if hasattr(detection, "boxes") and detection.boxes is not None:
+            for box in detection.boxes.data:
+                x1, y1, x2, y2, conf, cls = box.tolist()
+                boxes.append(
                     SVBox(
-                        x1=10,
-                        y1=20,
-                        x2=50,
-                        y2=33,
+                        x1=int(x1),
+                        y1=int(y1),
+                        x2=int(x2),
+                        y2=int(y2),
                         cls="player",
-                        conf=0.0,
+                        conf=float(conf),
                     )
-                ],
-            )
-        )
-    # ---- example using YOLO------
-    # detections = model(images)
-    # for i, detection in enumerate(detections):
-    #     boxes = []
-    #     if hasattr(detection, "boxes") and detection.boxes is not None:
-    #         for box in detection.boxes.data:
-    #             x1, y1, x2, y2, conf, cls = box.tolist()
-    #             boxes.append(
-    #                 SVBox(
-    #                     x1=int(x1),
-    #                     y1=int(y1),
-    #                     x2=int(x2),
-    #                     y2=int(y2),
-    #                     cls="player",
-    #                     conf=float(conf),
-    #                 )
-    #             )
-    #         frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
+                )
+            frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
     return frame_results
 
 
@@ -69,9 +52,6 @@ def _predict(
         )
 
     except Exception as e:
-        from traceback import format_exc
-
         print(f"Error in predict_scorevision: {str(e)}")
         print(format_exc())
-
         return SVPredictOutput(success=False, error=str(e), model=model_name)
