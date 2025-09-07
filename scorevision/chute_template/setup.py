@@ -1,12 +1,3 @@
-import os
-
-from chutes.chute import Chute, NodeSelector
-from chutes.image import Image as ChutesImage
-
-model = None
-os.environ["NO_PROXY"] = "localhost,127.0.0.1"
-
-
 def init_chute(username: str, name: str) -> Chute:
     image = (
         ChutesImage(
@@ -14,14 +5,11 @@ def init_chute(username: str, name: str) -> Chute:
             name=name,
             tag="latest",
         )
-        .from_base("python:3.12-bullseye")
-        .run_command("python -m pip install --upgrade pip setuptools wheel")
+        .from_base("parachutes/python:3.12")
+        .run_command("pip install --upgrade setuptools wheel")
         .run_command(
-            """pip install --no-cache-dir \
-            pillow==10.0.1 \
-            huggingface_hub==0.19.4"""
+            "pip install pillow==10.0.1 huggingface_hub==0.19.4 ultralytics==8.0.206 'torch<2.6'"
         )
-        # .run_command("pip install ultralytics==8.0.206")  # YOLO support
         .set_workdir("/app")
     )
 
