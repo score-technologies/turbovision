@@ -39,8 +39,8 @@ def _predict(
         n_frames = len(data.frames)
         for i in range(0, n_frames, batch_size):
             images = []
-            for frame in data.frames[i : i + batch_size]:
-                print(f"Predicting Frames: ({i}-{i+batch_size})/{n_frames}")
+            print(f"Predicting Batch of Frames: ({i}-{i+batch_size})/{n_frames}")
+            for frame in data.frames[i : i + batch_size]:                
                 try:
                     images.append(frame.image)
                 except Exception as e:

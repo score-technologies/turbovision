@@ -34,9 +34,9 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
 @chute.cord(
     public_api_path="/{{ predict_endpoint }}",
 )
-async def predict(self, data: SVPredictInput) -> SVPredictOutput:
+async def predict(self, data: SVPredictInput) -> dict:
     return _predict(
         model=self.model,
         data=data, 
         model_name= "{{ chute_name }}", 
-    )
+    ).model_dump(mode="json")
