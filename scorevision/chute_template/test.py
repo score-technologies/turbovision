@@ -179,6 +179,10 @@ async def test_chute_predict_endpoint(
         assert n_predictions == len(
             frames
         ), f"Number of predictions returned ({n_predictions}) does not match Number of frames given ({len(frames)})"
+        frame_ids = set(frame["frame_id"] for frame in predictions["frames"])
+        assert len(frame_ids) == len(
+            frames
+        ), f"Number of unique frame ids returned {len(frame_ids)} does not match number of unique frames given ({len(frames)})"
         logger.info("✅ /predict passed")
     except Exception as e:
         logger.error(f"❌ /predict failed: {e}")

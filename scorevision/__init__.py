@@ -147,7 +147,7 @@ def deploy_chute_locally(repo: str, revision: str):
 @click.option(
     "--n-frames",
     type=int,
-    default=5,
+    default=11,
     required=True,
 )
 @click.option(
