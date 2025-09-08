@@ -184,7 +184,7 @@ def query_chute_slug(revision: str) -> None:
     click.echo(f"Slug: {chute_slug}\nID: {chute_id}")
 
 
-@cli.command("chute-delete")
+@cli.command("delete-chute")
 @click.option(
     "--revision",
     type=str,

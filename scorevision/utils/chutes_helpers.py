@@ -209,12 +209,12 @@ async def delete_chute(revision: str) -> None:
     logger.info(" Removing model from chutes..")
 
     settings = get_settings()
-    chute_slug, _ = await get_chute_slug_and_id(revision=revision)
+    _, chute_id = await get_chute_slug_and_id(revision=revision)
     proc = await create_subprocess_exec(
         "chutes",
         "chutes",
         "delete",
-        chute_slug,
+        chute_id,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.PIPE,

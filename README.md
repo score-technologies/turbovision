@@ -147,12 +147,13 @@ Before you push your model, you can customise how it is loaded in on chutes and 
 It is highly recommended to build the chute locally after any changes to check for errors. Steps to build locally:
 - (optional) ssh onto a machine with the specs matching your requirements (e.g. GPU, etc)
 - ensure your `~/.chutes/config.ini` file is present on the machine (generated automatically when you register with chutes)
-- install docker and chutes any other python packages your chute requires ( NOTE: if you get errors when querying the endpoints, you can try: `pip install -U --pre chutes` but do not do this on the same machine you will push the chute live)
+- install docker and chutes 
 - generate the python script containing your chute called "my_chutes.py" via `sv -v generate-chute-script --revision your-hf-sha`
 - run `chutes build my_chutes:chute --local --public`
-- `export CHUTES_EXECUTION_CONTEXT=REMOTE`
-- start the container and run `chutes run my_chute:chute --dev --debug`
-- query the endpoints (e.g. `/health_check` - i.e. the chute-decorated function name)
+- `docker images`
+- run the image you just built and enter it `docker run -p 8000:8000 -it <image-name> /bin/bash` 
+- when inside the container: `export CHUTES_EXECUTION_CONTEXT=REMOTE` and run `chutes run my_chute:chute --dev --debug`
+- query the endpoints from outside the container
 
 5. Push the model to your miner
 Once you are happy with the changes, push your model to Huggingface Hub and then deploy it to Chutes and onto Bittensor with the following command:
