@@ -1,6 +1,6 @@
-def model_predict(model, images: list[Image.Image]) -> list[SVFrameResult]:
-    frame_results = []
-    detections = model(images)
+def model_predict_batch(model, batch_images: list[Image.Image]) -> list[SVFrameResult]:
+    batch_results = []
+    detections = model(batch_images)
     for i, detection in enumerate(detections):
         boxes = []
         if hasattr(detection, "boxes") and detection.boxes is not None:
@@ -16,8 +16,8 @@ def model_predict(model, images: list[Image.Image]) -> list[SVFrameResult]:
                         conf=float(conf),
                     )
                 )
-            frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
-    return frame_results
+            batch_results.append(SVFrameResult(frame_id=i, boxes=boxes))
+    return batch_results
 
 
 def _predict(
@@ -34,18 +34,23 @@ def _predict(
                 success=False, error="No frames provided", model=model_name
             )
 
-        images = []
-        for frame in data.frames:
-            try:
-                images.append(frame.image)
-            except Exception as e:
-                return SVPredictOutput(
-                    success=False,
-                    error=f"Failed to decode frame {frame.frame_id}: {str(e)}",
-                    model=model_name,
-                )
+        frame_results = []
+        batch_size = 4
+        n_frames = len(data.frames)
+        for i in range(0, n_frames, batch_size):
+            images = []
+            for frame in data.frames[i : i + batch_size]:
+                print(f"Predicting Frames: ({i}-{i+batch_size})/{n_frames}")
+                try:
+                    images.append(frame.image)
+                except Exception as e:
+                    return SVPredictOutput(
+                        success=False,
+                        error=f"Failed to decode frame {frame.frame_id}: {str(e)}",
+                        model=model_name,
+                    )
 
-        frame_results = model_predict(model=model, images=images)
+            frame_results.extend(model_predict_batch(model=model, batch_images=images))
 
         return SVPredictOutput(
             success=True, model=model_name, predictions={"frames": frame_results}
