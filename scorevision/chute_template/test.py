@@ -1,3 +1,4 @@
+import os
 from typing import Any
 from importlib.util import spec_from_file_location, module_from_spec
 from logging import getLogger
@@ -6,7 +7,8 @@ from itertools import islice
 from uvicorn import run
 from fastapi import FastAPI
 from PIL import Image
-import torch
+from huggingface_hub import snapshot_download
+from ultralytics import YOLO
 
 from scorevision.chute_template.schemas import (
     SVPredictInput,
@@ -27,7 +29,10 @@ chute_template_load_spec = spec_from_file_location(
     str(settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_LOAD_UTILS),
 )
 chute_template_load = module_from_spec(chute_template_load_spec)
+chute_template_load.os = os
 chute_template_load.Any = Any
+chute_template_load.snapshot_download = snapshot_download
+chute_template_load.YOLO = YOLO
 chute_template_load_spec.loader.exec_module(chute_template_load)
 
 # import scorevision.chute_template.predict
@@ -174,6 +179,10 @@ async def test_chute_predict_endpoint(
         assert n_predictions == len(
             frames
         ), f"Number of predictions returned ({n_predictions}) does not match Number of frames given ({len(frames)})"
+        frame_ids = set(frame["frame_id"] for frame in predictions["frames"])
+        assert len(frame_ids) == len(
+            frames
+        ), f"Number of unique frame ids returned {len(frame_ids)} does not match number of unique frames given ({len(frames)})"
         logger.info("✅ /predict passed")
     except Exception as e:
         logger.error(f"❌ /predict failed: {e}")

@@ -17,28 +17,26 @@ chute = init_chute(
 
 @chute.on_startup()
 async def load_model(self):    
-    global model
-    model = _load_model(
+    self.model = _load_model(
         repo_name="{{ repo_name }}", 
         revision="{{ revision }}", 
     )
+    print(f"GOT THIS MODEL: {self.model=}")
 
-@chute.cord(public_api_path="/health", method="GET", public_api_method="GET")
-async def health(self) -> dict[str, Any]:
+@chute.cord(public_api_path="/health", public_api_method="GET")
+async def health(self, *args, **kwargs) -> dict[str, Any]:
     return _health(
-        model=model, 
+        model=self.model, 
         repo_name="{{ chute_name }}", 
     )
 
 
 @chute.cord(
     public_api_path="/{{ predict_endpoint }}",
-    method="POST",
-    public_api_method="POST"
 )
-async def predict(self, data: SVPredictInput) -> SVPredictOutput:
+async def predict(self, data: SVPredictInput) -> dict:
     return _predict(
-        model=model,
+        model=self.model,
         data=data, 
         model_name= "{{ chute_name }}", 
-    )
+    ).model_dump(mode="json")

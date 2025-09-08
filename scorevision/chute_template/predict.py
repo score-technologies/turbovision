@@ -1,40 +1,27 @@
-def model_predict(model, images: list[Image.Image]) -> list[SVFrameResult]:
-    frame_results = []
-    for i in range(750):
-        frame_results.append(
-            SVFrameResult(
-                frame_id=i,
-                boxes=[
+def model_predict_batch(
+    model, batch_images: list[Image.Image], offset: int
+) -> list[SVFrameResult]:
+    batch_results = []
+    detections = model(batch_images)
+    for frame_number_in_batch, detection in enumerate(detections):
+        boxes = []
+        if hasattr(detection, "boxes") and detection.boxes is not None:
+            for box in detection.boxes.data:
+                x1, y1, x2, y2, conf, cls = box.tolist()
+                boxes.append(
                     SVBox(
-                        x1=10,
-                        y1=20,
-                        x2=50,
-                        y2=33,
+                        x1=int(x1),
+                        y1=int(y1),
+                        x2=int(x2),
+                        y2=int(y2),
                         cls="player",
-                        conf=0.0,
+                        conf=float(conf),
                     )
-                ],
+                )
+            batch_results.append(
+                SVFrameResult(frame_id=offset + frame_number_in_batch, boxes=boxes)
             )
-        )
-    # ---- example using YOLO------
-    # detections = model(images)
-    # for i, detection in enumerate(detections):
-    #     boxes = []
-    #     if hasattr(detection, "boxes") and detection.boxes is not None:
-    #         for box in detection.boxes.data:
-    #             x1, y1, x2, y2, conf, cls = box.tolist()
-    #             boxes.append(
-    #                 SVBox(
-    #                     x1=int(x1),
-    #                     y1=int(y1),
-    #                     x2=int(x2),
-    #                     y2=int(y2),
-    #                     cls="player",
-    #                     conf=float(conf),
-    #                 )
-    #             )
-    #         frame_results.append(SVFrameResult(frame_id=i, boxes=boxes))
-    return frame_results
+    return batch_results
 
 
 def _predict(
@@ -51,27 +38,35 @@ def _predict(
                 success=False, error="No frames provided", model=model_name
             )
 
-        images = []
-        for frame in data.frames:
-            try:
-                images.append(frame.image)
-            except Exception as e:
-                return SVPredictOutput(
-                    success=False,
-                    error=f"Failed to decode frame {frame.frame_id}: {str(e)}",
-                    model=model_name,
-                )
+        frame_results = []
+        batch_size = 4
+        n_frames = len(data.frames)
+        for frame_number in range(0, n_frames, batch_size):
+            images = []
+            print(
+                f"Predicting Batch of Frames: ({frame_number}-{frame_number+batch_size})/{n_frames}"
+            )
+            for frame in data.frames[frame_number : frame_number + batch_size]:
+                try:
+                    images.append(frame.image)
+                except Exception as e:
+                    return SVPredictOutput(
+                        success=False,
+                        error=f"Failed to decode frame {frame.frame_id}: {str(e)}",
+                        model=model_name,
+                    )
 
-        frame_results = model_predict(model=model, images=images)
+            frame_results.extend(
+                model_predict_batch(
+                    model=model, batch_images=images, offset=frame_number
+                )
+            )
 
         return SVPredictOutput(
             success=True, model=model_name, predictions={"frames": frame_results}
         )
 
     except Exception as e:
-        from traceback import format_exc
-
         print(f"Error in predict_scorevision: {str(e)}")
         print(format_exc())
-
         return SVPredictOutput(success=False, error=str(e), model=model_name)
