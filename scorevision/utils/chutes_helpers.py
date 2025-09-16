@@ -119,6 +119,49 @@ async def get_chute_slug_and_id(revision: str) -> tuple[str, str | None]:
     return slug, chute_id
 
 
+async def share_chute(chute_id: str) -> None:
+    logger.info(
+        "🤝 Temporary fix: Sharing private chute with the only testnet Vali to allow querying"
+    )
+    TESTNET_VALIDATOR_CHUTES_ID = "036aed78-6188-5919-94cb-71b61ededd63"
+
+    settings = get_settings()
+    proc = await create_subprocess_exec(
+        "chutes",
+        "share",
+        "--chute-id",
+        chute_id,
+        "--user-id",
+        TESTNET_VALIDATOR_CHUTES_ID,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
+        env={
+            **environ,
+            "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
+        },
+    )
+    if proc.stdin:
+        proc.stdin.write(b"y\n")  # auto-confirm
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+    # Read and log output line by line as it appears
+    assert proc.stdout is not None
+    full_output = []
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        decoded_line = line.decode(errors="ignore").rstrip()
+        full_output.append(decoded_line)
+        logger.info(f"[chutes share] {decoded_line}")
+
+    returncode = await proc.wait()
+    if returncode != 0:
+        raise ValueError("Chutes sharing failed.")
+
+
 async def build_chute(path: Path) -> None:
     logger.info(
         "🚧 Building model on chutes... This may take a while. Please don't exit."
@@ -131,6 +174,7 @@ async def build_chute(path: Path) -> None:
         f"{path.stem}:chute",
         "--public",
         "--wait",
+        "--debug",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.PIPE,
@@ -156,14 +200,45 @@ async def build_chute(path: Path) -> None:
         full_output.append(decoded_line)
         logger.info(f"[chutes build] {decoded_line}")
 
-    # out, _ = await proc.communicate()
-    # log = out.decode(errors="ignore")
-    # logger.info(log[-800:])
-    # if proc.returncode != 0:
     returncode = await proc.wait()
     if returncode != 0:
-        # logger.error(log)
         raise ValueError("Chutes building failed.")
+
+
+async def warmup_chute(chute_id: str) -> None:
+    logger.info("🧊🔥 Warming up chute..")
+
+    settings = get_settings()
+    proc = await create_subprocess_exec(
+        "chutes",
+        "warmup",
+        chute_id,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
+        env={
+            **environ,
+            "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
+        },
+    )
+    if proc.stdin:
+        proc.stdin.write(b"y\n")  # auto-confirm
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+    assert proc.stdout is not None
+    full_output = []
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        decoded_line = line.decode(errors="ignore").rstrip()
+        full_output.append(decoded_line)
+        logger.info(f"[chutes warmup] {decoded_line}")
+
+    returncode = await proc.wait()
+    if returncode != 0:
+        raise ValueError("Chutes warmup failed.")
 
 
 async def deploy_chute(path: Path) -> None:
@@ -174,8 +249,10 @@ async def deploy_chute(path: Path) -> None:
         "chutes",
         "deploy",
         f"{path.stem}:chute",
-        "--public",
+        # "--public",
+        "--accept-fee",
         "--logging-enabled",
+        "--debug",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.PIPE,
@@ -312,8 +389,6 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
             await build_and_deploy_chute(path=tmp_path)
             logger.info(f"Chute deployment successful")
         chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
-        # NOTE: Alternative method below - but API doesnt seem to have as up-to-date information returned
-        # chute_id, chute_slug = await resolve_chute_id_and_slug(model_name=model_name)
         logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
         return chute_id, chute_slug
     except Exception as e:

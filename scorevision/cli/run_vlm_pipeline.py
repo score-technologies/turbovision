@@ -11,16 +11,19 @@ from scorevision.utils.chutes_helpers import get_chute_slug_and_id
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.settings import get_settings
 from scorevision.utils.evaluate import evaluate_using_vlms, post_vlm_ranking
-
+from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
+    filter_low_quality_pseudo_gt_annotations,
+)
+from scorevision.utils.data_models import SVEvaluation
 
 logger = getLogger(__name__)
 
 
-async def vlm_pipeline(hf_revision: str, local_model: bool) -> None:
+async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
     """Run a single miner on the VLM pipeline off-chain"""
     settings = get_settings()
     challenge_data = {
-        "task_id": "mock-challenge",
+        "task_id": "0",
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
     }
     logger.info(f"Challenge data from API: {challenge_data}")
@@ -78,7 +81,7 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> None:
         payload=payload,
         meta={},
         prompt="ScoreVision video task mock-challenge",
-        challenge_id="mock-challenge",
+        challenge_id="0",
         frame_numbers=frame_numbers,
         frames=frames,
         dense_optical_flow_frames=flows,
@@ -91,6 +94,12 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> None:
         frame_numbers=challenge.frame_numbers,
     )
     logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
+    pseudo_gt_annotations = filter_low_quality_pseudo_gt_annotations(
+        annotations=pseudo_gt_annotations
+    )
+    logger.info(
+        f"{len(pseudo_gt_annotations)} Pseudo GT annotations had sufficient quality"
+    )
 
     vlm_evaluation = await evaluate_using_vlms(
         challenge=challenge,
@@ -100,8 +109,11 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> None:
     logger.info(f"VLM Evaluation: {vlm_evaluation}")
 
     evaluation = post_vlm_ranking(
+        payload=payload,
         miner_run=miner_output,
         challenge=challenge,
         miner_score=vlm_evaluation,
+        pseudo_gt_annotations=pseudo_gt_annotations,
     )
     logger.info(f"Evaluation: {evaluation}")
+    return evaluation

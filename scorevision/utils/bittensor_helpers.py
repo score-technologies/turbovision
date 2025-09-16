@@ -51,7 +51,7 @@ async def get_subtensor():
 
 
 async def on_chain_commit(
-    skip: bool, revision: str, chute_id: str | None, chute_slug: str | None
+    skip: bool, revision: str, chute_id: str, chute_slug: str | None
 ) -> None:
     # Try real on-chain; fallback to logging if bittensor not available
     settings = get_settings()

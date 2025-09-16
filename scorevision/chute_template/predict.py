@@ -7,19 +7,30 @@ def model_predict_batch(
         boxes = []
         if hasattr(detection, "boxes") and detection.boxes is not None:
             for box in detection.boxes.data:
-                x1, y1, x2, y2, conf, cls = box.tolist()
+                x1, y1, x2, y2, conf, cls_id = box.tolist()
                 boxes.append(
                     SVBox(
                         x1=int(x1),
                         y1=int(y1),
                         x2=int(x2),
                         y2=int(y2),
-                        cls="player",
+                        cls_id=int(cls_id),
                         conf=float(conf),
                     )
                 )
+            # TODO:
+            WIDTH = 960  # NOTE: this will vary depending on challenge size
+            HEIGHT = 540  # NOTE: this will vary depending on challenge size
+            N_KEYPOINTS = 32  # NOTE: this will vary depending on challenge type
+            keypoints = [
+                (randint(0, WIDTH), randint(0, HEIGHT)) for _ in range(N_KEYPOINTS)
+            ]
             batch_results.append(
-                SVFrameResult(frame_id=offset + frame_number_in_batch, boxes=boxes)
+                SVFrameResult(
+                    frame_id=offset + frame_number_in_batch,
+                    boxes=boxes,
+                    keypoints=keypoints,
+                )
             )
     return batch_results
 

@@ -629,7 +629,7 @@ wheels = [
 
 [[package]]
 name = "chutes"
-version = "0.3.22"
+version = "0.3.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -656,7 +656,7 @@ dependencies = [
     { name = "uvicorn" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/13/f5f566e9aba2ccb66d05dd97bb82db9c95dc7c0ed239709d7384e48418fd/chutes-0.3.22-py3-none-any.whl", hash = "sha256:7fc6bde4c408e8a77ff64bca818e6b88e2f6cfdeab18bbdcbf4d95f15a45041c", size = 10145635, upload-time = "2025-08-22T10:11:34.872Z" },
+    { url = "https://files.pythonhosted.org/packages/53/01/55576285521d83901a406ce7703e42e13d275c5631628f67796d7ce59554/chutes-0.3.28-py3-none-any.whl", hash = "sha256:174ef68d169756292f355c156857280c6715977992f59db6938fa4a6c8d79b0d", size = 10150865, upload-time = "2025-09-11T09:56:44.465Z" },
 ]
 
 [[package]]
@@ -3119,7 +3119,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = "==2.13.1" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "bittensor" },
-    { name = "chutes" },
+    { name = "chutes", specifier = ">=0.3.23" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi" },
     { name = "httpx" },

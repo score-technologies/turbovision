@@ -3,7 +3,7 @@ from time import time
 from typing import Any
 from hashlib import sha256
 from json import dumps
-from random import shuffle
+from random import shuffle, randint
 
 from aiohttp import ClientResponseError
 from numpy import ndarray
@@ -80,8 +80,17 @@ async def prepare_challenge_payload(
             settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER,
         )
     )
-    shuffle(frame_numbers)
-    selected_frame_numbers = frame_numbers[: settings.SCOREVISION_VLM_SELECT_N_FRAMES]
+    # shuffle(frame_numbers)
+    start_frame_number = randint(
+        1,
+        settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        - settings.SCOREVISION_VLM_SELECT_N_FRAMES
+        - 1,
+    )
+    selected_frame_numbers = frame_numbers[
+        start_frame_number : start_frame_number
+        + settings.SCOREVISION_VLM_SELECT_N_FRAMES
+    ]
     logger.info(f"Selected Frames for Testing: {selected_frame_numbers}")
 
     video_name, frames, flows = await download_video(

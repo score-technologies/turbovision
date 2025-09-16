@@ -8,6 +8,31 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 
 
+class ShirtColor(Enum):
+    WHITE = "white"
+    BLACK = "black"
+    RED = "red"
+    BLUE = "blue"
+    YELLOW = "yellow"
+    GREEN = "green"
+    ORANGE = "orange"
+    PURPLE = "purple"
+    MAROON = "maroon"
+    PINK = "pink"
+    GREY = "grey"
+    BROWN = "brown"
+    GOLD = "gold"
+    SILVER = "silver"
+    TURQUOISE = "turquoise"
+    OTHER = "other"
+
+
+TEAM1_SHIRT_COLOUR = (
+    ShirtColor.WHITE
+)  # arbitrary colours to convert team 1/2 predictions into distinct colours
+TEAM2_SHIRT_COLOUR = ShirtColor.BLACK
+
+
 class BoundingBox(BaseModel):
     """The bounding box around a single object"""
 
@@ -16,9 +41,9 @@ class BoundingBox(BaseModel):
         description="x_min, y_min, x_max, y_max in pixels (where x=0 is the left of the image and y=0 is the top of the image",
     )
     label: ObjectOfInterest = Field(..., description="The type of object shown")
-    cluster_id: int = Field(
+    cluster_id: ShirtColor = Field(
         ...,
-        description="Based on the visual appearance and colours of the object, assign a cluster number to group it with other similar looking objects.",
+        description="Based on the visual appearance and colours of the object, assign a cluster colour to group it with other similar looking objects.",
     )
 
 

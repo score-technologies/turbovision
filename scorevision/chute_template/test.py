@@ -3,6 +3,8 @@ from typing import Any
 from importlib.util import spec_from_file_location, module_from_spec
 from logging import getLogger
 from itertools import islice
+from random import randint
+from traceback import format_exc
 
 from uvicorn import run
 from fastapi import FastAPI
@@ -43,6 +45,8 @@ chute_template_predict_spec = spec_from_file_location(
 chute_template_predict = module_from_spec(chute_template_predict_spec)
 chute_template_predict.Any = Any
 chute_template_predict.Image = Image
+chute_template_predict.randint = randint
+chute_template_predict.format_exc = format_exc
 chute_template_predict.SVFrameResult = SVFrameResult
 chute_template_predict.SVPredictInput = SVPredictInput
 chute_template_predict.SVPredictOutput = SVPredictOutput
@@ -65,7 +69,7 @@ def deploy_mock_chute(huggingface_repo: str, huggingface_revision: str) -> None:
             revision=huggingface_revision,
         )
 
-    @chute.get("/health")
+    @chute.post("/health")
     async def health() -> dict[str, Any]:
         return chute_template_load._health(
             model=model,
@@ -83,7 +87,7 @@ def deploy_mock_chute(huggingface_repo: str, huggingface_revision: str) -> None:
     @chute.get("/api/tasks/next/v2")
     async def mock_challenge():
         return {
-            "task_id": "mock-challenge",
+            "task_id": "0",  # football
             "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
         }
 
@@ -101,7 +105,7 @@ async def test_chute_health_endpoint(base_url: str) -> None:
     url = f"{base_url}/health"
     logger.info(url)
     try:
-        async with session.get(url, headers=headers) as response:
+        async with session.post(url, headers=headers, json={}) as response:
             text = await response.text()
             logger.info(f"Response: {text} ({response.status})")
             health = await response.json()
@@ -159,9 +163,7 @@ async def test_chute_predict_endpoint(
             for frame_number, frame in frames.items()
         ]
         logger.info("Frames converted to b64")
-        payload = payload = SVPredictInput(
-            frames=b64_frames[:first_n_frames], meta=None
-        )
+        payload = SVPredictInput(frames=b64_frames[:first_n_frames], meta=None)
         async with session.post(
             url,
             headers=headers,

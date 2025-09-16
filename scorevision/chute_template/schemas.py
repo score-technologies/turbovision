@@ -3,6 +3,7 @@ from io import BytesIO
 from typing import Any
 from base64 import b64decode
 from traceback import format_exc
+from random import randint
 
 from pydantic import BaseModel
 from PIL import Image
@@ -33,13 +34,15 @@ class SVBox(BaseModel):
     y1: int
     x2: int
     y2: int
-    cls: str = "player"
+    cls_id: int
     conf: float = 1.0
 
 
 class SVFrameResult(BaseModel):
     frame_id: int
     boxes: list[SVBox]
+    keypoints: list[tuple[int, int]]  # pixel coordinates
+    # action:str #TODO:
 
 
 class SVPredictOutput(BaseModel):
