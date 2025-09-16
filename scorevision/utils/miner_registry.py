@@ -183,9 +183,3 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
 
     keep_uids = {uid for _, uid in best_by_model.values()}
     return {uid: filtered[uid] for uid in keep_uids if uid in filtered}
-
-
-if __name__ == "__main__":
-    from asyncio import run
-
-    print(run(fetch_chute_info(chute_id="f0b4cebd-c0be-5f31-b7c5-c09302014330")))
