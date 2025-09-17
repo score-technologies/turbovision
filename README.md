@@ -36,7 +36,7 @@ EOF
 ## Chutes 
 
 ### Install chutes cli
-`pip install chutes`
+`pip install -U chutes`
 
 ### Register your account
 `chutes register`
@@ -46,9 +46,11 @@ Follow the interactive prompts to:
 - Enter your desired username
 - Select your Bittensor wallet
 - Choose your hotkey
-- Complete the registration process
-- Create a token
+- Complete the registration process (note your unique fingerprint)
 
+### Create an API key
+- Log into chutes website (via your fingerprint)
+- Create an API token 
 
 ### Update your .env file
 ```bash
@@ -185,6 +187,13 @@ You can also run the full validator scoring mechanism on the model with a fake c
 ```bash 
 sv -vv test-chute --revision your-huggingface-repo-sha 
 ```
+
+If you are finding problems with your live chute, you can view its logs like so:
+- log into chutes via the browser (use your fingerprint)
+- find the chute "My Chutes"
+- go to the "Statistics" tab
+- note down the instance-id
+- query the logs via the api: `curl -XGET https://api.chutes.ai/instances/<CHUTE-INSTANCE-ID>/logs -H "Authorization: <CHUTES-API-KEY>"`
 
 7. Delete old models (optional)
 You can remove an old version of your model from chutes if desired

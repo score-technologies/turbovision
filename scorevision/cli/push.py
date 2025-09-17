@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from scorevision.utils.settings import get_settings
-from scorevision.utils.chutes_helpers import deploy_to_chutes
-from scorevision.utils.predict import warmup
+from scorevision.utils.chutes_helpers import deploy_to_chutes, share_chute, warmup_chute
+
 from scorevision.utils.huggingface_helpers import (
     create_update_or_verify_huggingface_repo,
 )
@@ -25,12 +25,12 @@ async def push_ml_model(
         skip=skip_chutes_deploy,
     )
 
-    await on_chain_commit(
-        skip=skip_bittensor_commit,
-        revision=hf_revision,
-        chute_id=chute_id,
-        chute_slug=chute_slug,
-    )
-
-    if warmup_video_url:
-        await warmup(url=warmup_video_url, slug=chute_slug)
+    if chute_id:
+        await share_chute(chute_id=chute_id)
+        await on_chain_commit(
+            skip=skip_bittensor_commit,
+            revision=hf_revision,
+            chute_id=chute_id,
+            chute_slug=chute_slug,
+        )
+        await warmup_chute(chute_id=chute_id)

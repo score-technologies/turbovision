@@ -3,23 +3,33 @@ from logging import getLogger
 from cv2 import FONT_HERSHEY_SIMPLEX, putText, rectangle
 from numpy import ndarray
 
-from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
+from scorevision.vlm_pipeline.utils.response_models import (
+    BoundingBox,
+    FrameAnnotation,
+    ShirtColor,
+)
 
 logger = getLogger(__name__)
 
 
-COLOURS = [
-    (0, 255, 0),  # Green
-    (255, 0, 0),  # Blue
-    (0, 0, 255),  # Red
-    (255, 255, 0),  # Cyan
-    (255, 0, 255),  # Magenta
-    (0, 255, 255),  # Yellow
-    (128, 0, 128),  # Purple
-    (255, 165, 0),  # Orange
-    (0, 128, 0),  # Dark Green
-    (128, 0, 0),  # Dark Blue
-]
+COLOURS = {
+    ShirtColor.WHITE: (255, 255, 255),
+    ShirtColor.BLACK: (0, 0, 0),
+    ShirtColor.RED: (0, 0, 255),
+    ShirtColor.BLUE: (255, 0, 0),
+    ShirtColor.YELLOW: (0, 255, 255),
+    ShirtColor.GREEN: (0, 255, 0),
+    ShirtColor.ORANGE: (0, 165, 255),
+    ShirtColor.PURPLE: (128, 0, 128),
+    ShirtColor.MAROON: (0, 0, 128),
+    ShirtColor.PINK: (203, 192, 255),
+    ShirtColor.GREY: (128, 128, 128),
+    ShirtColor.BROWN: (42, 42, 165),
+    ShirtColor.GOLD: (0, 215, 255),
+    ShirtColor.SILVER: (192, 192, 192),
+    ShirtColor.TURQUOISE: (208, 224, 64),
+    ShirtColor.OTHER: (0, 255, 128),
+}
 
 
 def annotate_frame_label(frame: ndarray, label: str) -> None:
@@ -36,7 +46,7 @@ def annotate_frame_label(frame: ndarray, label: str) -> None:
 
 def annotate_bbox(frame: ndarray, bbox: BoundingBox) -> None:
     x_min, y_min, x_max, y_max = bbox.bbox_2d
-    color = COLOURS[(bbox.cluster_id - 1) % len(COLOURS)]
+    color = COLOURS[bbox.cluster_id]
     rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
     putText(
         frame,

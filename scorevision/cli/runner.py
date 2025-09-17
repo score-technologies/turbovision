@@ -14,6 +14,9 @@ from scorevision.vlm_pipeline.vlm_annotator import (
 )
 from scorevision.utils.miner_registry import get_miners_from_registry, Miner
 from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
+    filter_low_quality_pseudo_gt_annotations,
+)
 
 logger = getLogger(__name__)
 
@@ -42,6 +45,12 @@ async def runner(slug: str | None = None) -> None:
             frame_numbers=challenge.frame_numbers,
         )
         logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
+        pseudo_gt_annotations = filter_low_quality_pseudo_gt_annotations(
+            annotations=pseudo_gt_annotations
+        )
+        logger.info(
+            f"{len(pseudo_gt_annotations)} Pseudo GT annotations had sufficient quality"
+        )
         for m in miner_list:
             try:
                 miner_output = await call_miner_model_on_chutes(
@@ -58,9 +67,11 @@ async def runner(slug: str | None = None) -> None:
                 logger.info(f"VLM Evaluation: {vlm_evaluation}")
 
                 evaluation = post_vlm_ranking(
+                    payload=payload,
                     miner_run=miner_output,
                     challenge=challenge,
                     miner_score=vlm_evaluation,
+                    pseudo_gt_annotations=pseudo_gt_annotations,
                 )
                 logger.info(f"Evaluation: {evaluation}")
 

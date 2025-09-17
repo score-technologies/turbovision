@@ -234,7 +234,8 @@ def generate_chute_file(revision: str) -> None:
 def test_vlm_pipeline(revision: str, local: bool) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:
-        run(vlm_pipeline(hf_revision=revision, local_model=local))
+        result = run(vlm_pipeline(hf_revision=revision, local_model=local))
+        click.echo(result)
     except Exception as e:
         click.echo(e)
 

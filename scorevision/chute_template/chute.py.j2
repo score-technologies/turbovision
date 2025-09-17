@@ -23,7 +23,7 @@ async def load_model(self):
     )
     print(f"GOT THIS MODEL: {self.model=}")
 
-@chute.cord(public_api_path="/health", public_api_method="GET")
+@chute.cord(public_api_path="/health")
 async def health(self, *args, **kwargs) -> dict[str, Any]:
     return _health(
         model=self.model, 

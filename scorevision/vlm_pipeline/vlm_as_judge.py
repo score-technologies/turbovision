@@ -103,7 +103,7 @@ def aggregate_results_over_frames(
 async def pairwise_judge_annotations_for_select_frame(
     miner_id: str,
     frame_data: PseudoGroundTruth,
-    miner_annotation: FrameAnnotation | None,
+    miner_annotation: dict | None,
     provider: VLMProvider = VLMProvider.PRIMARY,
 ) -> VLMJudgeFrameResults | None:
 
@@ -122,12 +122,17 @@ async def pairwise_judge_annotations_for_select_frame(
         )
         annotated_b = annotate_image(
             image=frame_data.spatial_image,
-            annotations=miner_annotation,
+            annotations=FrameAnnotation(
+                bboxes=miner_annotation["bboxes"],
+                category=Action(miner_annotation["action"]),
+                confidence=100,
+                reason="",
+            ),
             name=Winner.MINER.value,
         )
         iou_image = display_iou(
             bboxes_a=frame_data.annotation.bboxes,
-            bboxes_b=miner_annotation.bboxes,
+            bboxes_b=miner_annotation["bboxes"],
             image_height=h,
             image_width=w,
         )
@@ -151,15 +156,8 @@ async def pairwise_judge_annotations_for_select_frames(
     miner_id: str,
     video_url: str,
     challenge_data: list[PseudoGroundTruth],
-    miner_annotations: dict[int, FrameAnnotation],
+    miner_annotations: dict[int, dict],
 ) -> MinerScore:
-    EMPTY_FRAME = FrameAnnotation(
-        bboxes=[],
-        category=Action.NONE,
-        confidence=100,
-        reason="miner annotation for frame number missing!",
-    )
-
     judge_results = []
 
     tasks = [

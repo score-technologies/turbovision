@@ -13,6 +13,7 @@ services:
     container_name: scorevision-validator
     environment:
       - SCOREVISION_CACHE_DIR=/app/data/blocks
+      - SIGNER_URL=http://signer:8080
     volumes:
       - validator-cache:/app/data/blocks
     ports:
