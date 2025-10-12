@@ -10,7 +10,7 @@ from numpy import ndarray
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.bittensor_helpers import load_hotkey_keypair
-from scorevision.utils.signing import sign_message
+from scorevision.utils.signing import sign_message, create_validator_auth_headers
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.video_processing import download_video
@@ -159,18 +159,13 @@ async def get_next_challenge() -> dict:
         wallet_name=settings.BITTENSOR_WALLET_COLD,
         hotkey_name=settings.BITTENSOR_WALLET_HOT,
     )
-    nonce = str(int(time() * 1e9))
-    signature = sign_message(keypair, nonce)
-
-    params = {
-        "validator_hotkey": settings.BITTENSOR_WALLET_HOT,
-        "signature": signature,
-        "nonce": nonce,
-        "netuid": settings.SCOREVISION_NETUID,
-    }
+    
+    # Create authentication headers as expected by the API
+    headers = create_validator_auth_headers(keypair)
+    
     session = await get_async_client()
     async with session.get(
-        f"{settings.SCOREVISION_API}/api/tasks/next/v2", params=params
+        f"{settings.SCOREVISION_API}/api/tasks/next/v2", headers=headers
     ) as response:
         response.raise_for_status()
         challenge = await response.json() or None
