@@ -37,6 +37,7 @@ services:
       SIGNER_URL: http://signer:8080
     volumes:
       - ${HOME}/.chutes:/root/.chutes:ro
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     command: ["sv", "-v", "runner"]
 
   signer:
