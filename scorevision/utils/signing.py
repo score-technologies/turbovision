@@ -7,11 +7,7 @@ from scorevision.utils.settings import get_settings
 
 
 async def _sign_batch(payloads: list[str]) -> tuple[str, list[str]]:
-    """
-    Retourne (hotkey_hex, signatures_hex[]).
-    1) essaie SIGNER_URL /sign
-    2) fallback: SIGN_SEED local
-    """
+    """ """
     settings = get_settings()
     if settings.SIGNER_URL:
         try:

@@ -11,7 +11,7 @@ logger = getLogger(__name__)
 
 
 def filter_low_quality_pseudo_gt_annotations(
-    annotations: list[PseudoGroundTruth], min_iou_threshold: float = 0.4
+    annotations: list[PseudoGroundTruth], min_iou_threshold: float = 0.7
 ) -> list[PseudoGroundTruth]:
     settings = get_settings()
     pgt_lookup = {pgt.frame_number: pgt for pgt in annotations}

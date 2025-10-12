@@ -32,14 +32,14 @@ def temporary_chutes_config_file(prefix: str, delete: bool = True):
 
 def generate_nickname(key: str) -> str:
     petname.random = Random(int(key, 16))
-    return petname.Generate(words=2, separator="-")
+    return petname.Generate(words=1, separator="-")
 
 
 def get_chute_name(hf_revision: str) -> str:
     settings = get_settings()
     nickname = generate_nickname(key=hf_revision)
     logger.info(f"Hf Revision ({hf_revision}) -> Nickname ({nickname})")
-    return f"{settings.HUGGINGFACE_USERNAME.replace('/','-')}-{nickname}".lower()
+    return f"turbovision-{settings.HUGGINGFACE_USERNAME.replace('/','-')}-{nickname}".lower()
 
 
 def guess_chute_slug(hf_revision: str) -> str:
@@ -142,7 +142,7 @@ async def share_chute(chute_id: str) -> None:
         },
     )
     if proc.stdin:
-        proc.stdin.write(b"y\n")  # auto-confirm
+        proc.stdin.write(b"y\n")
         await proc.stdin.drain()
         proc.stdin.close()
 

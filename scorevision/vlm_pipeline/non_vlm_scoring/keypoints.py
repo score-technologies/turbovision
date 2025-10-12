@@ -1,6 +1,6 @@
 from logging import getLogger
 
-from numpy import array, uint8, float32, ndarray, logical_and
+from numpy import array, uint8, float32, ndarray
 from cv2 import (
     bitwise_and,
     findHomography,
@@ -21,11 +21,11 @@ from cv2 import (
     CHAIN_APPROX_SIMPLE,
     findContours,
     boundingRect,
+    dilate,
 )
 
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 
-# from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import intersection_over_union
 from scorevision.chute_template.schemas import SVFrame
 from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     football_pitch as challenge_template,
@@ -44,7 +44,7 @@ class InvalidMask(Exception):
     pass
 
 
-def has_a_wide_line(mask: ndarray, max_aspect_ratio: float = 0.5) -> bool:
+def has_a_wide_line(mask: ndarray, max_aspect_ratio: float = 1.0) -> bool:
     contours, _ = findContours(mask, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)
     for cnt in contours:
         x, y, w, h = boundingRect(cnt)
@@ -104,11 +104,11 @@ def validate_projected_corners(
             source_keypoints[INDEX_KEYPOINT_CORNER_TOP_LEFT],
         ],
         dtype="float32",
-    )
-    src_corners_reshaped = src_corners[None, :, :]
-    warped_corners = perspectiveTransform(src_corners_reshaped, homography_matrix)[0]
-    cnt = warped_corners.reshape((-1, 1, 2))
-    if is_bowtie:
+    )[None, :, :]
+
+    warped_corners = perspectiveTransform(src_corners, homography_matrix)[0]
+
+    if is_bowtie(warped_corners):
         raise InvalidMask("Projection twisted!")
 
 
@@ -167,6 +167,8 @@ def extract_mask_of_ground_lines_in_image(
     canny_low: int = 30,
     canny_high: int = 100,
     use_tophat: bool = True,
+    dilate_kernel_size: int = 3,  # thicken the edges
+    dilate_iterations: int = 3,
 ) -> ndarray:
     h, w = image.shape[:2]
     gray = cvtColor(image, COLOR_BGR2GRAY)
@@ -179,6 +181,14 @@ def extract_mask_of_ground_lines_in_image(
 
     image_edges = Canny(gray, canny_low, canny_high)
     image_edges_on_ground = bitwise_and(image_edges, image_edges, mask=ground_mask)
+
+    if dilate_kernel_size > 1:
+        dilate_kernel = getStructuringElement(
+            MORPH_RECT, (dilate_kernel_size, dilate_kernel_size)
+        )
+        image_edges_on_ground = dilate(
+            image_edges_on_ground, dilate_kernel, iterations=dilate_iterations
+        )
     return (image_edges_on_ground > 0).astype(uint8)
 
 
@@ -203,14 +213,11 @@ def evaluate_keypoints_for_frame(
             image=frame, ground_mask=mask_ground
         )
 
-        # score = intersection_over_union(
-        #    mask1=mask_lines_expected, mask2=mask_lines_predicted
-        # )
-        pixels_overlapping = logical_and(
+        pixels_overlapping = bitwise_and(
             mask_lines_expected, mask_lines_predicted
         ).sum()
-        pixels_on_edges = mask_lines_predicted.sum()
-        score = pixels_overlapping / (pixels_on_edges + 1e-8)
+        pixels_on_lines = mask_lines_expected.sum()
+        score = pixels_overlapping / (pixels_on_lines + 1e-8)
         return score
     except Exception as e:
         logger.error(e)
@@ -219,17 +226,18 @@ def evaluate_keypoints_for_frame(
 
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],
-    frames: list[SVFrame],
+    frames: dict[int, ndarray],
     challenge_type: SVChallenge,
 ) -> list[float]:
     # TODO: use challenge_type to switch the template and keypoints
     template_image = challenge_template()
     template_keypoints = KEYPOINTS
-    frame_lookup = {frame.frame_id: frame for frame in frames}
+    # frame_lookup = {frame.frame_id: frame for frame in frames}
     frame_scores = []
     for frame_number, annotations_miner in miner_predictions.items():
         miner_keypoints = annotations_miner["keypoints"]
-        frame_image = frame_lookup.get(frame_number)
+        # frame_image = frame_lookup.get(frame_number)
+        frame_image = frames.get(frame_number)
         if (
             annotations_miner is None
             or frame_image is None
@@ -240,7 +248,7 @@ def evaluate_keypoints(
             frame_score = evaluate_keypoints_for_frame(
                 template_keypoints=template_keypoints,
                 frame_keypoints=miner_keypoints,
-                frame=array(frame_image.image),
+                frame=frame_image,  # array(frame_image.image),
                 floor_markings_template=template_image,
             )
         logger.info(f"[evaluate_keypoints] Frame {frame_number}: {frame_score}")

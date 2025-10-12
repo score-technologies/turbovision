@@ -1,16 +1,20 @@
 import os
-from typing import Any
+from typing import Any, Generator
 from importlib.util import spec_from_file_location, module_from_spec
 from logging import getLogger
 from itertools import islice
 from random import randint
 from traceback import format_exc
+from requests import get
+from tempfile import NamedTemporaryFile
 
 from uvicorn import run
 from fastapi import FastAPI
 from PIL import Image
 from huggingface_hub import snapshot_download
 from ultralytics import YOLO
+from cv2 import VideoCapture, cvtColor, COLOR_BGR2RGB, CAP_PROP_FRAME_COUNT
+from numpy import ndarray
 
 from scorevision.chute_template.schemas import (
     SVPredictInput,
@@ -44,13 +48,19 @@ chute_template_predict_spec = spec_from_file_location(
 )
 chute_template_predict = module_from_spec(chute_template_predict_spec)
 chute_template_predict.Any = Any
+chute_template_predict.Generator = Generator
 chute_template_predict.Image = Image
+chute_template_predict.get = get
+chute_template_predict.NamedTemporaryFile = NamedTemporaryFile
 chute_template_predict.randint = randint
 chute_template_predict.format_exc = format_exc
 chute_template_predict.SVFrameResult = SVFrameResult
 chute_template_predict.SVPredictInput = SVPredictInput
 chute_template_predict.SVPredictOutput = SVPredictOutput
 chute_template_predict.SVBox = SVBox
+chute_template_predict.VideoCapture = VideoCapture
+chute_template_predict.ndarray = ndarray
+chute_template_predict.CAP_PROP_FRAME_COUNT = CAP_PROP_FRAME_COUNT
 chute_template_predict_spec.loader.exec_module(chute_template_predict)
 
 logger = getLogger(__name__)

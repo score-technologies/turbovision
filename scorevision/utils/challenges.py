@@ -16,6 +16,10 @@ from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.video_processing import download_video
 from scorevision.utils.image_processing import image_to_base64, pil_from_array
 from scorevision.chute_template.schemas import SVPredictInput, SVFrame
+from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
+    parse_challenge_type,
+    ChallengeType,
+)
 
 logger = getLogger(__name__)
 
@@ -46,7 +50,7 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]
     canonical = {
         "env": "SVEnv",
         "prompt": prompt,
-        "extra": {"meta": meta, "n_frames": len(payload.frames)},
+        "extra": {"meta": meta, "n_frames": len(frames)},
     }
 
     cid = sha256(
@@ -66,8 +70,8 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]
 
 
 async def prepare_challenge_payload(
-    challenge: dict,
-) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray]]:
+    challenge: dict, batch_size: int | None = 64, mock_after_n_frames: int | None = None
+) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray], dict[int, ndarray]]:
     settings = get_settings()
 
     video_url = challenge.get("video_url") or challenge.get("asset_url")
@@ -107,18 +111,6 @@ async def prepare_challenge_payload(
             "No Dense Optical Flows were successfully computed from Video"
         )
     height, width = frames[0].shape[:2]
-    b64_frames = [
-        SVFrame(
-            frame_id=frame_number,
-            data=image_to_base64(
-                img=pil_from_array(array=frame),
-                fmt="JPEG",
-                quality=settings.SCOREVISION_IMAGE_JPEG_QUALITY,
-                optimise=True,
-            ),
-        )
-        for frame_number, frame in frames.items()
-    ]
     meta = {
         "version": 1,
         "width": width or 0,
@@ -127,16 +119,22 @@ async def prepare_challenge_payload(
             challenge.get("fps") or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
         ),
         "task_id": challenge.get("task_id"),
+        "challenge_type": challenge.get("challenge_type"),
     }
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]
+    if batch_size:
+        meta["batch_size"] = batch_size
+    if mock_after_n_frames:
+        meta["mock_after_n_frames"] = mock_after_n_frames
     select_frames = [frames[frame_number] for frame_number in selected_frame_numbers]
-    payload = SVPredictInput(frames=b64_frames, meta=meta)
+    payload = SVPredictInput(url=video_url, meta=meta)
     return (
         payload,
         selected_frame_numbers,
         select_frames,
         list(flows.values()),
+        frames,
     )
 
 
@@ -157,7 +155,6 @@ async def get_next_challenge() -> dict:
     if not settings.SCOREVISION_API:
         raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
 
-    # Load signer (validator) keypair; sign a nonce like your snippet
     keypair = load_hotkey_keypair(
         wallet_name=settings.BITTENSOR_WALLET_COLD,
         hotkey_name=settings.BITTENSOR_WALLET_HOT,
@@ -180,13 +177,77 @@ async def get_next_challenge() -> dict:
         if not challenge:
             raise ScoreVisionChallengeError("No challenge available from API")
 
-        # Normalize id → task_id
         if "id" in challenge and "task_id" not in challenge:
             challenge["task_id"] = challenge.pop("id")
 
-        # Basic sanity
         if not (challenge.get("video_url") or challenge.get("asset_url")):
             raise ScoreVisionChallengeError("Challenge missing video url.")
 
+        ct = (
+            parse_challenge_type(challenge.get("challenge_type"))
+            or ChallengeType.FOOTBALL
+        )
+        challenge["challenge_type"] = ct.value
+
         logger.info(f"Fetched challenge: task_id={challenge.get('task_id')}")
         return challenge
+
+
+def build_svchallenge_from_parts(
+    chal_api: dict,
+    payload: SVPredictInput,
+    frame_numbers: list[int],
+    frames: list[ndarray],
+    flows: list[ndarray],
+) -> SVChallenge:
+    prompt = f"ScoreVision video task {chal_api.get('task_id')}"
+    meta = payload.meta | {"seed": chal_api.get("seed", 0)}
+    canonical = {
+        "env": "SVEnv",
+        "prompt": prompt,
+        "extra": {"meta": meta, "n_frames": len(frames)},
+    }
+    cid = sha256(
+        dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    ct = parse_challenge_type(chal_api.get("challenge_type"))
+    return SVChallenge(
+        env="SVEnv",
+        payload=payload,
+        meta=meta,
+        prompt=prompt,
+        challenge_id=cid,
+        frame_numbers=frame_numbers,
+        frames=frames,
+        dense_optical_flow_frames=flows,
+        api_task_id=chal_api.get("task_id"),
+        challenge_type=ct,
+    )
+
+
+async def get_challenge_from_scorevision_with_source() -> (
+    tuple[SVChallenge, SVPredictInput, dict, dict]
+):
+    try:
+        chal_api = await get_next_challenge()
+    except ClientResponseError as e:
+        raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
+    except ScoreVisionChallengeError as e:
+        raise e
+    except Exception as e:
+        raise Exception(f"Unexpected error while fetching challenge: {e}")
+
+    payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
+        challenge=chal_api
+    )
+    if not payload:
+        raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")
+
+    challenge = build_svchallenge_from_parts(
+        chal_api=chal_api,
+        payload=payload,
+        frame_numbers=frame_numbers,
+        frames=frames,
+        flows=flows,
+    )
+    return challenge, payload, chal_api, all_frames

@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 class Settings(BaseModel):
@@ -47,6 +47,7 @@ class Settings(BaseModel):
     R2_WRITE_ACCESS_KEY_ID: SecretStr
     R2_WRITE_SECRET_ACCESS_KEY: SecretStr
     R2_CONCURRENCY: int
+    R2_BUCKET_PUBLIC_URL: str
 
     # Signer
     SIGNER_URL: str
@@ -56,6 +57,7 @@ class Settings(BaseModel):
 
     # ScoreVision
     SCOREVISION_NETUID: int
+    SCOREVISION_MECHID: int
     SCOREVISION_VERSION: str
     SCOREVISION_API: str
 
@@ -89,6 +91,10 @@ class Settings(BaseModel):
     SCOREVISION_M_MIN: int
     SCOREVISION_TEMPO: int
     SCOREVISION_CACHE_DIR: Path
+    SCOREVISION_WINDOW_TIEBREAK_ENABLE: bool
+    SCOREVISION_WINDOW_K_PER_VALIDATOR: int
+    SCOREVISION_WINDOW_DELTA_ABS: float
+    SCOREVISION_WINDOW_DELTA_REL: float
 
 
 @lru_cache
@@ -96,14 +102,20 @@ def get_settings() -> Settings:
     load_dotenv()
     return Settings(
         # No defaults - MUST be set by User
-        SCOREVISION_API=getenv("SCOREVISION_API", ""),
+        SCOREVISION_API=getenv("SCOREVISION_API", "https://api.scorevision.io"),
         CHUTES_API_KEY=getenv("CHUTES_API_KEY", ""),
-        BITTENSOR_WALLET_PATH=Path(getenv("BITTENSOR_WALLET_PATH", "")).expanduser(),
+        BITTENSOR_WALLET_PATH=Path(
+            getenv(
+                "BITTENSOR_WALLET_PATH",
+                str(Path.home() / ".bittensor" / "wallets"),
+            )
+        ).expanduser(),
         OPENROUTER_API_KEY=getenv("OPENROUTER_API_KEY", ""),
         R2_BUCKET=getenv("R2_BUCKET", ""),
         R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
         R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
+        R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
         HUGGINGFACE_USERNAME=getenv("HUGGINGFACE_USERNAME", ""),
         HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
         CHUTES_USERNAME=getenv("CHUTES_USERNAME", ""),
@@ -112,6 +124,7 @@ def get_settings() -> Settings:
         BITTENSOR_WALLET_COLD=getenv("BITTENSOR_WALLET_COLD", "default"),
         BITTENSOR_WALLET_HOT=getenv("BITTENSOR_WALLET_HOT", "default"),
         SCOREVISION_NETUID=int(getenv("SCOREVISION_NETUID", 44)),
+        SCOREVISION_MECHID=1,
         SCOREVISION_MAX_CONCURRENT_API_CALLS=int(
             getenv("SCOREVISION_MAX_CONCURRENT_API_CALLS", 8)
         ),
@@ -134,7 +147,7 @@ def get_settings() -> Settings:
         CHUTES_VLM=getenv("CHUTES_VLM", "Qwen/Qwen2.5-VL-72B-Instruct"),
         OPENROUTER_VLM=getenv("OPENROUTER_VLM", "qwen/qwen2.5-vl-72b-instruct:free"),
         SCOREVISION_VLM_TEMPERATURE=float(getenv("SCOREVISION_VLM_TEMPERATURE", 0.1)),
-        SCOREVISION_API_TIMEOUT_S=int(getenv("SCOREVISION_API_TIMEOUT_S", 180)),
+        SCOREVISION_API_TIMEOUT_S=int(getenv("SCOREVISION_API_TIMEOUT_S", 300)),
         SCOREVISION_VIDEO_MIN_FRAME_NUMBER=int(
             getenv("SCOREVISION_VIDEO_MIN_FRAME_NUMBER", 1)
         ),
@@ -155,7 +168,7 @@ def get_settings() -> Settings:
         ),
         SCOREVISION_VERSION=getenv("SCOREVISION_VERSION", __version__),
         SCOREVISION_RESULTS_PREFIX=getenv(
-            "SCOREVISION_RESULTS_PREFIX", "scorevision/results/"
+            "SCOREVISION_RESULTS_PREFIX", "results_soccer"
         ),
         SCOREVISION_LOCAL_ROOT=Path(
             getenv(
@@ -187,7 +200,7 @@ def get_settings() -> Settings:
         ),
         BITTENSOR_SUBTENSOR_ENDPOINT=getenv("BITTENSOR_SUBTENSOR_ENDPOINT", "finney"),
         BITTENSOR_SUBTENSOR_FALLBACK=getenv(
-            "BITTENSOR_SUBTENSOR_FALLBACK", "wss://lite.sub.latent.to:443"
+            "BITTENSOR_SUBTENSOR_FALLBACK", "wss://entrypoint-finney.opentensor.ai:443"
         ),
         SCOREVISION_WARMUP_CALLS=int(getenv("SCOREVISION_WARMUP_CALLS", "3")),
         SIGNER_HOST=getenv("SIGNER_HOST", "127.0.0.1"),
@@ -202,4 +215,21 @@ def get_settings() -> Settings:
         SCOREVISION_CACHE_DIR=Path(
             getenv("SCOREVISION_CACHE_DIR", "~/.cache/scorevision/blocks")
         ).expanduser(),
+        SCOREVISION_WINDOW_TIEBREAK_ENABLE=_env_bool(
+            "SCOREVISION_WINDOW_TIEBREAK_ENABLE", True
+        ),
+        SCOREVISION_WINDOW_K_PER_VALIDATOR=int(
+            getenv("SCOREVISION_WINDOW_K_PER_VALIDATOR", 25)
+        ),
+        SCOREVISION_WINDOW_DELTA_ABS=float(
+            getenv("SCOREVISION_WINDOW_DELTA_ABS", 0.003)
+        ),
+        SCOREVISION_WINDOW_DELTA_REL=float(
+            getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
+        ),
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = getenv(name, str(default))
+    return str(v).strip().lower() not in ("0", "false", "no", "off", "")

@@ -4,9 +4,16 @@ import random
 import asyncio
 
 from scorevision.utils.settings import get_settings
-from scorevision.utils.challenges import get_challenge_from_scorevision
+from scorevision.utils.challenges import (
+    get_challenge_from_scorevision,
+    get_challenge_from_scorevision_with_source,
+    prepare_challenge_payload,
+    build_svchallenge_from_parts,
+)
+from scorevision.utils.data_models import SVChallenge
+from scorevision.chute_template.schemas import SVPredictInput
 from scorevision.utils.predict import call_miner_model_on_chutes
-from scorevision.utils.evaluate import evaluate_using_vlms, post_vlm_ranking
+from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.async_clients import close_http_clients
 from scorevision.vlm_pipeline.vlm_annotator import (
@@ -17,64 +24,219 @@ from scorevision.utils.bittensor_helpers import get_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
+from scorevision.utils.chutes_helpers import warmup_chute
+from scorevision.utils.prometheus import (
+    RUNNER_BLOCK_HEIGHT,
+    RUNNER_RUNS_TOTAL,
+    RUNNER_WARMUP_TOTAL,
+    RUNNER_PGT_RETRY_TOTAL,
+    RUNNER_PGT_FRAMES,
+    RUNNER_MINER_CALLS_TOTAL,
+    RUNNER_MINER_LATENCY_MS,
+    RUNNER_EVALUATION_SCORE,
+    RUNNER_EVALUATION_FAIL_TOTAL,
+    RUNNER_SHARDS_EMITTED_TOTAL,
+    RUNNER_ACTIVE_MINERS,
+)
 
 logger = getLogger(__name__)
+
+
+def _chute_id_for_miner(m: Miner) -> str | None:
+    return getattr(m, "chute_id", None) or getattr(m, "slug", None)
+
+
+async def _build_pgt_with_retries(
+    chal_api: dict,
+    *,
+    required_n_frames: int,
+    max_retries: int = 3,
+) -> tuple[SVChallenge, SVPredictInput, list]:
+    attempt = 0
+    last_err = None
+
+    MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
+    MIN_FRAMES_REQUIRED = int(
+        os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames))
+    )
+
+    while attempt <= max_retries:
+        payload, frame_numbers, frames, flows, all_frames = (
+            await prepare_challenge_payload(challenge=chal_api)
+        )
+        if len(frames) < required_n_frames:
+            logger.warning(
+                f"Only {len(frames)} frames extracted (need >= {required_n_frames}). "
+                f"Attempt {attempt+1}/{max_retries} → resample."
+            )
+            RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
+            attempt += 1
+            continue
+        challenge = build_svchallenge_from_parts(
+            chal_api=chal_api,
+            payload=payload,
+            frame_numbers=frame_numbers,
+            frames=frames,
+            flows=flows,
+        )
+
+        try:
+            pseudo_gt_annotations = await generate_annotations_for_select_frames(
+                video_name=challenge.challenge_id,
+                frames=challenge.frames,
+                flow_frames=challenge.dense_optical_flow_frames,
+                frame_numbers=challenge.frame_numbers,
+            )
+            logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
+
+            if not _enough_bboxes_per_frame(
+                pseudo_gt_annotations,
+                min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
+                min_frames_required=MIN_FRAMES_REQUIRED,
+            ):
+                logger.warning(
+                    f"PGT has too few bboxes (need >= {MIN_BBOXES_PER_FRAME} on "
+                    f"{MIN_FRAMES_REQUIRED} frames). Attempt {attempt+1}/{max_retries} → resample."
+                )
+                RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
+                attempt += 1
+                continue
+
+            filtered = filter_low_quality_pseudo_gt_annotations(
+                annotations=pseudo_gt_annotations
+            )
+            logger.info(f"{len(filtered)} Pseudo GT annotations had sufficient quality")
+
+            if not _enough_bboxes_per_frame(
+                filtered,
+                min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
+                min_frames_required=required_n_frames,
+            ):
+                logger.warning(
+                    f"After quality filter, still too few bboxes on {required_n_frames} frames "
+                    f"(need >= {MIN_BBOXES_PER_FRAME}). Attempt {attempt+1}/{max_retries} → resample."
+                )
+                RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_filtered").inc()
+                attempt += 1
+                continue
+
+            if len(filtered) >= required_n_frames:
+                RUNNER_PGT_FRAMES.set(len(filtered))
+                return challenge, payload, filtered
+
+            logger.warning(
+                f"Low-quality filter kept only {len(filtered)}/{required_n_frames} frames "
+                f"(attempt {attempt+1}/{max_retries}). Retrying with new frames…"
+            )
+            RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_filtered_frames").inc()
+            attempt += 1
+
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"PGT generation failed on attempt {attempt+1}/{max_retries}: {e}. Retrying…"
+            )
+            RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
+            attempt += 1
+
+    raise RuntimeError(
+        f"Failed to prepare high-quality PGT (and min-bboxes) after {max_retries} retries."
+        + (f" Last error: {last_err}" if last_err else "")
+    )
+
+
+def _enough_bboxes_per_frame(
+    pseudo_gt_annotations: list,
+    *,
+    min_bboxes_per_frame: int,
+    min_frames_required: int,
+) -> bool:
+    ok_frames = 0
+    for pgt in pseudo_gt_annotations:
+        n = len(getattr(pgt.annotation, "bboxes", []) or [])
+        if n >= min_bboxes_per_frame:
+            ok_frames += 1
+    return ok_frames >= min_frames_required
 
 
 async def runner(slug: str | None = None) -> None:
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
+    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in (
+        "0",
+        "false",
+        "False",
+    )
+    WARMUP_CONC = int(os.getenv("SV_WARMUP_CONCURRENCY", "8"))
+    WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
+    REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
+    MAX_PGT_RETRIES = int(os.getenv("SV_PGT_MAX_RETRIES", "3"))
 
+    run_result = "success"
     try:
         miners = await get_miners_from_registry(NETUID)
         if not miners:
             logger.warning("No eligible miners found on-chain.")
+            RUNNER_ACTIVE_MINERS.set(0)
+            run_result = "no_miners"
             return
-        challenge, payload = await get_challenge_from_scorevision()
-        logger.info(f"Challenge: {challenge}")
+
+        challenge, payload, chal_api, all_frames = (
+            await get_challenge_from_scorevision_with_source()
+        )
 
         miner_list = list(miners.values())
-        random.shuffle(miner_list)
-        miner_list = miner_list[: min(MAX_MINERS, len(miner_list))]
+        RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
-        pseudo_gt_annotations = await generate_annotations_for_select_frames(
-            video_name=challenge.challenge_id,
-            frames=challenge.frames,
-            flow_frames=challenge.dense_optical_flow_frames,
-            frame_numbers=challenge.frame_numbers,
-        )
-        logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
-        pseudo_gt_annotations = filter_low_quality_pseudo_gt_annotations(
-            annotations=pseudo_gt_annotations
-        )
-        logger.info(
-            f"{len(pseudo_gt_annotations)} Pseudo GT annotations had sufficient quality"
-        )
+        try:
+            challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
+                chal_api=chal_api,
+                required_n_frames=REQUIRED_PGT_FRAMES,
+                max_retries=MAX_PGT_RETRIES,
+            )
+        except Exception as e:
+            logger.warning(
+                f"PGT quality gating failed after retries, skipping challenge: {e}"
+            )
+            run_result = "pgt_failed"
+            return
+
         for m in miner_list:
+            miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
+            miner_output: SVPredictInput | None = None
+            emission_started = False
             try:
+                loop = asyncio.get_running_loop()
+                start = loop.time()
                 miner_output = await call_miner_model_on_chutes(
                     slug=m.slug,
+                    chute_id=m.chute_id,
                     payload=payload,
                 )
-                logger.info(f"Miner: {miner_output}")
+                latency_ms = (loop.time() - start) * 1000.0
+                RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(latency_ms)
+                RUNNER_MINER_CALLS_TOTAL.labels(outcome="success").inc()
+                logger.info(f"Miner {miner_output}")
 
-                vlm_evaluation = await evaluate_using_vlms(
-                    challenge=challenge,
-                    miner_run=miner_output,
-                    pseudo_gt_annotations=pseudo_gt_annotations,
-                )
-                logger.info(f"VLM Evaluation: {vlm_evaluation}")
-
-                evaluation = post_vlm_ranking(
-                    payload=payload,
-                    miner_run=miner_output,
-                    challenge=challenge,
-                    miner_score=vlm_evaluation,
-                    pseudo_gt_annotations=pseudo_gt_annotations,
-                )
+                try:
+                    evaluation = post_vlm_ranking(
+                        payload=payload,
+                        miner_run=miner_output,
+                        challenge=challenge,
+                        pseudo_gt_annotations=pseudo_gt_annotations,
+                        all_frames=all_frames,
+                    )
+                except Exception:
+                    RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
+                    raise
                 logger.info(f"Evaluation: {evaluation}")
+                if getattr(evaluation, "score", None) is not None:
+                    RUNNER_EVALUATION_SCORE.labels(miner=miner_label).set(
+                        getattr(evaluation, "score", 0.0)
+                    )
 
+                emission_started = True
                 await emit_shard(
                     slug=m.slug,
                     challenge=challenge,
@@ -82,6 +244,8 @@ async def runner(slug: str | None = None) -> None:
                     evaluation=evaluation,
                     miner_hotkey_ss58=m.hotkey,
                 )
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
+                emission_started = False
             except Exception as e:
                 logger.warning(
                     "Miner uid=%s slug=%s failed: %s",
@@ -89,10 +253,16 @@ async def runner(slug: str | None = None) -> None:
                     getattr(m, "slug", "?"),
                     e,
                 )
+                if miner_output is None:
+                    RUNNER_MINER_CALLS_TOTAL.labels(outcome="exception").inc()
+                if emission_started:
+                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
     except Exception as e:
         logger.error(e)
+        run_result = "error"
     finally:
+        RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
 
 
@@ -110,6 +280,7 @@ async def runner_loop():
                 st = await get_subtensor()
 
             block = await st.get_current_block()
+            RUNNER_BLOCK_HEIGHT.set(block)
 
             if block <= last_block or block % TEMPO != 0:
                 await st.wait_for_block()

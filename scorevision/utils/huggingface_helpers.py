@@ -12,8 +12,8 @@ logger = getLogger(__name__)
 
 def get_huggingface_repo_name() -> str:
     settings = get_settings()
-    nickname = settings.BITTENSOR_WALLET_HOT
-    return f"{settings.HUGGINGFACE_USERNAME}/ScoreVision-{nickname}"
+    # nickname = settings.BITTENSOR_WALLET_HOT
+    return f"{settings.HUGGINGFACE_USERNAME}/ScoreVision"  # -{nickname}"
 
 
 def verify_huggingface_repo_name_exists(hf_api: HfApi) -> None:

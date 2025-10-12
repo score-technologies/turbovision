@@ -1,9 +1,11 @@
 from typing import Any
 from logging import getLogger
 
+from numpy import ndarray
+
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
-    CHALLENGE_ID_LOOKUP,
+    parse_challenge_type,
 )
 from scorevision.utils.data_models import (
     SVChallenge,
@@ -20,9 +22,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_object_labels,
     compare_object_placement,
 )
-from scorevision.vlm_pipeline.vlm_as_judge import (
-    pairwise_judge_annotations_for_select_frames,
-)
+
 from scorevision.utils.settings import get_settings
 from scorevision.vlm_pipeline.utils.data_models import (
     PseudoGroundTruth,
@@ -61,9 +61,7 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
                 object_id = int(bbox.get("cls_id"))
                 object_type = OBJECT_ID_LOOKUP.get(object_id)
                 if object_type is None:
-                    object_type = (
-                        ObjectOfInterest.PLAYER
-                    )  # NOTE: this assumes player is always a constant value in every challenge type
+                    object_type = ObjectOfInterest.PLAYER
                     object_colour = ShirtColor.OTHER
                 elif isinstance(object_type, str):
                     object_type = ObjectOfInterest.PLAYER
@@ -98,80 +96,29 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
     return miner_annotations
 
 
-async def evaluate_using_vlms(
-    challenge: SVChallenge,
-    miner_run: SVRunOutput,
-    pseudo_gt_annotations: list[PseudoGroundTruth],
-) -> MinerScore:
-
-    settings = get_settings()
-
-    miner_annotations = parse_miner_prediction(miner_run=miner_run)
-    miner_id = miner_run.model or ""
-
-    # VLM-as-Judge
-    if not miner_run.success:
-        logger.warning("Miner call did not successfully complete")
-        miner_score = None
-    elif len(miner_annotations) != settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER:
-        logger.warning(
-            f"Miner did not predict expected number of frames ({len(miner_annotations)} != {settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER})"
-        )
-        miner_score = None
-    else:
-        logger.info("Evaluating miner predictions with VLM-as-Judge")
-        try:
-            raise Exception("VLM-as-Judge is not scalable to be used at the moment")
-            miner_score = await pairwise_judge_annotations_for_select_frames(
-                miner_id=miner_id,
-                video_url=challenge.challenge_id,
-                challenge_data=pseudo_gt_annotations,
-                miner_annotations=miner_annotations,
-            )
-        except Exception as e:
-            logger.error(f"Evaluation failed: {e}")
-            miner_score = None
-
-    if miner_score is None:
-        logger.info("Evaluation scores to 0.0")
-        miner_score = MinerScore(
-            miner_id=miner_id,
-            score=AggregatedScore(total=0.0, breakdown={}),
-            video_url=challenge.challenge_id,
-            frame_numbers=[
-                pseudo_gt_annotation.frame_number
-                for pseudo_gt_annotation in pseudo_gt_annotations
-            ],
-            vlm_as_judge_feedback=[],
-            miner_annotations=miner_annotations,
-        )
-    return miner_score
-
-
 def post_vlm_ranking(
     payload: SVPredictInput,
     miner_run: SVRunOutput,
     challenge: SVChallenge,
-    miner_score: MinerScore,
     pseudo_gt_annotations: list[PseudoGroundTruth],
+    all_frames: dict[int, ndarray],
 ) -> SVEvaluation:
-    """Final Score calculations considering VLM-as-Judge, Object Detection Smoothness across Video, Latency, etc..."""
-
     score_breakdown = TotalScore()
-
     settings = get_settings()
     miner_annotations = parse_miner_prediction(miner_run=miner_run)
     logger.info(payload.meta)
-    challenge_id = int(payload.meta.get("task_id", -1))
-    challenge_type = CHALLENGE_ID_LOOKUP.get(challenge_id)
+
+    challenge_type = challenge.challenge_type
+    if challenge_type is None:
+        challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
     if (
         miner_run.success
         and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
-        and challenge_type
+        and challenge_type is not None
     ):
         score_breakdown.keypoints.floor_markings_alignment = evaluate_keypoints(
-            frames=payload.frames,
+            frames=all_frames,
             miner_predictions=miner_annotations,
             challenge_type=challenge_type,
         )
@@ -196,27 +143,43 @@ def post_vlm_ranking(
             image_width=settings.SCOREVISION_IMAGE_WIDTH,
         )
         score_breakdown.latency.inference = 1 / 2 ** (miner_run.latency_ms / 1000)
-        # TODO score action spotting: score_breakdown.action.categorisation =
     else:
         logger.info(
-            f"Miner was either not successful ({miner_run.success}) or did not return predictions for all frames in the video ({len(miner_annotations)}) or challenge type was invalid ({challenge_id}: {challenge_type})"
+            f"Miner success={miner_run.success} frames={len(miner_annotations)} "
+            f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
         )
 
+    breakdown_dict = score_breakdown.to_dict()
+    objects_dict = breakdown_dict.get("objects", {}) or {}
+    keypoints_dict = breakdown_dict.get("keypoints", {}) or {}
+
+    def _mean_defined(values) -> float:
+        nums = [v for v in values if isinstance(v, (int, float))]
+        return (sum(nums) / len(nums)) if nums else 0.0
+
+    objects_score = _mean_defined(objects_dict.values())
+    keypoints_score = _mean_defined(keypoints_dict.values())
+    final_score = 0.5 * objects_score + 0.5 * keypoints_score
+
     details = {
-        "breakdown": score_breakdown.to_dict(),
-        # "judge_feedback": [
-        #    feedback.model_dump(mode="json")
-        #    for feedback in miner_score.vlm_as_judge_feedback
-        # ],
-        # "n_frames": len(miner_score.vlm_as_judge_feedback),
-        "challenge_id": challenge.challenge_id,
+        "breakdown": breakdown_dict,
+        "group_scores": {
+            "objects": objects_score,
+            "keypoints": keypoints_score,
+        },
+        "challenge": {
+            "id_hash": challenge.challenge_id,
+            "api_task_id": challenge.api_task_id,
+            "type": getattr(challenge.challenge_type, "value", None),
+        },
         "prompt": challenge.prompt,
     }
     logger.info(details)
+
     return SVEvaluation(
-        acc_breakdown=miner_score.score.breakdown,
+        acc_breakdown=breakdown_dict,
         latency_ms=miner_run.latency_ms,
-        acc=score_breakdown.average,
-        score=score_breakdown.average,
+        acc=final_score,
+        score=final_score,
         details=details,
     )

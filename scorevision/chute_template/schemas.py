@@ -1,12 +1,17 @@
 import os
 from io import BytesIO
-from typing import Any
+from typing import Any, Generator
 from base64 import b64decode
 from traceback import format_exc
 from random import randint
+from requests import get
+from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 from pydantic import BaseModel
 from PIL import Image
+from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
+from numpy import ndarray
 
 from huggingface_hub import snapshot_download
 from ultralytics import YOLO
@@ -25,7 +30,7 @@ class SVFrame(BaseModel):
 
 
 class SVPredictInput(BaseModel):
-    frames: list[SVFrame]
+    url: str
     meta: dict[str, Any] | None = None
 
 

@@ -103,7 +103,8 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     """
     settings = get_settings()
     st = await get_subtensor()
-    meta = await st.metagraph(netuid)
+    mechid = settings.SCOREVISION_MECHID
+    meta = await st.metagraph(netuid, mechid=mechid)
     commits = await st.get_all_revealed_commitments(netuid)
 
     # 1) Extract candidates (uid -> Miner)
@@ -157,7 +158,6 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
                 slug_chutes = (info.get("slug") or "").strip()
                 if slug_chutes and slug_chutes != (m.slug or ""):
                     ok = False
-                # optional: if chutes reports a revision, ensure it matches miner's revision
                 ch_rev = info.get("revision")
                 if ch_rev and m.revision and str(ch_rev) != str(m.revision):
                     ok = False

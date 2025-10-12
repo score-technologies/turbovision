@@ -24,19 +24,6 @@ class VLMProvider(Enum):
 def construct_vlm_input(
     system_prompt: str, user_prompt: str, images: list[ndarray]
 ) -> list[dict]:
-    """
-    This function formats the system and user prompts, along with a list of images,
-    into the expected message structure for the VLM. Images are converted to base64-encoded
-    strings and included as image URLs in the user message content.
-
-    Args:
-        system_prompt (str): The system prompt to guide the VLM's behavior.
-        user_prompt (str): The user prompt describing the task or question.
-        images (list[ndarray]): List of images (as numpy arrays) to be sent to the VLM.
-
-    Returns:
-        list[dict]: A list of message dictionaries formatted for the VLM API.
-    """
     return [
         {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
         {
@@ -54,16 +41,26 @@ def construct_vlm_input(
 
 
 async def async_vlm_api(
-    images: list[ndarray], system_prompt: str, user_prompt: str, provider: VLMProvider
+    images: list[ndarray],
+    system_prompt: str,
+    user_prompt: str,
+    provider: VLMProvider,
+    *,
+    model_override: str | None = None,
+    temperature_override: float | None = None,
 ) -> dict:
+    """
+    Appel VLM générique. Possibilité d'override du modèle et de la température,
+    tout en conservant le provider (Chutes/OpenRouter) configuré.
+    """
     settings = get_settings()
     if provider == VLMProvider.PRIMARY:
         api_key = settings.CHUTES_API_KEY
-        model = settings.CHUTES_VLM
+        model = model_override if model_override else settings.CHUTES_VLM
         endpoint = settings.CHUTES_VLM_ENDPOINT
     elif provider == VLMProvider.BACKUP:
         api_key = settings.OPENROUTER_API_KEY
-        model = settings.OPENROUTER_VLM
+        model = model_override if model_override else settings.OPENROUTER_VLM
         endpoint = settings.OPENROUTER_VLM_ENDPOINT
     else:
         raise ValueError(f"Unsupported API provider: {provider.value}")
@@ -79,7 +76,11 @@ async def async_vlm_api(
         "model": model,
         "messages": messages,
         "stream": False,
-        "temperature": settings.SCOREVISION_VLM_TEMPERATURE,
+        "temperature": (
+            settings.SCOREVISION_VLM_TEMPERATURE
+            if temperature_override is None
+            else temperature_override
+        ),
         "response_format": {"type": "json_object"},
     }
     session = await get_async_client()

@@ -4,6 +4,9 @@ from typing import Any
 from numpy import ndarray
 
 from scorevision.chute_template.schemas import SVFrameResult, SVPredictInput
+from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
+    ChallengeType,
+)
 
 
 @dataclass
@@ -78,6 +81,8 @@ class SVChallenge:
     frame_numbers: list[int]
     frames: list[ndarray]
     dense_optical_flow_frames: list[ndarray]
+    api_task_id: str | int | None = None
+    challenge_type: ChallengeType | None = None
 
 
 @dataclass

@@ -7,10 +7,9 @@ import asyncio
 from scorevision.cli.runner import runner_loop
 from scorevision.cli.push import push_ml_model
 from scorevision.utils.settings import get_settings
-from scorevision.utils.bittensor_helpers import test_metagraph
 from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
-from scorevision.utils.prometheus import _start_metrics
+from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 from scorevision.chute_template.test import (
     deploy_mock_chute,
     test_chute_health_endpoint,
@@ -48,12 +47,15 @@ def cli(verbosity: int):
 @cli.command("runner")
 def runner_cmd():
     """Launches runner every TEMPO blocks."""
+    _start_metrics()
+    mark_service_ready("runner")
     asyncio.run(runner_loop())
 
 
 @cli.command("push")
 @click.option(
     "--model-path",
+    required=True,
     help="Local path to model artifacts. If none provided, upload skipped",
 )
 @click.option(
@@ -117,6 +119,7 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
       - push via signer, fallback local si signer HS
     """
     _start_metrics()
+    mark_service_ready("validator")
     asyncio.run(_validate_main(tail=tail, alpha=alpha, m_min=m_min, tempo=tempo))
 
 
@@ -238,19 +241,3 @@ def test_vlm_pipeline(revision: str, local: bool) -> None:
         click.echo(result)
     except Exception as e:
         click.echo(e)
-
-
-# TODO: remove this later
-@cli.command("test-metagraph")
-def test_metagraph_cmd():
-    run(test_metagraph())
-
-
-if __name__ == "__main__":
-    basicConfig(
-        level=INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    cli()

@@ -7,6 +7,7 @@ from scorevision.utils.settings import get_settings
 logger = logging.getLogger("sv-signer")
 
 NETUID = int(os.getenv("SCOREVISION_NETUID", "44"))
+MECHID = 1
 
 
 async def get_subtensor():
@@ -27,6 +28,7 @@ async def get_subtensor():
 async def _set_weights_with_confirmation(
     wallet: "bt.wallet",
     netuid: int,
+    mechid: int,
     uids: list[int],
     weights: list[float],
     wait_for_inclusion: bool,
@@ -36,48 +38,85 @@ async def _set_weights_with_confirmation(
 ) -> bool:
     """"""
     settings = get_settings()
+    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
     for attempt in range(retries):
         try:
             st = await get_subtensor()
             ref_block = await st.get_current_block()
 
             # extrinsic
-            bt.subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT).set_weights(
+            success, message = bt.subtensor(
+                settings.BITTENSOR_SUBTENSOR_ENDPOINT
+            ).set_weights(
                 wallet=wallet,
                 netuid=netuid,
+                mechid=mechid,
                 uids=uids,
                 weights=weights,
                 wait_for_inclusion=wait_for_inclusion,
             )
-            logger.info(
-                "%s extrinsic submitted; waiting next block … (ref=%d)",
-                log_prefix,
-                ref_block,
-            )
 
-            await st.wait_for_block()
-            meta = await st.metagraph(netuid)
-            try:
-                i = meta.hotkeys.index(wallet.hotkey.ss58_address)
-                lu = meta.last_update[i]
-                if lu >= ref_block:
-                    logger.info(
-                        "%s confirmation OK (last_update=%d >= ref=%d)",
+            if not success:
+                logger.warning(
+                    "%s extrinsic submit failed: %s",
+                    log_prefix,
+                    message or "unknown error",
+                )
+            else:
+                logger.info(
+                    "%s extrinsic submitted; monitoring up to %d blocks … (ref=%d, msg=%s)",
+                    log_prefix,
+                    confirm_blocks,
+                    ref_block,
+                    message or "",
+                )
+
+                latest_lu = None
+                for wait_idx in range(confirm_blocks):
+                    await st.wait_for_block()
+                    meta = await st.metagraph(netuid, mechid=mechid)
+                    try:
+                        i = meta.hotkeys.index(wallet.hotkey.ss58_address)
+                    except ValueError:
+                        logger.warning(
+                            "%s wallet hotkey not found in metagraph; retry…",
+                            log_prefix,
+                        )
+                        break
+
+                    latest_lu = meta.last_update[i]
+                    if latest_lu >= ref_block:
+                        logger.info(
+                            "%s confirmation OK (last_update=%d >= ref=%d after %d block(s))",
+                            log_prefix,
+                            latest_lu,
+                            ref_block,
+                            wait_idx + 1,
+                        )
+                        return True
+                    logger.debug(
+                        "%s waiting for inclusion… (last_update=%d < ref=%d, waited %d/%d block(s))",
                         log_prefix,
-                        lu,
+                        latest_lu,
+                        ref_block,
+                        wait_idx + 1,
+                        confirm_blocks,
+                    )
+
+                if latest_lu is not None:
+                    logger.warning(
+                        "%s not yet included after %d blocks (last_update=%d < ref=%d), retry…",
+                        log_prefix,
+                        confirm_blocks,
+                        latest_lu,
                         ref_block,
                     )
-                    return True
-                logger.warning(
-                    "%s not yet included (last_update=%d < ref=%d), retry…",
-                    log_prefix,
-                    lu,
-                    ref_block,
-                )
-            except ValueError:
-                logger.warning(
-                    "%s wallet hotkey not found in metagraph; retry…", log_prefix
-                )
+                else:
+                    logger.warning(
+                        "%s not yet included after %d blocks (hotkey missing), retry…",
+                        log_prefix,
+                        confirm_blocks,
+                    )
         except Exception as e:
             logger.warning(
                 "%s attempt %d error: %s: %s",
@@ -143,6 +182,8 @@ async def run_signer() -> None:
         try:
             payload = await req.json()
             netuid = int(payload.get("netuid", NETUID))
+            default_mechid = getattr(settings, "SCOREVISION_MECHID", MECHID)
+            mechid = int(payload.get("mechid", default_mechid))
             uids = payload.get("uids") or []
             wgts = payload.get("weights") or []
             wfi = bool(payload.get("wait_for_inclusion", False))
@@ -176,6 +217,7 @@ async def run_signer() -> None:
             ok = await _set_weights_with_confirmation(
                 wallet,
                 netuid,
+                mechid,
                 uids,
                 wgts,
                 wfi,

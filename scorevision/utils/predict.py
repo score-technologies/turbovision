@@ -1,24 +1,28 @@
 from typing import Any
 from time import monotonic
-from json import loads
+from json import loads, dumps
 from random import uniform
 from logging import getLogger
+from typing import AsyncGenerator
 
 from asyncio import TimeoutError, sleep, gather
 from aiohttp import ClientError
 
-from scorevision.chute_template.schemas import SVPredictInput
+from scorevision.chute_template.schemas import SVPredictInput, SVPredictOutput
 from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
 from scorevision.utils.challenges import prepare_challenge_payload
 from scorevision.utils.chutes_helpers import get_chute_slug_and_id
+from scorevision.utils.chutes_helpers import warmup_chute
 
 logger = getLogger(__name__)
 
 
-async def call_miner_model_on_chutes(slug: str, payload: SVPredictInput) -> SVRunOutput:
-    res = await predict_sv(payload=payload, slug=slug)
+async def call_miner_model_on_chutes(
+    slug: str, chute_id: str, payload: SVPredictInput
+) -> SVRunOutput:
+    res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
     return SVRunOutput(
         success=res.success,
         latency_ms=res.latency_seconds * 1000.0,
@@ -29,8 +33,7 @@ async def call_miner_model_on_chutes(slug: str, payload: SVPredictInput) -> SVRu
 
 
 async def predict_sv(
-    payload: SVPredictInput,
-    slug: str,
+    payload: SVPredictInput, slug: str, chute_id: str | None = None
 ) -> SVPredictResult:
     settings = get_settings()
 
@@ -55,59 +58,73 @@ async def predict_sv(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key.get_secret_value()}",
     }
+
     session = await get_async_client()
     semaphore = get_semaphore()
-
-    # Latence: total client-side depuis la 1re tentative
     t0 = monotonic()
     last_err = None
 
+    payload_json = payload.model_dump(mode="json")
     for attempt in range(1, retries + 2):
+        logger.info(f"Attempt {attempt} to {url}")
         try:
             async with semaphore:
                 async with session.post(
-                    url, headers=headers, json=payload.model_dump(mode="json")
+                    url, headers=headers, json=payload_json
                 ) as response:
+                    logger.info(f"request status: {response.status}")
                     text = await response.text()
-                    if response.status == 429:
+                    if response.status == 200:
+                        data = loads(text)  # SVPredictOutput
+                        return SVPredictResult(
+                            success=bool(data.get("success", True)),
+                            model=data.get("model"),
+                            latency_seconds=monotonic() - t0,
+                            predictions=data.get("predictions") or data.get("data"),
+                            error=data.get("error"),
+                            raw=data,
+                        )
+                    elif response.status == 429:
                         last_err = f"busy:{text[:120]}"
+                        logger.error(last_err)
                         raise RuntimeError("busy")
-                    if 400 <= response.status < 500:
+                    elif 400 <= response.status < 500:
+                        last_err = f"{response.status}:{text[:300]}"
+                        logger.error(last_err)
                         return SVPredictResult(
                             success=False,
                             model=None,
                             latency_seconds=monotonic() - t0,
                             predictions=None,
-                            error=f"{response.status}:{text[:300]}",
+                            error=last_err,
                         )
-                    if response.status != 200:
-                        raise RuntimeError(f"HTTP {response.status}: {text[:300]}")
-
-                    data = loads(text)  # SVPredictOutput
-
-                    return SVPredictResult(
-                        success=bool(data.get("success", True)),
-                        model=data.get("model"),
-                        latency_seconds=monotonic() - t0,
-                        predictions=data.get("predictions") or data.get("data"),
-                        error=data.get("error"),
-                        raw=data,
-                    )
+                    elif response.status == 503:
+                        last_err = f"chute cold:{text[:120]}"
+                        logger.error(last_err)
+                        if chute_id:
+                            await warmup_chute(chute_id=chute_id)
+                        raise RuntimeError(last_err)
+                    else:
+                        last_err = f"HTTP {response.status}: {text[:300]}"
+                        logger.error(last_err)
+                        raise RuntimeError(last_err)
 
         except TimeoutError as e:
             last_err = f"timeout:{e}"
+            logger.error(last_err)
         except ClientError as e:
             last_err = f"client_error:{type(e).__name__}:{e}"
+            logger.error(last_err)
         except Exception as e:
             last_err = f"error:{type(e).__name__}:{e}"
+            logger.error(last_err)
 
-        # Si pas dernière tentative → backoff expon + jitter
         if attempt <= retries:
             sleep_s = backoff * (2 ** (attempt - 1))
             sleep_s *= 1.0 + uniform(-0.15, 0.15)
+            logger.info(f"waiting for {sleep_s}s")
             await sleep(max(0.05, sleep_s))
 
-    # Échec après retries
     return SVPredictResult(
         success=False,
         model=None,
@@ -132,7 +149,7 @@ async def _warmup_from_video(
         "seed": 0,
     }
 
-    payload, _, _, _ = await prepare_challenge_payload(challenge=fake_chal)
+    payload, _, _, _, _ = await prepare_challenge_payload(challenge=fake_chal)
 
     async def _one():
         try:

@@ -1,5 +1,4 @@
 @startuml
-
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
 !define DEVICONS https://raw.githubusercontent.com/tupadr3/plantuml-icon-font-sprites/master/devicons
@@ -31,8 +30,7 @@ Boundary(vali, "[Validators]") {
       System(ch, "Process Challenge", "Mp4 to B64, Dense Optical Flow, Frame Sampling, etc")
       System(vlm1, "VLM Annotator", "Generate Pseudo-GT")
       System(miner, "Chutes", "Call ML Model")
-      System(vlm2, "VLM-as-Judge", "Pseudo-GT vs ML Model")
-      System(rr, "Ranker", "VLM score, Smoothness, etc...")
+      System(metrics, "Metrics", "Pseudo-GT vs ML Model")
   }
   Boundary(validate, "Validate") {
     System(weights, "Update weights")
@@ -44,13 +42,12 @@ Rel_D(begin, runner, "chute slug")
 Rel_D(begin, validate, "tail, alpha, ...")
 
 
-Rel_R(vlm1, vlm2, "pseudo-GT")
+Rel_R(vlm1, metrics, "pseudo-GT")
 Rel_D(sv_api, ch, "challenge")
 Rel_D(ch, miner, " ")
 Rel_R(ch, vlm1, " ")
-Rel_R(miner, vlm2, " ")
-Rel_D(vlm2, rr, " ")
-Rel_D(rr, r2, " ")
+Rel_R(miner, metrics, " ")
+Rel_D(metrics, r2, " ")
 
 Rel_R(hf, chute, "hf_revision")
 Rel_R(chute, warmup, "chute slug")
@@ -58,3 +55,4 @@ Rel_D(chute,bt, "chute id & slug")
 
 Rel_L(r2, weights, " ")
 Rel_U(weights, bt, "weights")
+@enduml

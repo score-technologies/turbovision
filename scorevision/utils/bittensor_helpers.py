@@ -1,9 +1,10 @@
 from logging import getLogger
-from json import load, dumps
+from json import load, dumps, loads
 from base64 import b64decode
 from traceback import print_exc
 import asyncio
 import os
+from pathlib import Path
 
 from substrateinterface import Keypair
 from bittensor import wallet, async_subtensor
@@ -19,7 +20,16 @@ _SUBTENSOR = None
 def load_hotkey_keypair(wallet_name: str, hotkey_name: str) -> Keypair:
     settings = get_settings()
 
-    file_path = settings.BITTENSOR_WALLET_PATH
+    wallet_dir = Path(settings.BITTENSOR_WALLET_PATH).expanduser()
+    wallet_dir_str = str(wallet_dir).strip()
+    if not wallet_dir_str or wallet_dir_str == ".":
+        wallet_dir = Path.home() / ".bittensor" / "wallets"
+
+    wallet_name = wallet_name or settings.BITTENSOR_WALLET_COLD
+    hotkey_name = hotkey_name or settings.BITTENSOR_WALLET_HOT
+
+    hotkey_dir = wallet_dir / wallet_name / "hotkeys"
+    file_path = hotkey_dir / hotkey_name
     try:
         with open(file_path, "r") as file:
             keypair_data = load(file)
@@ -28,11 +38,11 @@ def load_hotkey_keypair(wallet_name: str, hotkey_name: str) -> Keypair:
         logger.info(f"Loaded keypair from {file_path}")
         return keypair
     except Exception as e:
-        raise ValueError(f"Failed to load keypair: {str(e)}")
+        raise ValueError(f"Failed to load keypair: {e} (path={file_path})")
 
 
 async def get_subtensor():
-    """Connexion (et fallback) au subtensor — cache global."""
+    """"""
     global _SUBTENSOR
     settings = get_settings()
 
@@ -50,10 +60,15 @@ async def get_subtensor():
     return _SUBTENSOR
 
 
+def reset_subtensor():
+    """Clear cached subtensor client so next access reinitializes connection."""
+    global _SUBTENSOR
+    _SUBTENSOR = None
+
+
 async def on_chain_commit(
     skip: bool, revision: str, chute_id: str, chute_slug: str | None
 ) -> None:
-    # Try real on-chain; fallback to logging if bittensor not available
     settings = get_settings()
     repo_name = get_huggingface_repo_name()
     w = wallet(
@@ -90,6 +105,7 @@ async def on_chain_commit(
 async def _set_weights_with_confirmation(
     wallet,
     netuid: int,
+    mechid: int | None,
     uids: list[int],
     weights: list[float],
     wait_for_inclusion: bool = False,
@@ -99,37 +115,63 @@ async def _set_weights_with_confirmation(
 ) -> bool:
     import bittensor as bt
 
+    settings = get_settings()
+    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
+
     for attempt in range(retries):
         try:
             st = await get_subtensor()
             ref = await st.get_current_block()
             # soumission (sync) via client non-async
-            bt.subtensor(
+            success, message = bt.subtensor(
                 os.getenv("BITTENSOR_SUBTENSOR_ENDPOINT", "finney")
             ).set_weights(
                 wallet=wallet,
                 netuid=netuid,
+                mechid=mechid if mechid is not None else settings.SCOREVISION_MECHID,
                 uids=uids,
                 weights=weights,
                 wait_for_inclusion=wait_for_inclusion,
             )
-            await st.wait_for_block()
-            meta = await st.metagraph(netuid)
-            try:
-                idx = meta.hotkeys.index(wallet.hotkey.ss58_address)
-                lu = meta.last_update[idx]
-                if lu >= ref:
-                    logger.info(
-                        f"{log_prefix} confirmation OK (last_update {lu} >= ref {ref})"
+            if not success:
+                logger.warning(
+                    f"{log_prefix} extrinsic submit failed: {message or 'unknown error'}"
+                )
+            else:
+                logger.info(
+                    f"{log_prefix} extrinsic submitted; monitoring up to {confirm_blocks} block(s) … (ref {ref}, msg={message or ''})"
+                )
+                latest_lu = None
+                target_mechid = (
+                    mechid if mechid is not None else settings.SCOREVISION_MECHID
+                )
+                for wait_idx in range(confirm_blocks):
+                    await st.wait_for_block()
+                    meta = await st.metagraph(netuid, mechid=target_mechid)
+                    try:
+                        idx = meta.hotkeys.index(wallet.hotkey.ss58_address)
+                    except ValueError:
+                        logger.warning(
+                            f"{log_prefix} wallet hotkey not found in metagraph; retry…"
+                        )
+                        break
+                    latest_lu = meta.last_update[idx]
+                    if latest_lu >= ref:
+                        logger.info(
+                            f"{log_prefix} confirmation OK (last_update {latest_lu} >= ref {ref} after {wait_idx + 1} block(s))"
+                        )
+                        return True
+                    logger.debug(
+                        f"{log_prefix} waiting for inclusion… (last_update {latest_lu} < ref {ref}, waited {wait_idx + 1}/{confirm_blocks} block(s))"
                     )
-                    return True
-                logger.warning(
-                    f"{log_prefix} not included yet (last_update {lu} < ref {ref}), retry…"
-                )
-            except ValueError:
-                logger.warning(
-                    f"{log_prefix} wallet hotkey not found in metagraph; retry…"
-                )
+                if latest_lu is not None:
+                    logger.warning(
+                        f"{log_prefix} not included after {confirm_blocks} block(s) (last_update {latest_lu} < ref {ref}), retry…"
+                    )
+                else:
+                    logger.warning(
+                        f"{log_prefix} not included after {confirm_blocks} block(s) (hotkey missing), retry…"
+                    )
         except Exception as e:
             logger.warning(
                 f"{log_prefix} attempt {attempt+1}/{retries} error: {type(e).__name__}: {e}"
@@ -138,98 +180,133 @@ async def _set_weights_with_confirmation(
     return False
 
 
-async def test_metagraph() -> bool:
-    """
-    Test metagraph connectivity and display basic subnet information.
-    """
+# --- Validator registry (on-chain) -------------------------------------------
+
+
+async def on_chain_commit_validator(index_url: str) -> None:
+    """ """
     settings = get_settings()
-
-    test_netuid = settings.SCOREVISION_NETUID
-
-    logger.info(f"\n=== Testing Metagraph Connection ===")
-    logger.info(f"NETUID: {test_netuid}")
-    logger.info(
-        f"BITTENSOR_SUBTENSOR_ENDPOINT: {settings.BITTENSOR_SUBTENSOR_ENDPOINT}"
+    w = wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
     )
-    logger.info(
-        f"BITTENSOR_SUBTENSOR_FALLBACK: {settings.BITTENSOR_SUBTENSOR_FALLBACK}"
-    )
-
+    payload = {
+        "role": "validator",
+        "hotkey": w.hotkey.ss58_address,
+        "index_url": index_url,
+        "chute_name": settings.CHUTE_USERNAME,
+        "version": 1,
+    }
+    logger.info(f"[validator-commit] {payload}")
     try:
-        # Test subtensor connection
-        logger.info("\n1. Testing subtensor connection...")
-        st = await get_subtensor()
-        logger.info("✓ Subtensor connection successful")
-
-        # Get current block
-        logger.info("\n2. Getting current block...")
-        current_block = await st.get_current_block()
-        logger.info(f"✓ Current block: {current_block}")
-
-        # Test metagraph fetch
-        logger.info(f"\n3. Fetching metagraph for netuid {test_netuid}...")
-        meta = await st.metagraph(test_netuid)
-        logger.info(f"✓ Metagraph fetched successfully")
-
-        # Display basic metagraph info
-        logger.info(f"\n=== Metagraph Information ===")
-        logger.info(f"Total neurons: {len(meta.hotkeys)}")
-        logger.info(f"Block: {meta.block}")
-
-        # Test wallet connection if configured
-        wallet_cold = settings.BITTENSOR_WALLET_COLD
-        wallet_hot = settings.BITTENSOR_WALLET_HOT
-
-        logger.info(f"\n4. Testing wallet connection...")
-        logger.info(f"Cold wallet: {wallet_cold}")
-        logger.info(f"Hot wallet: {wallet_hot}")
-
-        try:
-            w = wallet(
-                name=wallet_cold.get_secret_value(),
-                hotkey=wallet_hot.get_secret_value(),
-            )
-            logger.info(f"✓ Wallet loaded successfully")
-            logger.info(f"Hotkey SS58: {w.hotkey.ss58_address}")
-
-            # Check if wallet is registered in subnet
-            try:
-                idx = meta.hotkeys.index(w.hotkey.ss58_address)
-                click.echo(f"✓ Wallet found in metagraph at index: {idx}")
-                click.echo(f"Last update: {meta.last_update[idx]}")
-                if hasattr(meta, "stake") and len(meta.stake) > idx:
-                    click.echo(f"Stake: {meta.stake[idx]}")
-                if hasattr(meta, "trust") and len(meta.trust) > idx:
-                    click.echo(f"Trust: {meta.trust[idx]}")
-            except ValueError as e:
-                logger.error(
-                    "⚠ Wallet hotkey not found in metagraph (not registered in subnet)"
-                )
-
-        except Exception as e:
-            logger.error(f"✗ Wallet loading failed: {e}")
-
-        # Display some hotkeys for verification
-        logger.info(f"\n=== Sample Hotkeys (first 5) ===")
-        for i, hk in enumerate(meta.hotkeys[:5]):
-            logger.info(f"UID {i}: {hk}")
-
-        # Test the get_weights function logic
-        logger.info(f"\n5. Testing weights calculation logic...")
-        try:
-            # Create a simple mapping test
-            hk_to_uid = {hk: i for i, hk in enumerate(meta.hotkeys)}
-            logger.info(f"✓ Hotkey to UID mapping created: {len(hk_to_uid)} entries")
-        except Exception as e:
-            logger.error(f"✗ Hotkey mapping failed: {e}")
-
-        logger.info(f"\n=== Test Complete ===")
-        logger.info("✓ All metagraph functions appear to be working correctly")
-
+        sub = await get_subtensor()
+        await sub.set_reveal_commitment(
+            wallet=w,
+            netuid=settings.SCOREVISION_NETUID,
+            data=dumps(payload),
+            blocks_until_reveal=1,
+        )
+        logger.info("[validator-commit] On-chain commitment submitted.")
     except Exception as e:
-        logger.error(f"\n✗ Metagraph test failed: {type(e).__name__}: {e}")
+        logger.error(f"[validator-commit] failed: {type(e).__name__}: {e}")
 
-        print_exc()
+
+async def get_validator_indexes_from_chain(netuid: int | None = None) -> dict[str, str]:
+    """ """
+    settings = get_settings()
+    netuid = netuid if netuid is not None else settings.SCOREVISION_NETUID
+    st = await get_subtensor()
+    meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
+    commits = await st.get_all_revealed_commitments(netuid)
+
+    stake_tensor = getattr(meta, "S", None)
+    if stake_tensor is None:
+        stake_tensor = getattr(meta, "stake", None)
+
+    result: dict[str, str] = {}
+    for i, hk in enumerate(meta.hotkeys):
+        arr = commits.get(hk)
+        if not arr:
+            continue
+        _, data = arr[-1]
+        try:
+            obj = loads(data)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("role") == "validator":
+            stake_val = 0.0
+            try:
+                val = stake_tensor[i]
+                if hasattr(val, "item"):
+                    val = val.item()
+                stake_val = float(val)
+            except Exception:
+                pass
+
+            if stake_val >= 1000.0:
+                url = obj.get("index_url")
+                if isinstance(url, str) and url.startswith("http"):
+                    result[hk] = url
+
+    return result
+
+
+async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
+    """ """
+    settings = get_settings()
+    st = await get_subtensor()
+    meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
+    commits = await st.get_all_revealed_commitments(netuid)
+
+    w = wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
+    )
+    hk = w.hotkey.ss58_address
+    arr = commits.get(hk)
+    if not arr:
         return False
+    try:
+        _, data = arr[-1]
+        obj = loads(data)
+    except Exception:
+        return False
+    return (
+        isinstance(obj, dict)
+        and obj.get("role") == "validator"
+        and str(obj.get("index_url")) == str(index_url)
+    )
 
-    return True
+
+async def _first_commit_block_by_miner(netuid: int) -> dict[str, int]:
+    """ """
+    st = await get_subtensor()
+    settings = get_settings()
+    meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
+    commits = await st.get_all_revealed_commitments(netuid)
+
+    first_block_by_hk: dict[str, int] = {}
+    for hk in meta.hotkeys:
+        arr = commits.get(hk)
+        if not arr:
+            continue
+        first_block = None
+        for tup in arr:
+            try:
+                blk, data = tup
+            except Exception:
+                continue
+            try:
+                obj = loads(data)
+            except Exception:
+                continue
+            if isinstance(obj, dict) and obj.get("role") == "validator":
+                continue
+            if first_block is None or (isinstance(blk, int) and blk < first_block):
+                first_block = int(blk) if isinstance(blk, int) else first_block
+        if first_block is not None:
+            first_block_by_hk[hk] = first_block
+
+    return first_block_by_hk

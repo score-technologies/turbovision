@@ -169,6 +169,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/7d/8bca2bf9a247c2c5dfeec1d7a5f40db6518f88d314b8bca9da29670d2671/aiosqlite-0.21.0.tar.gz", hash = "sha256:131bb8056daa3bc875608c631c678cda73922a2d4ba8aec373b19f18c17e7aa3", size = 13454, upload-time = "2025-02-03T07:30:16.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/10/6c25ed6de94c49f88a91fa5018cb4c0f3625f31d5be9f771ebe5cc7cd506/aiosqlite-0.21.0-py3-none-any.whl", hash = "sha256:2549cf4057f95f53dcba16f2b64e8e2791d7e1adedb13197dd8ed77bb226d7d0", size = 15792, upload-time = "2025-02-03T07:30:13.6Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -207,18 +219,19 @@ wheels = [
 
 [[package]]
 name = "async-substrate-interface"
-version = "1.5.1"
+version = "1.5.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "bt-decode" },
     { name = "scalecodec" },
     { name = "websockets" },
     { name = "wheel" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/12/a5/569502432ce7e072572ccdfe56e9de13b2e0ffae25fa03508cc839dd42f4/async_substrate_interface-1.5.1.tar.gz", hash = "sha256:7da149e05ca955682790be6eb4c56f48e565e7af3eb0e00bd3857b37c9f6369e", size = 79630, upload-time = "2025-08-05T18:10:18.106Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/a7/b58e14dcc2bd667c5b208bf7dd677627ff49542bc3ff50d242f404784b17/async_substrate_interface-1.5.6.tar.gz", hash = "sha256:5a15334b30f5d9705c2d7f2ef0d9448b7ce9c6148917236c9e210430b75340cc", size = 82168, upload-time = "2025-10-08T19:33:57.016Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/f4/67229cfac3fac8b9a26dd6f910a8b0d02c1a04f88735c534187cf1a97672/async_substrate_interface-1.5.1-py3-none-any.whl", hash = "sha256:31d77ac3b94e30b280b26012fac6b0ceaf59d4fbc0654bf74a0b070627be4323", size = 82175, upload-time = "2025-08-05T18:10:16.762Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/41/6e164d0c52b247f1e0ab322c3921080a747549271a10fb6818a82dd01859/async_substrate_interface-1.5.6-py3-none-any.whl", hash = "sha256:a83b18e59e2ef3b6643578f12ff29776cb7225616fcf4006380bb59e51c55ef5", size = 85474, upload-time = "2025-10-08T19:33:55.402Z" },
 ]
 
 [[package]]
@@ -268,7 +281,7 @@ wheels = [
 
 [[package]]
 name = "bittensor"
-version = "9.10.0"
+version = "9.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -295,9 +308,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "wheel" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/01/9a488743efab5b3280e8fd233d32daf6d19bd1772ea933759cf2deecece0/bittensor-9.10.0.tar.gz", hash = "sha256:9eb33a94195dada33a0c7da11687fa7940a1275d90596bd5def14db826526afd", size = 275158, upload-time = "2025-08-28T23:12:35.319Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/08/a996d6f84f83781de4ea166eab7147787c572aa819f7371d74ef543ea9e6/bittensor-9.12.0.tar.gz", hash = "sha256:2347e0a2221f413fdfed34ed724bda242f1acdef4cee244b147f5d428cf3106d", size = 285743, upload-time = "2025-10-08T17:49:30.549Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/0c/45959485db942e3c1e1618a4642948846ff1d05af73b2a08474e22acf75a/bittensor-9.10.0-py3-none-any.whl", hash = "sha256:48ff6f36fc8684f0d73ea5d856e3ac4e6e443fe886459a9749e8205fafa7d6c4", size = 327253, upload-time = "2025-08-28T23:12:33.224Z" },
+    { url = "https://files.pythonhosted.org/packages/14/1c/f8ca76c300692d2045ff478315a9abce5dfd306006f5e12b18e96e40d137/bittensor-9.12.0-py3-none-any.whl", hash = "sha256:3d1a91fe658b358677f79c124b6565a6770cff4b65e8f54734f8aa25724753f9", size = 342025, upload-time = "2025-10-08T17:49:28.605Z" },
 ]
 
 [[package]]
@@ -1721,14 +1734,11 @@ wheels = [
 
 [[package]]
 name = "munch"
-version = "2.5.0"
+version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/43/a1/ec48010724eedfe2add68eb7592a0d238590e14e08b95a4ffb3c7b2f0808/munch-2.5.0.tar.gz", hash = "sha256:2d735f6f24d4dba3417fa448cae40c6e896ec1fdab6cdb5e6510999758a4dbd2", size = 17015, upload-time = "2019-10-30T09:56:08.621Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/2b/45098135b5f9f13221820d90f9e0516e11a2a0f55012c13b081d202b782a/munch-4.0.0.tar.gz", hash = "sha256:542cb151461263216a4e37c3fd9afc425feeaf38aaa3025cd2a981fadb422235", size = 19089, upload-time = "2023-07-01T09:49:35.98Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/ab/85d8da5c9a45e072301beb37ad7f833cd344e04c817d97e0cc75681d248f/munch-2.5.0-py2.py3-none-any.whl", hash = "sha256:6f44af89a2ce4ed04ff8de41f70b226b984db10a91dcc7b9ac2efc1c77022fdd", size = 10347, upload-time = "2019-10-30T09:56:06.835Z" },
+    { url = "https://files.pythonhosted.org/packages/56/b3/7c69b37f03260a061883bec0e7b05be7117c1b1c85f5212c72c8c2bc3c8c/munch-4.0.0-py2.py3-none-any.whl", hash = "sha256:71033c45db9fb677a0b7eb517a4ce70ae09258490e419b0e7f00d1e386ecb1b4", size = 9950, upload-time = "2023-07-01T09:49:34.472Z" },
 ]
 
 [[package]]
@@ -3118,7 +3128,7 @@ ml = [
 requires-dist = [
     { name = "aiobotocore", specifier = "==2.13.1" },
     { name = "aiohttp", specifier = ">=3.9" },
-    { name = "bittensor" },
+    { name = "bittensor", specifier = ">=9.12.0" },
     { name = "chutes", specifier = ">=0.3.23" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi" },

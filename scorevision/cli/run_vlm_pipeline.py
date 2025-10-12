@@ -10,11 +10,14 @@ from scorevision.utils.data_models import SVChallenge, SVPredictResult, SVRunOut
 from scorevision.utils.chutes_helpers import get_chute_slug_and_id
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.settings import get_settings
-from scorevision.utils.evaluate import evaluate_using_vlms, post_vlm_ranking
+from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
 from scorevision.utils.data_models import SVEvaluation
+from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
+    ChallengeType,
+)
 
 logger = getLogger(__name__)
 
@@ -27,13 +30,12 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
     }
     logger.info(f"Challenge data from API: {challenge_data}")
-    payload, frame_numbers, frames, flows = await prepare_challenge_payload(
+    payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
         challenge=challenge_data
     )
     if not payload:
         raise Exception("Failed to prepare payload from challenge.")
 
-    payload.frames = payload.frames[: settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER]
     if local_model:
         logger.info("Calling model from mock chutes API")
         base_url = "http://localhost:8000"
@@ -68,10 +70,11 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
                 model=res.model,
             )
     else:
-        chute_slug, _ = await get_chute_slug_and_id(revision=hf_revision)
+        chute_slug, chute_id = await get_chute_slug_and_id(revision=hf_revision)
         logger.info("Calling model from chutes API")
         miner_output = await call_miner_model_on_chutes(
             slug=chute_slug,
+            chute_id=chute_id,
             payload=payload,
         )
     logger.info(f"Miner: {miner_output}")
@@ -85,6 +88,7 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
         frame_numbers=frame_numbers,
         frames=frames,
         dense_optical_flow_frames=flows,
+        challenge_type=ChallengeType.FOOTBALL,
     )
     # logger.info(f"Challenge: {challenge}")
     pseudo_gt_annotations = await generate_annotations_for_select_frames(
@@ -101,19 +105,12 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
         f"{len(pseudo_gt_annotations)} Pseudo GT annotations had sufficient quality"
     )
 
-    vlm_evaluation = await evaluate_using_vlms(
-        challenge=challenge,
-        miner_run=miner_output,
-        pseudo_gt_annotations=pseudo_gt_annotations,
-    )
-    logger.info(f"VLM Evaluation: {vlm_evaluation}")
-
     evaluation = post_vlm_ranking(
         payload=payload,
         miner_run=miner_output,
         challenge=challenge,
-        miner_score=vlm_evaluation,
         pseudo_gt_annotations=pseudo_gt_annotations,
+        all_frames=all_frames,
     )
     logger.info(f"Evaluation: {evaluation}")
     return evaluation

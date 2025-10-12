@@ -1,4 +1,4 @@
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from asyncio import get_running_loop, run, get_event_loop, Semaphore
 
 from scorevision.utils.settings import get_settings
@@ -18,20 +18,15 @@ async def _close_all_clients_async():
 
 
 def close_http_clients():
-    """
-    Public sync helper: ferme toutes les ClientSession créées par ce module.
-    À appeler à la fin des commandes CLI (ex: sv predict).
-    """
+    """ """
     try:
         loop = get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # On est dans un loop en cours: planifie la fermeture
         loop.create_task(_close_all_clients_async())
     else:
-        # Lance un mini loop juste pour fermer proprement
         run(_close_all_clients_async())
 
 
@@ -48,9 +43,12 @@ async def get_async_client() -> ClientSession:
     key = _loop_key()
     sess = _SESSIONS.get(key)
     if sess is None or sess.closed:
-        # Pas de total timeout ici: on gère par call
         sess = ClientSession(
-            timeout=ClientTimeout(total=settings.SCOREVISION_API_TIMEOUT_S)
+            timeout=ClientTimeout(total=settings.SCOREVISION_API_TIMEOUT_S),
+            connector=TCPConnector(
+                limit=0,
+                limit_per_host=0,
+            ),
         )
         _SESSIONS[key] = sess
     return sess

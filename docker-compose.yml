@@ -1,13 +1,9 @@
-version: "3.9"
-
 x-common: &common
-  image: docker.io/mikhaelscore/turbovision:latest
+  build: .
   restart: unless-stopped
   env_file: .env
   mem_reservation: "6g"
   mem_limit: "8g"
-  labels:
-    - "com.centurylinklabs.watchtower.enable=true"
 
 services:
   validator:
@@ -16,10 +12,15 @@ services:
     environment:
       - SCOREVISION_CACHE_DIR=/app/data/blocks
       - SIGNER_URL=http://signer:8080
+      - SCOREVISION_METRICS_ADDR=${SCOREVISION_METRICS_ADDR:-0.0.0.0}
+      - SCOREVISION_METRICS_PORT=${SCOREVISION_METRICS_PORT:-8010}
+      - USE_PROMETHEUS=${USE_PROMETHEUS:-true}
     volumes:
       - validator-cache:/app/data/blocks
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     ports:
       - "8001:8000"
+      - "${SCOREVISION_METRICS_HOST:-0.0.0.0}:${SCOREVISION_METRICS_PORT:-8010}:8010"
     depends_on:
       signer:
         condition: service_healthy
@@ -34,6 +35,8 @@ services:
       SCOREVISION_METRICS_PORT: 8000
       SCOREVISION_METRICS_ADDR: 0.0.0.0
       SIGNER_URL: http://signer:8080
+    volumes:
+      - ${HOME}/.chutes:/root/.chutes:ro
     command: ["sv", "-v", "runner"]
 
   signer:
@@ -45,7 +48,7 @@ services:
       SIGNER_HOST: 0.0.0.0
       SIGNER_PORT: 8080
     volumes:
-      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 10s
@@ -54,18 +57,23 @@ services:
       start_period: 5s
     command: ["sv", "-v", "signer"]
 
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: turbovision-watchtower
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: scorevision-prometheus
     restart: unless-stopped
+    ports:
+      - "9090:9090"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      WATCHTOWER_POLL_INTERVAL: 60
-      WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_CLEANUP: "true"
-
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=200h"
+      - "--web.enable-lifecycle"
 
 volumes:
   validator-cache:
+  prometheus-data:

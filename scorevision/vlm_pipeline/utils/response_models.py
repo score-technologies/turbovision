@@ -5,26 +5,7 @@ from pydantic import BaseModel, Field
 from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     Person as ObjectOfInterest,
 )
-from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
-
-
-class ShirtColor(Enum):
-    WHITE = "white"
-    BLACK = "black"
-    RED = "red"
-    BLUE = "blue"
-    YELLOW = "yellow"
-    GREEN = "green"
-    ORANGE = "orange"
-    PURPLE = "purple"
-    MAROON = "maroon"
-    PINK = "pink"
-    GREY = "grey"
-    BROWN = "brown"
-    GOLD = "gold"
-    SILVER = "silver"
-    TURQUOISE = "turquoise"
-    OTHER = "other"
+from scorevision.vlm_pipeline.domain_specific_schemas.football import Action, ShirtColor
 
 
 TEAM1_SHIRT_COLOUR = (
