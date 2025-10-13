@@ -1,6 +1,5 @@
-from json import loads, dumps
-from time import time
-import base64
+from json import loads
+from time import time_ns
 
 from aiohttp import ClientTimeout, ClientSession
 from substrateinterface import Keypair
@@ -36,33 +35,18 @@ def sign_message(keypair: Keypair, message: str | None) -> str | None:
     return f"0x{keypair.sign(message).hex()}"
 
 
-def create_validator_auth_headers(keypair: Keypair) -> dict[str, str]:
+def build_validator_query_params(keypair: Keypair) -> dict[str, str]:
     """
-    Create authentication headers for ScoreVision API requests.
-    
-    Args:
-        keypair: The validator's keypair for signing
-        
-    Returns:
-        Dictionary containing the Authorization header with base64-encoded JSON auth data
+    Create validator authentication query parameters required by the ScoreVision API.
     """
     settings = get_settings()
-    
-    nonce = str(int(time() * 1e9))
+
+    nonce = str(time_ns())
     signature = sign_message(keypair, nonce)
-    
-    # Create auth data as expected by the API
-    auth_data = {
-        "validator-hotkey": keypair.ss58_address,
+
+    return {
+        "validator_hotkey": keypair.ss58_address,
         "signature": signature,
         "nonce": nonce,
-        "netuid": str(settings.SCOREVISION_NETUID)
-    }
-    
-    # Encode as JSON and base64 encode for the Bearer token
-    auth_token = base64.b64encode(dumps(auth_data).encode()).decode()
-    
-    return {
-        "Authorization": f"Bearer {auth_token}",
-        "Content-Type": "application/json"
+        "netuid": str(settings.SCOREVISION_NETUID),
     }
