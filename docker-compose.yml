@@ -1,9 +1,11 @@
 x-common: &common
-  build: .
+  image: docker.io/mikhaelscore/turbovision:latest
   restart: unless-stopped
   env_file: .env
   mem_reservation: "6g"
   mem_limit: "8g"
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
 
 services:
   validator:
@@ -74,6 +76,17 @@ services:
       - "--web.console.templates=/etc/prometheus/consoles"
       - "--storage.tsdb.retention.time=200h"
       - "--web.enable-lifecycle"
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: scorevision-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Access to Docker daemon
+    environment:
+      WATCHTOWER_POLL_INTERVAL: 60 # Check every 60 seconds
+      WATCHTOWER_LABEL_ENABLE: "true" # Only update labeled containers
+      WATCHTOWER_CLEANUP: "true" # Remove old images after update
 
 volumes:
   validator-cache:
