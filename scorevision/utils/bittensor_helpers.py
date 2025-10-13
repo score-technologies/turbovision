@@ -201,7 +201,7 @@ async def _set_weights_with_confirmation(
     import bittensor as bt
 
     settings = get_settings()
-    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
+    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "3")))
 
     for attempt in range(retries):
         try:
@@ -230,40 +230,44 @@ async def _set_weights_with_confirmation(
                 target_mechid = (
                     mechid if mechid is not None else settings.SCOREVISION_MECHID
                 )
+                hotkey = wallet.hotkey.ss58_address
                 for wait_idx in range(confirm_blocks):
                     await st.wait_for_block()
                     meta = await st.metagraph(netuid, mechid=target_mechid)
-                    hotkey = wallet.hotkey.ss58_address
-                    meta_hotkeys = getattr(meta, "hotkeys", []) or []
                     try:
-                        hotkey_present = hotkey in meta_hotkeys
-                    except TypeError:
+                        meta_hotkeys = getattr(meta, "hotkeys", []) or []
                         try:
-                            hotkey_present = hotkey in list(meta_hotkeys)
+                            hotkey_present = hotkey in meta_hotkeys
                         except TypeError:
-                            hotkey_present = False
-                    if not hotkey_present:
-                        logger.warning(
-                            f"{log_prefix} wallet hotkey not found in metagraph; retry…"
-                        )
-                        break
+                            try:
+                                hotkey_present = hotkey in list(meta_hotkeys)
+                            except TypeError:
+                                hotkey_present = False
+                        if not hotkey_present:
+                            logger.warning(
+                                f"{log_prefix} wallet hotkey not found in metagraph; retry…"
+                            )
+                            break
 
-                    latest_lu = get_last_update_for_hotkey(
-                        meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
-                    )
-                    if latest_lu is None:
-                        logger.warning(
-                            f"{log_prefix} wallet hotkey found but no last_update entry; retry…"
+                        latest_lu = get_last_update_for_hotkey(
+                            meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
                         )
-                        break
-                    if latest_lu >= ref:
-                        logger.info(
-                            f"{log_prefix} confirmation OK (last_update {latest_lu} >= ref {ref} after {wait_idx + 1} block(s))"
+                        if latest_lu is None:
+                            logger.warning(
+                                f"{log_prefix} wallet hotkey found but no last_update entry; retry…"
+                            )
+                            break
+                        if latest_lu >= ref:
+                            logger.info(
+                                f"{log_prefix} confirmation OK (last_update {latest_lu} >= ref {ref} after {wait_idx + 1} block(s))"
+                            )
+                            return True
+                        logger.debug(
+                            f"{log_prefix} waiting for inclusion… (last_update {latest_lu} < ref {ref}, waited {wait_idx + 1}/{confirm_blocks} block(s))"
                         )
-                        return True
-                    logger.debug(
-                        f"{log_prefix} waiting for inclusion… (last_update {latest_lu} < ref {ref}, waited {wait_idx + 1}/{confirm_blocks} block(s))"
-                    )
+                    finally:
+                        # Clean up metagraph object to prevent memory accumulation
+                        del meta
                 if latest_lu is not None:
                     logger.warning(
                         f"{log_prefix} not included after {confirm_blocks} block(s) (last_update {latest_lu} < ref {ref}), retry…"

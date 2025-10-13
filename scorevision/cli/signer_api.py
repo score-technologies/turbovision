@@ -40,16 +40,17 @@ async def _set_weights_with_confirmation(
 ) -> bool:
     """"""
     settings = get_settings()
-    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
+    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "3")))
     for attempt in range(retries):
+        st = None
+        sync_st = None
         try:
             st = await get_subtensor()
             ref_block = await st.get_current_block()
 
-            # extrinsic
-            success, message = bt.subtensor(
-                settings.BITTENSOR_SUBTENSOR_ENDPOINT
-            ).set_weights(
+            # extrinsic - use sync subtensor for set_weights call
+            sync_st = bt.subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
+            success, message = sync_st.set_weights(
                 wallet=wallet,
                 netuid=netuid,
                 mechid=mechid,
@@ -74,51 +75,56 @@ async def _set_weights_with_confirmation(
                 )
 
                 latest_lu = None
+                hotkey = wallet.hotkey.ss58_address
                 for wait_idx in range(confirm_blocks):
                     await st.wait_for_block()
                     meta = await st.metagraph(netuid, mechid=mechid)
-                    hotkey = wallet.hotkey.ss58_address
-                    meta_hotkeys = getattr(meta, "hotkeys", []) or []
                     try:
-                        hotkey_present = hotkey in meta_hotkeys
-                    except TypeError:
+                        meta_hotkeys = getattr(meta, "hotkeys", []) or []
                         try:
-                            hotkey_present = hotkey in list(meta_hotkeys)
+                            hotkey_present = hotkey in meta_hotkeys
                         except TypeError:
-                            hotkey_present = False
-                    if not hotkey_present:
-                        logger.warning(
-                            "%s wallet hotkey not found in metagraph; retry…",
-                            log_prefix,
-                        )
-                        break
+                            try:
+                                hotkey_present = hotkey in list(meta_hotkeys)
+                            except TypeError:
+                                hotkey_present = False
+                        
+                        if not hotkey_present:
+                            logger.warning(
+                                "%s wallet hotkey not found in metagraph; retry…",
+                                log_prefix,
+                            )
+                            break
 
-                    latest_lu = get_last_update_for_hotkey(
-                        meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
-                    )
-                    if latest_lu is None:
-                        logger.warning(
-                            "%s wallet hotkey found but no last_update entry; retry…",
-                            log_prefix,
+                        latest_lu = get_last_update_for_hotkey(
+                            meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
                         )
-                        break
-                    if latest_lu >= ref_block:
-                        logger.info(
-                            "%s confirmation OK (last_update=%d >= ref=%d after %d block(s))",
+                        if latest_lu is None:
+                            logger.warning(
+                                "%s wallet hotkey found but no last_update entry; retry…",
+                                log_prefix,
+                            )
+                            break
+                        if latest_lu >= ref_block:
+                            logger.info(
+                                "%s confirmation OK (last_update=%d >= ref=%d after %d block(s))",
+                                log_prefix,
+                                latest_lu,
+                                ref_block,
+                                wait_idx + 1,
+                            )
+                            return True
+                        logger.debug(
+                            "%s waiting for inclusion… (last_update=%d < ref=%d, waited %d/%d block(s))",
                             log_prefix,
                             latest_lu,
                             ref_block,
                             wait_idx + 1,
+                            confirm_blocks,
                         )
-                        return True
-                    logger.debug(
-                        "%s waiting for inclusion… (last_update=%d < ref=%d, waited %d/%d block(s))",
-                        log_prefix,
-                        latest_lu,
-                        ref_block,
-                        wait_idx + 1,
-                        confirm_blocks,
-                    )
+                    finally:
+                        # Clean up metagraph object to prevent memory accumulation
+                        del meta
 
                 if latest_lu is not None:
                     logger.warning(
@@ -142,6 +148,18 @@ async def _set_weights_with_confirmation(
                 type(e).__name__,
                 e,
             )
+        finally:
+            # Clean up connections to prevent memory leaks
+            if st is not None:
+                try:
+                    await st.close()
+                except Exception:
+                    pass
+            if sync_st is not None:
+                try:
+                    sync_st.close()
+                except Exception:
+                    pass
         await asyncio.sleep(delay_s)
     return False
 
