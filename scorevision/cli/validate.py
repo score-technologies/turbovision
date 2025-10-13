@@ -238,14 +238,14 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         if not cnt:
             logger.warning("No data in window → default uid 0")
             VALIDATOR_MINERS_CONSIDERED.set(0)
-            return [1], [65535]
+            return [6], [65535]
         elig = [
             hk for hk, n in cnt.items() if n >= m_min and hk in sums and hk in hk_to_uid
         ]
         if not elig:
             logger.warning("No hotkey reached %d samples → default uid 0", m_min)
             VALIDATOR_MINERS_CONSIDERED.set(0)
-            return [1], [65535]
+            return [6], [65535]
         avg = {hk: (sums[hk] / cnt[hk]) for hk in elig}
         VALIDATOR_MINERS_CONSIDERED.set(len(elig))
         winner_hk = max(avg, key=avg.get)
@@ -281,7 +281,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     if not cnt_by_V_m:
         logger.warning("No cross-validator data in window → default uid 0")
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return [1], [65535]
+        return [6], [65535]
 
     mu_by_V_m: dict[tuple[str, int], tuple[float, int]] = {}
     for key, n in cnt_by_V_m.items():
@@ -360,9 +360,9 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         S_by_m.pop(validator_uid, None)
 
     if not S_by_m:
-        logger.warning("No non-self miners passed robust filtering; skipping set_weights.")
+        logger.warning("No miners passed robust filtering.")
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return [1], [65535]
+        return [6], [65535]
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
 
