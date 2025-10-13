@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /wheels
 
 # Copy only dependency files to maximize cache hits
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 
 # Build wheels for dependencies
 RUN pip install --upgrade pip wheel setuptools hatchling && \
