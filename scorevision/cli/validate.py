@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import logging
+import signal
 import traceback
 from json import loads
 from collections import defaultdict, deque
@@ -47,6 +48,9 @@ from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger("scorevision.validator")
 
+# Global shutdown event for graceful shutdown
+shutdown_event = asyncio.Event()
+
 for noisy in ["websockets", "websockets.client", "substrateinterface", "urllib3"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -65,6 +69,15 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     R2_BUCKET_PUBLIC_URL = settings.R2_BUCKET_PUBLIC_URL
+
+    # Set up signal handlers for graceful shutdown
+    def signal_handler():
+        logger.info("Received shutdown signal, stopping validator...")
+        shutdown_event.set()
+
+    # Register signal handlers
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda s, f: signal_handler())
 
     # ---- Commit validator on start ----
     if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") not in (
@@ -113,7 +126,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
 
     st = None
     last_done = -1
-    while True:
+    while not shutdown_event.is_set():
         try:
             if st is None:
                 st = await get_subtensor()
@@ -121,7 +134,11 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
             VALIDATOR_BLOCK_HEIGHT.set(block)
 
             if block % tempo != 0 or block <= last_done:
-                await st.wait_for_block()
+                # Use asyncio.wait_for with timeout to check shutdown event
+                try:
+                    await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    continue
                 continue
 
             uids, weights = await get_weights(tail=tail, m_min=m_min)
@@ -160,7 +177,14 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
             VALIDATOR_LOOP_TOTAL.labels(outcome="error").inc()
             st = None
             reset_subtensor()
-            await asyncio.sleep(5)
+            # Check shutdown event during sleep
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
+                break
+            except asyncio.TimeoutError:
+                continue
+    
+    logger.info("Validator shutting down gracefully...")
 
 
 # ---------------- Weights selection (cross-validators) ---------------- #

@@ -1,4 +1,4 @@
-import os, time, socket, asyncio, logging
+import os, time, socket, asyncio, logging, signal
 
 from aiohttp import web
 import bittensor as bt
@@ -10,6 +10,9 @@ logger = logging.getLogger("sv-signer")
 
 NETUID = int(os.getenv("SCOREVISION_NETUID", "44"))
 MECHID = 1
+
+# Global shutdown event
+shutdown_event = asyncio.Event()
 
 
 async def get_subtensor():
@@ -169,6 +172,15 @@ async def run_signer() -> None:
     host = settings.SIGNER_HOST
     port = settings.SIGNER_PORT
 
+    # Set up signal handlers for graceful shutdown
+    def signal_handler():
+        logger.info("Received shutdown signal, stopping signer...")
+        shutdown_event.set()
+
+    # Register signal handlers
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda s, f: signal_handler())
+
     # Wallet Bittensor
     cold = settings.BITTENSOR_WALLET_COLD
     hot = settings.BITTENSOR_WALLET_HOT
@@ -294,5 +306,11 @@ async def run_signer() -> None:
         "Signer listening on http://%s:%s hostname=%s ip=%s", host, port, hn, ip
     )
 
-    while True:
-        await asyncio.sleep(3600)
+    # Wait for shutdown signal instead of infinite loop
+    try:
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        logger.info("Shutting down signer...")
+        await runner.cleanup()

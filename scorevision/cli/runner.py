@@ -2,6 +2,7 @@ from logging import getLogger
 import os
 import random
 import asyncio
+import signal
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.challenges import (
@@ -40,6 +41,9 @@ from scorevision.utils.prometheus import (
 )
 
 logger = getLogger(__name__)
+
+# Global shutdown event for graceful shutdown
+shutdown_event = asyncio.Event()
 
 
 def _chute_id_for_miner(m: Miner) -> str | None:
@@ -271,10 +275,19 @@ async def runner_loop():
     settings = get_settings()
     TEMPO = 300
 
+    # Set up signal handlers for graceful shutdown
+    def signal_handler():
+        logger.info("Received shutdown signal, stopping runner...")
+        shutdown_event.set()
+
+    # Register signal handlers
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda s, f: signal_handler())
+
     st = None
     last_block = -1
 
-    while True:
+    while not shutdown_event.is_set():
         try:
             if st is None:
                 st = await get_subtensor()
@@ -283,7 +296,11 @@ async def runner_loop():
             RUNNER_BLOCK_HEIGHT.set(block)
 
             if block <= last_block or block % TEMPO != 0:
-                await st.wait_for_block()
+                # Use asyncio.wait_for with timeout to check shutdown event
+                try:
+                    await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    continue
                 continue
 
             logger.info(f"[RunnerLoop] Triggering runner at block {block}")
@@ -296,4 +313,11 @@ async def runner_loop():
         except Exception as e:
             logger.warning(f"[RunnerLoop] Error: {e}; retrying…")
             st = None
-            await asyncio.sleep(120)
+            # Check shutdown event during sleep
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
+                break
+            except asyncio.TimeoutError:
+                continue
+    
+    logger.info("Runner loop shutting down gracefully...")

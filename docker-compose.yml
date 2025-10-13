@@ -4,6 +4,8 @@ x-common: &common #image: docker.io/mikhaelscore/turbovision:latest
   env_file: .env
   mem_reservation: "6g"
   mem_limit: "8g"
+  stop_grace_period: 30s
+  stop_signal: SIGTERM
   labels:
     - "com.centurylinklabs.watchtower.enable=true"
 
@@ -26,6 +28,12 @@ services:
     depends_on:
       signer:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8010/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     command: ["sv", "-v", "validate"]
 
   runner:
@@ -40,6 +48,12 @@ services:
     volumes:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     command: ["sv", "-v", "runner"]
 
   signer:
