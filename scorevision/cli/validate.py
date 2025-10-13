@@ -5,6 +5,7 @@ import logging
 import traceback
 from json import loads
 from collections import defaultdict, deque
+from functools import lru_cache
 
 import aiohttp
 import bittensor as bt
@@ -48,6 +49,16 @@ logger = logging.getLogger("scorevision.validator")
 
 for noisy in ["websockets", "websockets.client", "substrateinterface", "urllib3"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+@lru_cache(maxsize=1)
+def _validator_hotkey_ss58() -> str:
+    settings = get_settings()
+    wallet = bt.wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
+    )
+    return wallet.hotkey.ss58_address
 
 
 async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
@@ -227,20 +238,20 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         if not cnt:
             logger.warning("No data in window → default uid 0")
             VALIDATOR_MINERS_CONSIDERED.set(0)
-            return [6], [1.0]
+            return [1], [65535]
         elig = [
             hk for hk, n in cnt.items() if n >= m_min and hk in sums and hk in hk_to_uid
         ]
         if not elig:
             logger.warning("No hotkey reached %d samples → default uid 0", m_min)
             VALIDATOR_MINERS_CONSIDERED.set(0)
-            return [6], [1.0]
+            return [1], [65535]
         avg = {hk: (sums[hk] / cnt[hk]) for hk in elig}
         VALIDATOR_MINERS_CONSIDERED.set(len(elig))
         winner_hk = max(avg, key=avg.get)
         CURRENT_WINNER.set(hk_to_uid[winner_hk])
         VALIDATOR_WINNER_SCORE.set(avg.get(winner_hk, 0.0))
-        return [hk_to_uid[winner_hk]], [1.0]
+        return [hk_to_uid[winner_hk]], [65535]
 
     # =========================
     # Cross-validators pipeline
@@ -270,7 +281,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     if not cnt_by_V_m:
         logger.warning("No cross-validator data in window → default uid 0")
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return [6], [1.0]
+        return [1], [65535]
 
     mu_by_V_m: dict[tuple[str, int], tuple[float, int]] = {}
     for key, n in cnt_by_V_m.items():
@@ -335,10 +346,23 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
             continue
         S_by_m[m] = num / den
 
+    validator_uid = None
+    try:
+        validator_uid = hk_to_uid.get(_validator_hotkey_ss58())
+    except Exception:
+        validator_uid = None
+
+    if validator_uid is not None and validator_uid in S_by_m:
+        logger.info(
+            "Excluding validator uid=%d from weight candidates to avoid self-weight.",
+            validator_uid,
+        )
+        S_by_m.pop(validator_uid, None)
+
     if not S_by_m:
-        logger.warning("No miners passed robust filtering.")
+        logger.warning("No non-self miners passed robust filtering; skipping set_weights.")
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return [6], [1.0]
+        return [1], [65535]
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
 
@@ -404,7 +428,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     CURRENT_WINNER.set(winner_uid)
     VALIDATOR_WINNER_SCORE.set(S_by_m.get(winner_uid, 0.0))
 
-    return [winner_uid], [1.0]
+    return [winner_uid], [65535]
 
 
 async def retry_set_weights(wallet, uids, weights):

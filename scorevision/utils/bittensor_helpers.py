@@ -1,10 +1,11 @@
-from logging import getLogger
-from json import load, dumps, loads
-from base64 import b64decode
-from traceback import print_exc
 import asyncio
 import os
 from pathlib import Path
+from base64 import b64decode
+from json import load, dumps, loads
+from logging import getLogger
+from traceback import print_exc
+from typing import Optional
 
 from substrateinterface import Keypair
 from bittensor import wallet, async_subtensor
@@ -15,6 +16,90 @@ from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
 logger = getLogger(__name__)
 
 _SUBTENSOR = None
+
+
+def _coerce_last_update_value(value) -> Optional[int]:
+    """Convert last_update values from numpy / torch / python scalars into int."""
+    if value is None:
+        return None
+    try:
+        if hasattr(value, "item"):
+            value = value.item()
+    except Exception:
+        pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_last_update_for_hotkey(meta, hotkey: str, pubkey_hex: str | None = None) -> Optional[int]:
+    """
+    Return the validator's last_update height regardless of the underlying container type.
+    """
+    if meta is None or not hotkey:
+        return None
+
+    last_update = getattr(meta, "last_update", None)
+    if last_update is None:
+        return None
+
+    candidate_keys: list[str] = []
+    if hotkey:
+        candidate_keys.append(hotkey)
+    if pubkey_hex:
+        variants = {
+            pubkey_hex,
+            pubkey_hex.lower(),
+            pubkey_hex.upper(),
+        }
+        candidate_keys.extend([v for v in variants if v])
+        candidate_keys.extend([f"0x{v}" for v in variants if v])
+    seen: set[str] = set()
+    if hasattr(last_update, "get"):
+        for key in candidate_keys:
+            if not key:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                value = last_update.get(key)
+            except Exception:
+                value = None
+            coerced = _coerce_last_update_value(value)
+            if coerced is not None:
+                return coerced
+
+    index: Optional[int] = None
+    hotkeys = getattr(meta, "hotkeys", None)
+    hotkeys_list: Optional[list[str]] = None
+    if hotkeys is not None:
+        try:
+            hotkeys_list = list(hotkeys)
+        except TypeError:
+            hotkeys_list = None
+
+    if hotkeys_list:
+        try:
+            index = hotkeys_list.index(hotkey)
+        except ValueError:
+            index = None
+
+    if index is None and hotkeys_list:
+        for idx, hk in enumerate(hotkeys_list):
+            if hk == hotkey:
+                index = idx
+                break
+
+    if index is None:
+        return None
+
+    try:
+        value = last_update[index]
+    except Exception:
+        return None
+    return _coerce_last_update_value(value)
 
 
 def load_hotkey_keypair(wallet_name: str, hotkey_name: str) -> Keypair:
@@ -148,14 +233,29 @@ async def _set_weights_with_confirmation(
                 for wait_idx in range(confirm_blocks):
                     await st.wait_for_block()
                     meta = await st.metagraph(netuid, mechid=target_mechid)
+                    hotkey = wallet.hotkey.ss58_address
+                    meta_hotkeys = getattr(meta, "hotkeys", []) or []
                     try:
-                        idx = meta.hotkeys.index(wallet.hotkey.ss58_address)
-                    except ValueError:
+                        hotkey_present = hotkey in meta_hotkeys
+                    except TypeError:
+                        try:
+                            hotkey_present = hotkey in list(meta_hotkeys)
+                        except TypeError:
+                            hotkey_present = False
+                    if not hotkey_present:
                         logger.warning(
                             f"{log_prefix} wallet hotkey not found in metagraph; retry…"
                         )
                         break
-                    latest_lu = meta.last_update[idx]
+
+                    latest_lu = get_last_update_for_hotkey(
+                        meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
+                    )
+                    if latest_lu is None:
+                        logger.warning(
+                            f"{log_prefix} wallet hotkey found but no last_update entry; retry…"
+                        )
+                        break
                     if latest_lu >= ref:
                         logger.info(
                             f"{log_prefix} confirmation OK (last_update {latest_lu} >= ref {ref} after {wait_idx + 1} block(s))"

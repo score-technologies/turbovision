@@ -1,7 +1,9 @@
 import os, time, socket, asyncio, logging
+
 from aiohttp import web
 import bittensor as bt
 
+from scorevision.utils.bittensor_helpers import get_last_update_for_hotkey
 from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger("sv-signer")
@@ -75,16 +77,31 @@ async def _set_weights_with_confirmation(
                 for wait_idx in range(confirm_blocks):
                     await st.wait_for_block()
                     meta = await st.metagraph(netuid, mechid=mechid)
+                    hotkey = wallet.hotkey.ss58_address
+                    meta_hotkeys = getattr(meta, "hotkeys", []) or []
                     try:
-                        i = meta.hotkeys.index(wallet.hotkey.ss58_address)
-                    except ValueError:
+                        hotkey_present = hotkey in meta_hotkeys
+                    except TypeError:
+                        try:
+                            hotkey_present = hotkey in list(meta_hotkeys)
+                        except TypeError:
+                            hotkey_present = False
+                    if not hotkey_present:
                         logger.warning(
                             "%s wallet hotkey not found in metagraph; retry…",
                             log_prefix,
                         )
                         break
 
-                    latest_lu = meta.last_update[i]
+                    latest_lu = get_last_update_for_hotkey(
+                        meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
+                    )
+                    if latest_lu is None:
+                        logger.warning(
+                            "%s wallet hotkey found but no last_update entry; retry…",
+                            log_prefix,
+                        )
+                        break
                     if latest_lu >= ref_block:
                         logger.info(
                             "%s confirmation OK (last_update=%d >= ref=%d after %d block(s))",
