@@ -236,14 +236,14 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
             cnt[hk] = cnt.get(hk, 0) + 1
 
         if not cnt:
-            logger.warning("No data in window → default uid 0")
+            logger.warning("No data in window → default SO")
             VALIDATOR_MINERS_CONSIDERED.set(0)
             return [6], [65535]
         elig = [
             hk for hk, n in cnt.items() if n >= m_min and hk in sums and hk in hk_to_uid
         ]
         if not elig:
-            logger.warning("No hotkey reached %d samples → default uid 0", m_min)
+            logger.warning("No hotkey reached %d samples → default SO", m_min)
             VALIDATOR_MINERS_CONSIDERED.set(0)
             return [6], [65535]
         avg = {hk: (sums[hk] / cnt[hk]) for hk in elig}
@@ -279,7 +279,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         cnt_by_V_m[key] = cnt_by_V_m.get(key, 0) + 1
 
     if not cnt_by_V_m:
-        logger.warning("No cross-validator data in window → default uid 0")
+        logger.warning("No cross-validator data in window → default SO")
         VALIDATOR_MINERS_CONSIDERED.set(0)
         return [6], [65535]
 
