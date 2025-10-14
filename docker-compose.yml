@@ -19,6 +19,8 @@ services:
       - SCOREVISION_METRICS_ADDR=${SCOREVISION_METRICS_ADDR:-0.0.0.0}
       - SCOREVISION_METRICS_PORT=${SCOREVISION_METRICS_PORT:-8010}
       - USE_PROMETHEUS=${USE_PROMETHEUS:-true}
+      - MALLOC_ARENA_MAX=2
+      - PYTHONMALLOC=malloc
     volumes:
       - validator-cache:/app/data/blocks
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
@@ -45,6 +47,8 @@ services:
       SCOREVISION_METRICS_PORT: 8000
       SCOREVISION_METRICS_ADDR: 0.0.0.0
       SIGNER_URL: http://signer:8080
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
     volumes:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
@@ -64,6 +68,8 @@ services:
     environment:
       SIGNER_HOST: 0.0.0.0
       SIGNER_PORT: 8080
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
     volumes:
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     healthcheck:

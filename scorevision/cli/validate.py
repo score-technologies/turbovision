@@ -4,6 +4,7 @@ import asyncio
 import logging
 import signal
 import traceback
+import gc
 from json import loads
 from collections import defaultdict, deque
 from functools import lru_cache
@@ -17,6 +18,7 @@ from scorevision.utils.cloudflare_helpers import (
     dataset_sv_multi,
     ensure_index_exists,
     build_public_index_url,
+    prune_sv,
 )
 from scorevision.utils.bittensor_helpers import (
     get_subtensor,
@@ -167,6 +169,12 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
             except Exception:
                 pass
 
+            try:
+                await asyncio.to_thread(prune_sv, tail)
+            except Exception as e:
+                logger.warning(f"Cache prune failed: {e}")
+
+            gc.collect()
             last_done = block
 
         except asyncio.CancelledError:

@@ -494,7 +494,7 @@ async def _list_keys_from_remote_index(index_url: str) -> list[str]:
 
 
 async def dataset_sv_multi(
-    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 8
+    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2
 ):
     """ """
     if not validator_indexes:
@@ -531,9 +531,8 @@ async def dataset_sv_multi(
         f"[dataset-multi] max_block={max_block} tail={tail} -> kept={len(kept)} shards"
     )
 
-    sem = asyncio.Semaphore(
-        int(os.getenv("SCOREVISION_DATASET_PREFETCH", str(prefetch)))
-    )
+    prefetch = max(1, int(os.getenv("SCOREVISION_DATASET_PREFETCH", str(prefetch))))
+    sem = asyncio.Semaphore(prefetch)
     tasks = []
     for i, (_b, url, _iurl) in enumerate(kept[:prefetch]):
         tasks.append(asyncio.create_task(_cache_remote_json_array(url, sem)))
