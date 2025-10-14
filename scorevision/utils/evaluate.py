@@ -1,7 +1,4 @@
-from typing import Any
 from logging import getLogger
-
-from numpy import ndarray
 
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
@@ -24,6 +21,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
 )
 
 from scorevision.utils.settings import get_settings
+from scorevision.utils.video_processing import FrameStore
 from scorevision.vlm_pipeline.utils.data_models import (
     PseudoGroundTruth,
     MinerScore,
@@ -101,7 +99,7 @@ def post_vlm_ranking(
     miner_run: SVRunOutput,
     challenge: SVChallenge,
     pseudo_gt_annotations: list[PseudoGroundTruth],
-    all_frames: dict[int, ndarray],
+    frame_store: FrameStore,
 ) -> SVEvaluation:
     score_breakdown = TotalScore()
     settings = get_settings()
@@ -118,7 +116,7 @@ def post_vlm_ranking(
         and challenge_type is not None
     ):
         score_breakdown.keypoints.floor_markings_alignment = evaluate_keypoints(
-            frames=all_frames,
+            frames=frame_store,
             miner_predictions=miner_annotations,
             challenge_type=challenge_type,
         )

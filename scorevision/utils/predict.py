@@ -149,7 +149,7 @@ async def _warmup_from_video(
         "seed": 0,
     }
 
-    payload, _, _, _, _ = await prepare_challenge_payload(challenge=fake_chal)
+    payload, _, _, _, frame_store = await prepare_challenge_payload(challenge=fake_chal)
 
     async def _one():
         try:
@@ -161,6 +161,7 @@ async def _warmup_from_video(
             logger.debug(f"warmup call error: {e}")
 
     await gather(*(_one() for _ in range(max(1, settings.SCOREVISION_WARMUP_CALLS))))
+    frame_store.unlink()
 
 
 async def warmup(url: str, slug: str) -> None:

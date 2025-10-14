@@ -1,9 +1,10 @@
+import asyncio
 from logging import getLogger
 from time import time
 from typing import Any
 from hashlib import sha256
 from json import dumps
-from random import shuffle, randint
+from random import randint
 from pathlib import Path
 
 from aiohttp import ClientResponseError
@@ -14,7 +15,7 @@ from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
-from scorevision.utils.video_processing import download_video, download_video_cached
+from scorevision.utils.video_processing import download_video_cached, FrameStore
 from scorevision.utils.image_processing import image_to_base64, pil_from_array
 from scorevision.chute_template.schemas import SVPredictInput, SVFrame
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
@@ -39,10 +40,12 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]
     except Exception as e:
         raise Exception(f"Unexpected error while fetching challenge: {e}")
 
-    payload, frame_numbers, frames, flows = await prepare_challenge_payload(
+    payload, frame_numbers, frames, flows, frame_store = await prepare_challenge_payload(
         challenge=chal_api
     )
     if not payload:
+        if frame_store:
+            frame_store.unlink()
         raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")
 
     # SVChallenge
@@ -67,6 +70,8 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]
         frames=frames,
         dense_optical_flow_frames=flows,
     )
+    if frame_store:
+        frame_store.unlink()
     return challenge, payload
 
 
@@ -75,8 +80,8 @@ async def prepare_challenge_payload(
     batch_size: int | None = 64,
     mock_after_n_frames: int | None = None,
     *,
-    video_cache: dict[str, Path] | None = None,
-) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray], dict[int, ndarray]]:
+    video_cache: dict[str, Any] | None = None,
+) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
     settings = get_settings()
 
     video_url = challenge.get("video_url") or challenge.get("asset_url")
@@ -102,31 +107,39 @@ async def prepare_challenge_payload(
     ]
     logger.info(f"Selected Frames for Testing: {selected_frame_numbers}")
 
+    cached_store: FrameStore | None = None
+    cached_path: Path | None = None
     if video_cache is not None:
+        cached_store = video_cache.get("store")
         cached_path = video_cache.get("path")
-        _, frames, flows, video_path = await download_video_cached(
+
+    if cached_store is None:
+        video_name, frame_store = await download_video_cached(
             url=video_url,
             frame_numbers=selected_frame_numbers,
             cached_path=cached_path,
         )
-        video_cache["path"] = video_path
+        if video_cache is not None:
+            video_cache["store"] = frame_store
+            video_cache["path"] = frame_store.video_path
     else:
-        _, frames, flows = await download_video(
-            url=video_url, frame_numbers=selected_frame_numbers
-        )
-        video_path = None
+        frame_store = cached_store
 
-    selected_frame_numbers = list(flows.keys())
+    select_frames: list[ndarray] = []
+    flow_frames: list[ndarray] = []
+    for fn in selected_frame_numbers:
+        frame = await asyncio.to_thread(frame_store.get_frame, fn)
+        select_frames.append(frame)
+        flow = await asyncio.to_thread(frame_store.get_flow, fn)
+        flow_frames.append(flow)
+
     logger.info(f"frames {selected_frame_numbers} successful")
-    if not any(frames):
-        raise ScoreVisionChallengeError(
-            "No Frames were successfully extracted from Video"
-        )
-    if not any(flows):
-        raise ScoreVisionChallengeError(
-            "No Dense Optical Flows were successfully computed from Video"
-        )
-    height, width = frames[0].shape[:2]
+    if not select_frames:
+        raise ScoreVisionChallengeError("No Frames were successfully extracted from Video")
+    if not flow_frames:
+        raise ScoreVisionChallengeError("No Dense Optical Flows were successfully computed from Video")
+
+    height, width = select_frames[0].shape[:2]
     meta = {
         "version": 1,
         "width": width or 0,
@@ -143,14 +156,13 @@ async def prepare_challenge_payload(
         meta["batch_size"] = batch_size
     if mock_after_n_frames:
         meta["mock_after_n_frames"] = mock_after_n_frames
-    select_frames = [frames[frame_number] for frame_number in selected_frame_numbers]
     payload = SVPredictInput(url=video_url, meta=meta)
     return (
         payload,
         selected_frame_numbers,
         select_frames,
-        list(flows.values()),
-        frames,
+        flow_frames,
+        frame_store,
     )
 
 
@@ -238,9 +250,9 @@ def build_svchallenge_from_parts(
 
 async def get_challenge_from_scorevision_with_source(
     *,
-    video_cache: dict[str, Path] | None = None,
+    video_cache: dict[str, Any] | None = None,
 ) -> (
-    tuple[SVChallenge, SVPredictInput, dict, dict]
+    tuple[SVChallenge, SVPredictInput, dict, FrameStore]
 ):
     try:
         chal_api = await get_next_challenge()
@@ -251,7 +263,7 @@ async def get_challenge_from_scorevision_with_source(
     except Exception as e:
         raise Exception(f"Unexpected error while fetching challenge: {e}")
 
-    payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
+    payload, frame_numbers, frames, flows, frame_store = await prepare_challenge_payload(
         challenge=chal_api,
         video_cache=video_cache,
     )
@@ -265,4 +277,4 @@ async def get_challenge_from_scorevision_with_source(
         frames=frames,
         flows=flows,
     )
-    return challenge, payload, chal_api, all_frames
+    return challenge, payload, chal_api, frame_store

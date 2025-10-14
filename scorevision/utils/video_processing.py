@@ -1,10 +1,13 @@
 from tempfile import NamedTemporaryFile
 from logging import getLogger
 from pathlib import Path
+from collections import OrderedDict
+from threading import RLock
 
 from contextlib import contextmanager
 from cv2 import (
     CAP_PROP_FRAME_COUNT,
+    CAP_PROP_POS_FRAMES,
     COLOR_BGR2GRAY,
     COLOR_HSV2BGR,
     NORM_MINMAX,
@@ -110,11 +113,129 @@ async def download_video(
     return name, frames, flows
 
 
+class FrameStore:
+    """Lazy frame/flow accessor backed by a cached MP4 on disk."""
+
+    def __init__(
+        self,
+        video_path: Path,
+        *,
+        max_frames: int = 64,
+        max_flows: int = 32,
+    ) -> None:
+        self.video_path = video_path
+        self.video_name = video_path.name
+        self._frame_cache: OrderedDict[int, ndarray] = OrderedDict()
+        self._flow_cache: OrderedDict[int, ndarray] = OrderedDict()
+        self._max_frames = max_frames
+        self._max_flows = max_flows
+        self._lock = RLock()
+        self._capture: VideoCapture | None = None
+
+    def _ensure_capture(self) -> None:
+        if self._capture is None:
+            cap = VideoCapture(str(self.video_path))
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video: {self.video_path}")
+            self._capture = cap
+
+    def _evict_if_needed(self, cache: OrderedDict[int, ndarray], limit: int) -> None:
+        if limit <= 0:
+            return
+        while len(cache) > limit:
+            cache.popitem(last=False)
+
+    def get_frame(self, frame_number: int) -> ndarray:
+        with self._lock:
+            cached = self._frame_cache.get(frame_number)
+            if cached is not None:
+                self._frame_cache.move_to_end(frame_number)
+                return cached
+
+            self._ensure_capture()
+            if not self._capture:
+                raise RuntimeError("Video capture not initialised")
+
+            self._capture.set(CAP_PROP_POS_FRAMES, frame_number)
+
+            ok, frame = self._capture.read()
+            if not ok or frame is None:
+                raise IOError(f"Failed to read frame {frame_number}")
+
+            result = frame.copy()
+            self._frame_cache[frame_number] = result
+            self._frame_cache.move_to_end(frame_number)
+            self._evict_if_needed(self._frame_cache, self._max_frames)
+            return result
+
+    def get_flow(self, frame_number: int) -> ndarray:
+        if frame_number <= 0:
+            raise ValueError("Optical flow requires frame_number > 0")
+        with self._lock:
+            cached = self._flow_cache.get(frame_number)
+            if cached is not None:
+                self._flow_cache.move_to_end(frame_number)
+                return cached
+
+            prev_frame = self.get_frame(frame_number - 1)
+            current_frame = self.get_frame(frame_number)
+
+            prev_gray = cvtColor(prev_frame, COLOR_BGR2GRAY)
+            gray = cvtColor(current_frame, COLOR_BGR2GRAY)
+            flow = calcOpticalFlowFarneback(
+                prev_gray,
+                gray,
+                None,
+                pyr_scale=0.5,
+                levels=3,
+                winsize=15,
+                iterations=3,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0,
+            )
+            mag, ang = cartToPolar(flow[..., 0], flow[..., 1])
+            hsv = zeros_like(prev_frame)
+            hsv[..., 0] = ang * 180 / pi / 2
+            hsv[..., 1] = 255
+            hsv[..., 2] = normalize(mag, None, 0, 255, NORM_MINMAX)
+            rgb = cvtColor(hsv, COLOR_HSV2BGR)
+
+            self._flow_cache[frame_number] = rgb
+            self._flow_cache.move_to_end(frame_number)
+            self._evict_if_needed(self._flow_cache, self._max_flows)
+            return rgb
+
+    def close(self) -> None:
+        with self._lock:
+            if self._capture is not None:
+                try:
+                    self._capture.release()
+                except Exception:
+                    pass
+                self._capture = None
+
+    def clear(self) -> None:
+        with self._lock:
+            self._frame_cache.clear()
+            self._flow_cache.clear()
+
+    def unlink(self) -> None:
+        try:
+            self.close()
+            self.video_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def __del__(self) -> None:
+        self.close()
+
+
 async def download_video_cached(
     url: str,
-    frame_numbers: list[int],
+    _frame_numbers: list[int],  # retained for backward compatibility
     cached_path: Path | None = None,
-) -> tuple[str, dict[int, ndarray], dict[int, ndarray], Path]:
+) -> tuple[str, FrameStore]:
     """
     Download the video once and reuse the cached file across retries.
     When `cached_path` is provided, the file is not re-downloaded.
@@ -144,8 +265,5 @@ async def download_video_cached(
     else:
         video_path = cached_path
 
-    frames, flows = background_temporal_differencing(
-        video_path=video_path, frame_numbers=frame_numbers
-    )
     name = url.split("/")[-1]
-    return name, frames, flows, video_path
+    return name, FrameStore(video_path)

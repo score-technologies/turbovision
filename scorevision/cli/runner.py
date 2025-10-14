@@ -5,6 +5,7 @@ import asyncio
 import signal
 import gc
 from pathlib import Path
+from typing import Any
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.challenges import (
@@ -41,6 +42,7 @@ from scorevision.utils.prometheus import (
     RUNNER_SHARDS_EMITTED_TOTAL,
     RUNNER_ACTIVE_MINERS,
 )
+from scorevision.utils.video_processing import FrameStore
 
 logger = getLogger(__name__)
 
@@ -57,14 +59,12 @@ async def _build_pgt_with_retries(
     *,
     required_n_frames: int,
     max_retries: int = 3,
-    video_cache: dict[str, Path] | None = None,
+    video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, SVPredictInput, list]:
     attempt = 0
     last_err = None
-    own_cache = False
     if video_cache is None:
         video_cache = {}
-        own_cache = True
 
     MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
     MIN_FRAMES_REQUIRED = int(
@@ -73,7 +73,7 @@ async def _build_pgt_with_retries(
 
     try:
         while attempt <= max_retries:
-            payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
+            payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
                 challenge=chal_api,
                 video_cache=video_cache,
             )
@@ -198,6 +198,8 @@ async def runner(slug: str | None = None) -> None:
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
     MAX_PGT_RETRIES = int(os.getenv("SV_PGT_MAX_RETRIES", "3"))
 
+    video_cache: dict[str, Any] = {}
+    frame_store: FrameStore | None = None
     run_result = "success"
     try:
         miners = await get_miners_from_registry(NETUID)
@@ -207,8 +209,7 @@ async def runner(slug: str | None = None) -> None:
             run_result = "no_miners"
             return
 
-        video_cache: dict[str, Path] = {}
-        challenge, payload, chal_api, all_frames = (
+        challenge, payload, chal_api, frame_store = (
             await get_challenge_from_scorevision_with_source(video_cache=video_cache)
         )
 
@@ -228,14 +229,6 @@ async def runner(slug: str | None = None) -> None:
             )
             run_result = "pgt_failed"
             return
-        finally:
-            cached_path = video_cache.get("path")
-            if cached_path:
-                try:
-                    cached_path.unlink(missing_ok=True)
-                except Exception as err:
-                    logger.debug(f"Failed to remove cached video {cached_path}: {err}")
-            video_cache.clear()
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
@@ -260,7 +253,7 @@ async def runner(slug: str | None = None) -> None:
                         miner_run=miner_output,
                         challenge=challenge,
                         pseudo_gt_annotations=pseudo_gt_annotations,
-                        all_frames=all_frames,
+                        frame_store=frame_store,
                     )
                 except Exception:
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
@@ -297,6 +290,21 @@ async def runner(slug: str | None = None) -> None:
         logger.error(e)
         run_result = "error"
     finally:
+        store_obj = video_cache.get("store") or frame_store
+        if store_obj:
+            try:
+                store_obj.unlink()
+            except Exception as err:
+                logger.debug(
+                    f"Failed to remove cached video {getattr(store_obj, 'video_path', '?')}: {err}"
+                )
+        elif video_cache.get("path"):
+            cached_path = Path(video_cache["path"])
+            try:
+                cached_path.unlink(missing_ok=True)
+            except Exception as err:
+                logger.debug(f"Failed to remove cached video {cached_path}: {err}")
+        video_cache.clear()
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
         gc.collect()

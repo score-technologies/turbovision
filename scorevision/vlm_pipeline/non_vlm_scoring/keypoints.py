@@ -1,4 +1,5 @@
 from logging import getLogger
+from typing import Any
 
 from numpy import array, uint8, float32, ndarray
 from cv2 import (
@@ -226,9 +227,9 @@ def evaluate_keypoints_for_frame(
 
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],
-    frames: dict[int, ndarray],
+    frames: Any,
     challenge_type: SVChallenge,
-) -> list[float]:
+) -> float:
     # TODO: use challenge_type to switch the template and keypoints
     template_image = challenge_template()
     template_keypoints = KEYPOINTS
@@ -236,8 +237,20 @@ def evaluate_keypoints(
     frame_scores = []
     for frame_number, annotations_miner in miner_predictions.items():
         miner_keypoints = annotations_miner["keypoints"]
-        # frame_image = frame_lookup.get(frame_number)
-        frame_image = frames.get(frame_number)
+        frame_image = None
+        if frames is not None:
+            if hasattr(frames, "get_frame"):
+                try:
+                    frame_image = frames.get_frame(frame_number)
+                except Exception as e:
+                    logger.error(e)
+                    frame_image = None
+            else:
+                try:
+                    frame_image = frames.get(frame_number)  # type: ignore[attr-defined]
+                except Exception as e:
+                    logger.error(e)
+                    frame_image = None
         if (
             annotations_miner is None
             or frame_image is None
