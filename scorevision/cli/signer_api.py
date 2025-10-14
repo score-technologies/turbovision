@@ -1,4 +1,4 @@
-import os, time, socket, asyncio, logging, signal
+import os, time, socket, asyncio, logging, signal, gc, threading
 
 from aiohttp import web
 import bittensor as bt
@@ -14,20 +14,79 @@ MECHID = 1
 # Global shutdown event
 shutdown_event = asyncio.Event()
 
+_ASYNC_SUBTENSOR: bt.AsyncSubtensor | None = None
+_ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
+_SYNC_SUBTENSOR: bt.Subtensor | None = None
+_SYNC_SUBTENSOR_LOCK = threading.Lock()
+
 
 async def get_subtensor():
-    settings = get_settings()
-    ep = settings.BITTENSOR_SUBTENSOR_ENDPOINT
-    fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
-    st = bt.async_subtensor(ep)
-    try:
-        await st.initialize()
-        return st
-    except Exception:
-        logger.warning("Subtensor init failed; fallback to %s", fb)
-        st = bt.async_subtensor(fb)
-        await st.initialize()
-        return st
+    global _ASYNC_SUBTENSOR
+    async with _ASYNC_SUBTENSOR_LOCK:
+        if _ASYNC_SUBTENSOR is not None:
+            return _ASYNC_SUBTENSOR
+        settings = get_settings()
+        ep = settings.BITTENSOR_SUBTENSOR_ENDPOINT
+        fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
+        for endpoint in (ep, fb):
+            try:
+                st = bt.async_subtensor(endpoint)
+                await st.initialize()
+                _ASYNC_SUBTENSOR = st
+                if endpoint != ep:
+                    logger.warning("Subtensor init fell back to %s", endpoint)
+                break
+            except Exception as e:
+                logger.warning("Subtensor init failed for %s: %s", endpoint, e)
+                continue
+        if _ASYNC_SUBTENSOR is None:
+            raise RuntimeError("Unable to initialize async subtensor")
+        return _ASYNC_SUBTENSOR
+
+
+def _get_sync_subtensor() -> bt.Subtensor:
+    global _SYNC_SUBTENSOR
+    with _SYNC_SUBTENSOR_LOCK:
+        if _SYNC_SUBTENSOR is not None:
+            return _SYNC_SUBTENSOR
+        settings = get_settings()
+        ep = settings.BITTENSOR_SUBTENSOR_ENDPOINT
+        fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
+        for endpoint in (ep, fb):
+            try:
+                st = bt.subtensor(endpoint)
+                _SYNC_SUBTENSOR = st
+                if endpoint != ep:
+                    logger.warning("Sync subtensor init fell back to %s", endpoint)
+                break
+            except Exception as e:
+                logger.warning("Sync subtensor init failed for %s: %s", endpoint, e)
+                continue
+        if _SYNC_SUBTENSOR is None:
+            raise RuntimeError("Unable to initialize sync subtensor")
+        return _SYNC_SUBTENSOR
+
+
+async def _reset_async_subtensor():
+    global _ASYNC_SUBTENSOR
+    async with _ASYNC_SUBTENSOR_LOCK:
+        if _ASYNC_SUBTENSOR is not None:
+            try:
+                await _ASYNC_SUBTENSOR.close()
+            except Exception:
+                pass
+            _ASYNC_SUBTENSOR = None
+
+
+def _reset_sync_subtensor():
+    global _SYNC_SUBTENSOR
+    with _SYNC_SUBTENSOR_LOCK:
+        if _SYNC_SUBTENSOR is not None:
+            try:
+                _SYNC_SUBTENSOR.close()
+            except Exception:
+                pass
+            _SYNC_SUBTENSOR = None
 
 
 async def _set_weights_with_confirmation(
@@ -43,16 +102,34 @@ async def _set_weights_with_confirmation(
 ) -> bool:
     """"""
     settings = get_settings()
-    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "3")))
+    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
+    earliest_ref_block = None
+    latest_known_update = None
     for attempt in range(retries):
         st = None
         sync_st = None
         try:
             st = await get_subtensor()
             ref_block = await st.get_current_block()
+            if earliest_ref_block is None:
+                earliest_ref_block = ref_block
+
+            if latest_known_update is not None and earliest_ref_block is not None:
+                if latest_known_update >= earliest_ref_block:
+                    logger.info(
+                        "%s existing confirmation detected (last_update=%d >= ref=%d); skipping resend.",
+                        log_prefix,
+                        latest_known_update,
+                        earliest_ref_block,
+                    )
+                    return True
 
             # extrinsic - use sync subtensor for set_weights call
-            sync_st = bt.subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
+            try:
+                sync_st = _get_sync_subtensor()
+            except Exception:
+                _reset_sync_subtensor()
+                sync_st = _get_sync_subtensor()
             success, message = sync_st.set_weights(
                 wallet=wallet,
                 netuid=netuid,
@@ -94,20 +171,20 @@ async def _set_weights_with_confirmation(
                         
                         if not hotkey_present:
                             logger.warning(
-                                "%s wallet hotkey not found in metagraph; retry…",
+                                "%s wallet hotkey not found in metagraph; continue waiting…",
                                 log_prefix,
                             )
-                            break
+                            continue
 
                         latest_lu = get_last_update_for_hotkey(
                             meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
                         )
                         if latest_lu is None:
                             logger.warning(
-                                "%s wallet hotkey found but no last_update entry; retry…",
+                                "%s wallet hotkey found but no last_update entry; continue waiting…",
                                 log_prefix,
                             )
-                            break
+                            continue
                         if latest_lu >= ref_block:
                             logger.info(
                                 "%s confirmation OK (last_update=%d >= ref=%d after %d block(s))",
@@ -128,6 +205,10 @@ async def _set_weights_with_confirmation(
                     finally:
                         # Clean up metagraph object to prevent memory accumulation
                         del meta
+                        if latest_lu is not None:
+                            latest_known_update = (
+                                max(latest_known_update or -1, latest_lu)
+                            )
 
                 if latest_lu is not None:
                     logger.warning(
@@ -137,12 +218,14 @@ async def _set_weights_with_confirmation(
                         latest_lu,
                         ref_block,
                     )
+                    latest_known_update = max(latest_known_update or -1, latest_lu)
                 else:
                     logger.warning(
                         "%s not yet included after %d blocks (hotkey missing), retry…",
                         log_prefix,
                         confirm_blocks,
                     )
+                    # no latest_lu observed this round; keep prior cache
         except Exception as e:
             logger.warning(
                 "%s attempt %d error: %s: %s",
@@ -151,18 +234,10 @@ async def _set_weights_with_confirmation(
                 type(e).__name__,
                 e,
             )
+            await _reset_async_subtensor()
+            _reset_sync_subtensor()
         finally:
-            # Clean up connections to prevent memory leaks
-            if st is not None:
-                try:
-                    await st.close()
-                except Exception:
-                    pass
-            if sync_st is not None:
-                try:
-                    sync_st.close()
-                except Exception:
-                    pass
+            gc.collect()
         await asyncio.sleep(delay_s)
     return False
 
@@ -283,6 +358,8 @@ async def run_signer() -> None:
         except Exception as e:
             logger.error("[set_weights] error: %s", e)
             return web.json_response({"success": False, "error": str(e)}, status=500)
+        finally:
+            gc.collect()
 
     app = web.Application(middlewares=[access_log])
     app.add_routes(
@@ -314,3 +391,6 @@ async def run_signer() -> None:
     finally:
         logger.info("Shutting down signer...")
         await runner.cleanup()
+        await _reset_async_subtensor()
+        _reset_sync_subtensor()
+        gc.collect()

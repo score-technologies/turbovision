@@ -3,6 +3,7 @@ import os
 import random
 import asyncio
 import signal
+import gc
 from pathlib import Path
 
 from scorevision.utils.settings import get_settings
@@ -285,6 +286,7 @@ async def runner(slug: str | None = None) -> None:
     finally:
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
+        gc.collect()
 
 
 async def runner_loop():
@@ -322,6 +324,7 @@ async def runner_loop():
 
             logger.info(f"[RunnerLoop] Triggering runner at block {block}")
             await runner()
+            gc.collect()
 
             last_block = block
 
