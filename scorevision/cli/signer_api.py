@@ -105,11 +105,35 @@ async def _set_weights_with_confirmation(
     confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
     earliest_ref_block = None
     latest_known_update = None
+    baseline_last_update = None
     for attempt in range(retries):
         st = None
         sync_st = None
         try:
             st = await get_subtensor()
+
+            if baseline_last_update is None:
+                meta_snapshot = await st.metagraph(netuid, mechid=mechid)
+                try:
+                    hotkey = wallet.hotkey.ss58_address
+                    hotkeys = getattr(meta_snapshot, "hotkeys", []) or []
+                    try:
+                        present = hotkey in hotkeys
+                    except TypeError:
+                        try:
+                            present = hotkey in list(hotkeys)
+                        except TypeError:
+                            present = False
+                    if present:
+                        baseline_last_update = get_last_update_for_hotkey(
+                            meta_snapshot,
+                            hotkey,
+                            pubkey_hex=wallet.hotkey.public_key.hex(),
+                        )
+                        latest_known_update = baseline_last_update
+                finally:
+                    del meta_snapshot
+
             ref_block = await st.get_current_block()
             if earliest_ref_block is None:
                 earliest_ref_block = ref_block
@@ -226,6 +250,18 @@ async def _set_weights_with_confirmation(
                         confirm_blocks,
                     )
                     # no latest_lu observed this round; keep prior cache
+                if (
+                    baseline_last_update is not None
+                    and latest_known_update is not None
+                    and latest_known_update > baseline_last_update
+                ):
+                    logger.info(
+                        "%s detected last_update jump %d -> %d; treating as confirmed.",
+                        log_prefix,
+                        baseline_last_update,
+                        latest_known_update,
+                    )
+                    return True
         except Exception as e:
             logger.warning(
                 "%s attempt %d error: %s: %s",

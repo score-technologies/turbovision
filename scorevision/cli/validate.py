@@ -23,7 +23,6 @@ from scorevision.utils.cloudflare_helpers import (
 from scorevision.utils.bittensor_helpers import (
     get_subtensor,
     reset_subtensor,
-    _set_weights_with_confirmation,
     get_validator_indexes_from_chain,
     on_chain_commit_validator,
     _already_committed_same_index,
@@ -492,16 +491,13 @@ async def retry_set_weights(wallet, uids, weights):
             VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_http").inc()
             logger.warning("Signer error status=%s body=%s", resp.status, data)
     except aiohttp.ClientConnectorError as e:
-        logger.info("Signer unreachable: %s — falling back to local set_weights", e)
+        logger.warning("Signer unreachable: %s — skipping local fallback", e)
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_connect").inc()
     except asyncio.TimeoutError:
-        logger.warning("Signer timed out — falling back to local set_weights")
+        logger.warning("Signer timed out — skipping local fallback")
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_timeout").inc()
 
-    ok_local = await _set_weights_with_confirmation(wallet, NETUID, MECHID, uids, weights)
-    if not ok_local:
-        VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="local_submit_failed").inc()
-    return ok_local
+    return False
 
 async def _collect_recent_mu_by_V_m(
     tail: int,

@@ -236,7 +236,10 @@ def build_svchallenge_from_parts(
     )
 
 
-async def get_challenge_from_scorevision_with_source() -> (
+async def get_challenge_from_scorevision_with_source(
+    *,
+    video_cache: dict[str, Path] | None = None,
+) -> (
     tuple[SVChallenge, SVPredictInput, dict, dict]
 ):
     try:
@@ -249,7 +252,8 @@ async def get_challenge_from_scorevision_with_source() -> (
         raise Exception(f"Unexpected error while fetching challenge: {e}")
 
     payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
-        challenge=chal_api
+        challenge=chal_api,
+        video_cache=video_cache,
     )
     if not payload:
         raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")

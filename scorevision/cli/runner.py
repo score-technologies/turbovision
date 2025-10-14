@@ -57,10 +57,14 @@ async def _build_pgt_with_retries(
     *,
     required_n_frames: int,
     max_retries: int = 3,
+    video_cache: dict[str, Path] | None = None,
 ) -> tuple[SVChallenge, SVPredictInput, list]:
     attempt = 0
     last_err = None
-    video_cache: dict[str, Path] = {}
+    own_cache = False
+    if video_cache is None:
+        video_cache = {}
+        own_cache = True
 
     MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
     MIN_FRAMES_REQUIRED = int(
@@ -69,11 +73,9 @@ async def _build_pgt_with_retries(
 
     try:
         while attempt <= max_retries:
-            payload, frame_numbers, frames, flows, all_frames = (
-                await prepare_challenge_payload(
-                    challenge=chal_api,
-                    video_cache=video_cache,
-                )
+            payload, frame_numbers, frames, flows, all_frames = await prepare_challenge_payload(
+                challenge=chal_api,
+                video_cache=video_cache,
             )
             if len(frames) < required_n_frames:
                 logger.warning(
@@ -159,12 +161,13 @@ async def _build_pgt_with_retries(
             + (f" Last error: {last_err}" if last_err else "")
         )
     finally:
-        cached_path = video_cache.get("path")
-        if cached_path:
-            try:
-                cached_path.unlink(missing_ok=True)
-            except Exception as e:
-                logger.debug(f"Failed to remove cached video {cached_path}: {e}")
+        if own_cache:
+            cached_path = video_cache.get("path")
+            if cached_path:
+                try:
+                    cached_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.debug(f"Failed to remove cached video {cached_path}: {e}")
 
 
 def _enough_bboxes_per_frame(
@@ -204,8 +207,9 @@ async def runner(slug: str | None = None) -> None:
             run_result = "no_miners"
             return
 
+        video_cache: dict[str, Path] = {}
         challenge, payload, chal_api, all_frames = (
-            await get_challenge_from_scorevision_with_source()
+            await get_challenge_from_scorevision_with_source(video_cache=video_cache)
         )
 
         miner_list = list(miners.values())
@@ -216,6 +220,7 @@ async def runner(slug: str | None = None) -> None:
                 chal_api=chal_api,
                 required_n_frames=REQUIRED_PGT_FRAMES,
                 max_retries=MAX_PGT_RETRIES,
+                video_cache=video_cache,
             )
         except Exception as e:
             logger.warning(
@@ -223,6 +228,14 @@ async def runner(slug: str | None = None) -> None:
             )
             run_result = "pgt_failed"
             return
+        finally:
+            cached_path = video_cache.get("path")
+            if cached_path:
+                try:
+                    cached_path.unlink(missing_ok=True)
+                except Exception as err:
+                    logger.debug(f"Failed to remove cached video {cached_path}: {err}")
+            video_cache.clear()
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
