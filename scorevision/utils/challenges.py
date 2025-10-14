@@ -4,6 +4,7 @@ from typing import Any
 from hashlib import sha256
 from json import dumps
 from random import shuffle, randint
+from pathlib import Path
 
 from aiohttp import ClientResponseError
 from numpy import ndarray
@@ -13,7 +14,7 @@ from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
-from scorevision.utils.video_processing import download_video
+from scorevision.utils.video_processing import download_video, download_video_cached
 from scorevision.utils.image_processing import image_to_base64, pil_from_array
 from scorevision.chute_template.schemas import SVPredictInput, SVFrame
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
@@ -70,7 +71,11 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]
 
 
 async def prepare_challenge_payload(
-    challenge: dict, batch_size: int | None = 64, mock_after_n_frames: int | None = None
+    challenge: dict,
+    batch_size: int | None = 64,
+    mock_after_n_frames: int | None = None,
+    *,
+    video_cache: dict[str, Path] | None = None,
 ) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray], dict[int, ndarray]]:
     settings = get_settings()
 
@@ -97,9 +102,20 @@ async def prepare_challenge_payload(
     ]
     logger.info(f"Selected Frames for Testing: {selected_frame_numbers}")
 
-    video_name, frames, flows = await download_video(
-        url=video_url, frame_numbers=selected_frame_numbers
-    )
+    if video_cache is not None:
+        cached_path = video_cache.get("path")
+        _, frames, flows, video_path = await download_video_cached(
+            url=video_url,
+            frame_numbers=selected_frame_numbers,
+            cached_path=cached_path,
+        )
+        video_cache["path"] = video_path
+    else:
+        _, frames, flows = await download_video(
+            url=video_url, frame_numbers=selected_frame_numbers
+        )
+        video_path = None
+
     selected_frame_numbers = list(flows.keys())
     logger.info(f"frames {selected_frame_numbers} successful")
     if not any(frames):

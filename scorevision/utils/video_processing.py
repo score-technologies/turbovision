@@ -108,3 +108,44 @@ async def download_video(
         )
     name = url.split("/")[-1]
     return name, frames, flows
+
+
+async def download_video_cached(
+    url: str,
+    frame_numbers: list[int],
+    cached_path: Path | None = None,
+) -> tuple[str, dict[int, ndarray], dict[int, ndarray], Path]:
+    """
+    Download the video once and reuse the cached file across retries.
+    When `cached_path` is provided, the file is not re-downloaded.
+    The returned Path should be cleaned up by the caller when no longer needed.
+    """
+    if cached_path is None:
+        session = await get_async_client()
+        temp_path: Path | None = None
+        try:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    txt = await response.text()
+                    raise RuntimeError(
+                        f"Download failed {response.status}: {txt[:200]}"
+                    )
+                with NamedTemporaryFile(
+                    prefix="sv_video_", suffix=".mp4", delete=False
+                ) as tmp:
+                    async for chunk in response.content.iter_chunked(1024 * 1024):
+                        tmp.write(chunk)
+                    temp_path = Path(tmp.name)
+        except Exception:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise
+        video_path = temp_path
+    else:
+        video_path = cached_path
+
+    frames, flows = background_temporal_differencing(
+        video_path=video_path, frame_numbers=frame_numbers
+    )
+    name = url.split("/")[-1]
+    return name, frames, flows, video_path
