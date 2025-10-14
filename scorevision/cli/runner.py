@@ -63,6 +63,7 @@ async def _build_pgt_with_retries(
 ) -> tuple[SVChallenge, SVPredictInput, list]:
     attempt = 0
     last_err = None
+    created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
 
@@ -161,11 +162,12 @@ async def _build_pgt_with_retries(
             + (f" Last error: {last_err}" if last_err else "")
         )
     finally:
-        if own_cache:
+        if created_local_cache and video_cache:
             cached_path = video_cache.get("path")
             if cached_path:
                 try:
-                    cached_path.unlink(missing_ok=True)
+                    from pathlib import Path as _Path
+                    (_Path(cached_path) if not hasattr(cached_path, "unlink") else cached_path).unlink(missing_ok=True)
                 except Exception as e:
                     logger.debug(f"Failed to remove cached video {cached_path}: {e}")
 

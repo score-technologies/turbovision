@@ -116,7 +116,7 @@ async def prepare_challenge_payload(
     if cached_store is None:
         video_name, frame_store = await download_video_cached(
             url=video_url,
-            frame_numbers=selected_frame_numbers,
+            _frame_numbers=selected_frame_numbers,
             cached_path=cached_path,
         )
         if video_cache is not None:
