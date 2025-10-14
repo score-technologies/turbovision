@@ -298,7 +298,7 @@ async def on_chain_commit_validator(index_url: str) -> None:
         "role": "validator",
         "hotkey": w.hotkey.ss58_address,
         "index_url": index_url,
-        "chute_name": settings.CHUTE_USERNAME,
+        "chute_name": settings.CHUTES_USERNAME,
         "version": 1,
     }
     logger.info(f"[validator-commit] {payload}")

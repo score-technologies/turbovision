@@ -20,8 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /wheels
 
-# Copy only dependency files to maximize cache hits
+# Copy project metadata and source (limits cache invalidation to relevant files)
 COPY pyproject.toml uv.lock README.md ./
+COPY scorevision ./scorevision
 
 # Build wheels for dependencies
 RUN pip install --upgrade pip wheel setuptools hatchling && \
@@ -52,11 +53,6 @@ RUN pip install --no-index --find-links=/wheels scorevision && \
 
 # Copy application code (separate layer for better caching)
 COPY . /app
-
-# Create non-root user for security
-RUN useradd -m -u 1000 app && \
-    chown -R app:app /app
-USER app
 
 # Default command (can be overridden in docker-compose)
 CMD ["sv", "-v", "validate"]
