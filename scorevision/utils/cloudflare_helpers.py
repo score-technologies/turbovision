@@ -266,6 +266,7 @@ async def emit_shard(
     settings = get_settings()
     st = await get_subtensor()
     current_block = int(await st.get_current_block())
+    timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
     ns = None
     prefix = _results_prefix(ns)
@@ -274,8 +275,11 @@ async def emit_shard(
 
     try:
         if getattr(miner_run, "predictions", None) is not None:
-            await _put_json_object(resp_key, miner_run.predictions)
-            logger.info(f"Responses (blob) stored: {resp_key}")
+            logger.info(f"[emit_shard] uploading responses blob to {resp_key}")
+            await asyncio.wait_for(
+                _put_json_object(resp_key, miner_run.predictions), timeout=timeout_s
+            )
+            logger.info(f"[emit_shard] responses stored: {resp_key}")
     except Exception as e:
         logger.error(f"storing responses blob failed: {e}")
         resp_key = None
@@ -311,7 +315,10 @@ async def emit_shard(
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
 
     try:
-        hk, signed_lines = await sink_sv_at(eval_key, [shard_line])
+        logger.info(f"[emit_shard] writing evaluation shard to {eval_key}")
+        hk, signed_lines = await asyncio.wait_for(
+            sink_sv_at(eval_key, [shard_line]), timeout=timeout_s
+        )
         logger.info(f"Shard (evaluation) emitted: {eval_key} (1 line)")
     except Exception as e:
         logger.error(f"sink_sv_at (evaluation) failed: {e}")
