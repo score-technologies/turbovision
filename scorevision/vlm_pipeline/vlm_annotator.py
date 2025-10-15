@@ -36,6 +36,13 @@ logger = getLogger(__name__)
 QWEN_MODEL = "Qwen/Qwen2.5-VL-72B-Instruct"
 INTERNVL_MODEL = "OpenGVLab/InternVL3-78B"
 
+import os
+
+# --- Step1 early filter (Qwen) tunables ---
+STEP1_MIN_BOXES = int(os.getenv("SV_STEP1_MIN_BOXES", "6"))
+STEP1_RETRY_ROUNDS = int(os.getenv("SV_STEP1_RETRY_ROUNDS", "5"))
+STEP1_RETRY_BATCH = int(os.getenv("SV_STEP1_RETRY_BATCH", "3"))      
+STEP1_SPACING = int(os.getenv("SV_STEP1_SPACING", "15"))             
 
 # -------------------- utils: image + boxes --------------------
 def _ensure_bgr_contiguous(img: ndarray) -> ndarray:
@@ -160,6 +167,39 @@ def _merge_union(
             out.append(b)
     return out
 
+def _count_step1_persons(step1_out: dict) -> int:
+    """"""
+    return len(step1_out.get("persons") or [])
+
+def _pick_alternate_indices(
+    base_idx: int,
+    total: int,
+    tried: set[int],
+    batch: int,
+    spacing: int,
+) -> list[int]:
+    """
+    """
+    cands = []
+    k = 1
+    while len(cands) < batch and (base_idx - k*spacing >= 0 or base_idx + k*spacing < total):
+        left = base_idx - k*spacing
+        right = base_idx + k*spacing
+        if left >= 0 and left not in tried:
+            cands.append(left)
+        if len(cands) >= batch:
+            break
+        if right < total and right not in tried:
+            cands.append(right)
+        k += 1
+
+    j = 0
+    while len(cands) < batch and j < total:
+        if j not in tried:
+            if abs(j - base_idx) >= max(1, spacing // 2):
+                cands.append(j)
+        j += 1
+    return cands[:batch]
 
 # -------------------- VLM wrappers per step --------------------
 async def _vlm_call_with_model(
@@ -318,7 +358,6 @@ async def _step3_assign_classes_from_palette(
     return {"objects": objects}
 
 
-# -------------------- mapping couleurs (string -> ShirtColor enum) --------------------
 def _to_shirtcolor(name: str | None, default: ShirtColor) -> ShirtColor:
     if not name:
         return default
@@ -329,7 +368,6 @@ def _to_shirtcolor(name: str | None, default: ShirtColor) -> ShirtColor:
     return default
 
 
-# -------------------- mapping vers FrameAnnotation --------------------
 def _objects_to_frameannotation(
     objects: list[dict], ball_obj: dict, palette_roles: list[dict]
 ) -> FrameAnnotation:
@@ -459,22 +497,121 @@ async def generate_annotations_for_select_frames(
     flow_frames: list[ndarray],
     frame_numbers: list[int],
 ) -> list[PseudoGroundTruth]:
-    tasks = [
-        generate_annotations_for_select_frame(
+    """
+    """
+    assert len(frames) == len(flow_frames) == len(frame_numbers)
+    N = len(frames)
+
+    pool = [(frames[i], flow_frames[i], frame_numbers[i]) for i in range(N)]
+
+    annotations: list[PseudoGroundTruth] = []
+    semaphore = get_semaphore()
+
+    async def _run_full_pipeline_on_index(idx: int) -> PseudoGroundTruth | None:
+        frame, flow_frame, frame_number = pool[idx]
+        raw_bgr = _ensure_bgr_contiguous(frame)
+        flow_bgr = _flow_to_bgr(flow_frame) if flow_frame is not None else None
+
+        # ---- STEP 1 (double Qwen) ----
+        try:
+            async with semaphore:
+                s1 = await _step1_detect_persons_and_ball_double_qwen(raw_bgr, flow_bgr, provider=VLMProvider.PRIMARY)
+        except Exception as e:
+            logger.error(f"Step1 failed @idx={idx} (frame {frame_number}): {e}")
+            return None
+
+        if _count_step1_persons(s1) < STEP1_MIN_BOXES:
+            return None  # early fail
+
+        persons = s1["persons"]
+        ball = s1["ball"]
+        if not persons and not (ball.get("present") and ball.get("bbox")):
+            logger.error(f"Step1 produced no usable persons/ball @idx={idx} (frame {frame_number})")
+            return None
+
+        persons_vis = _draw_boxes_with_idx(raw_bgr, persons)
+
+        # ---- STEP 2 ----
+        try:
+            async with semaphore:
+                s2 = await _step2_palette_internvl(raw_bgr, provider=VLMProvider.PRIMARY)
+        except Exception as e:
+            logger.error(f"Step2 failed @idx={idx} (frame {frame_number}): {e}")
+            return None
+
+        # ---- STEP 3 ----
+        try:
+            async with semaphore:
+                s3 = await _step3_assign_classes_from_palette(
+                    raw_bgr, persons_vis, persons, s2, provider=VLMProvider.PRIMARY
+                )
+        except Exception as e:
+            logger.error(f"Step3 failed @idx={idx} (frame {frame_number}): {e}")
+            return None
+
+        objects = s3.get("objects") or []
+        annotation = _objects_to_frameannotation(objects, ball, s2.get("roles", []))
+        if not any(annotation.bboxes):
+            logger.error(f"No annotations generated after Step3 @idx={idx} (frame {frame_number})")
+            return None
+
+        return PseudoGroundTruth(
             video_name=video_name,
             frame_number=frame_number,
-            frame=frame,
-            flow_frame=flow_frame,
+            spatial_image=frame,
+            temporal_image=flow_frame,
+            annotation=annotation,
         )
-        for frame_number, frame, flow_frame in zip(
-            frame_numbers, frames, flow_frames, strict=True
-        )
-    ]
-    results = await gather(*tasks, return_exceptions=True)
-    annotations: list[PseudoGroundTruth] = []
-    for result in results:
-        if isinstance(result, PseudoGroundTruth):
-            annotations.append(result)
-        else:
-            logger.error(result)
+
+    used_indices: set[int] = set()
+    for base_idx in range(N):
+        if base_idx in used_indices:
+            continue
+
+        pgt = await _run_full_pipeline_on_index(base_idx)
+        if pgt is not None:
+            annotations.append(pgt)
+            used_indices.add(base_idx)
+            continue
+
+        tried: set[int] = {base_idx}
+        success = False
+        for _round in range(STEP1_RETRY_ROUNDS):
+            cands = _pick_alternate_indices(
+                base_idx=base_idx,
+                total=N,
+                tried=tried | used_indices,
+                batch=STEP1_RETRY_BATCH,
+                spacing=STEP1_SPACING,
+            )
+            if not cands:
+                break
+
+            step1_pass_idx: int | None = None
+            for idx in cands:
+                tried.add(idx)
+                frame, flow_frame, frame_number = pool[idx]
+                raw_bgr = _ensure_bgr_contiguous(frame)
+                flow_bgr = _flow_to_bgr(flow_frame) if flow_frame is not None else None
+                try:
+                    async with semaphore:
+                        s1 = await _step1_detect_persons_and_ball_double_qwen(raw_bgr, flow_bgr, provider=VLMProvider.PRIMARY)
+                    if _count_step1_persons(s1) >= STEP1_MIN_BOXES:
+                        step1_pass_idx = idx
+                        break
+                except Exception as e:
+                    logger.error(f"Step1 failed @alt_idx={idx} (frame {frame_number}): {e}")
+                    continue
+
+            if step1_pass_idx is not None:
+                pgt_alt = await _run_full_pipeline_on_index(step1_pass_idx)
+                if pgt_alt is not None:
+                    annotations.append(pgt_alt)
+                    used_indices.add(step1_pass_idx)
+                    success = True
+                    break 
+
+        if not success:
+            logger.info(f"Step1 early-filter: no suitable alternate found for base_idx={base_idx}; skipping.")
+
     return annotations

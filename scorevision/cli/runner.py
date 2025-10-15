@@ -61,31 +61,38 @@ async def _build_pgt_with_retries(
     max_retries: int = 3,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, SVPredictInput, list]:
-    attempt = 0
-    last_err = None
+
     created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
 
+    MAX_RETRIES_NOT_ENOUGH = int(os.getenv("SV_PGT_MAX_RETRIES_NOT_ENOUGH", str(max_retries)))
+    MAX_RETRIES_QUALITY = int(os.getenv("SV_PGT_MAX_RETRIES_QUALITY", str(max_retries)))
+
+    attempts_ne = 0
+    attempts_q = 0
+
+    last_err = None
+
     MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
-    MIN_FRAMES_REQUIRED = int(
-        os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames))
-    )
+    MIN_FRAMES_REQUIRED = int(os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames)))
 
     try:
-        while attempt <= max_retries:
+        while attempts_ne <= MAX_RETRIES_NOT_ENOUGH and attempts_q <= MAX_RETRIES_QUALITY:
             payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
                 challenge=chal_api,
                 video_cache=video_cache,
             )
+
             if len(frames) < required_n_frames:
                 logger.warning(
                     f"Only {len(frames)} frames extracted (need >= {required_n_frames}). "
-                    f"Attempt {attempt+1}/{max_retries} → resample."
+                    f"not_enough attempt {attempts_ne+1}/{MAX_RETRIES_NOT_ENOUGH} → resample."
                 )
                 RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
-                attempt += 1
+                attempts_ne += 1
                 continue
+
             challenge = build_svchallenge_from_parts(
                 chal_api=chal_api,
                 payload=payload,
@@ -101,9 +108,7 @@ async def _build_pgt_with_retries(
                     flow_frames=challenge.dense_optical_flow_frames,
                     frame_numbers=challenge.frame_numbers,
                 )
-                logger.info(
-                    f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated"
-                )
+                logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
 
                 if not _enough_bboxes_per_frame(
                     pseudo_gt_annotations,
@@ -112,18 +117,17 @@ async def _build_pgt_with_retries(
                 ):
                     logger.warning(
                         f"PGT has too few bboxes (need >= {MIN_BBOXES_PER_FRAME} on "
-                        f"{MIN_FRAMES_REQUIRED} frames). Attempt {attempt+1}/{max_retries} → resample."
+                        f"{MIN_FRAMES_REQUIRED} frames). not_enough attempt "
+                        f"{attempts_ne+1}/{MAX_RETRIES_NOT_ENOUGH} → resample."
                     )
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
-                    attempt += 1
+                    attempts_ne += 1
                     continue
 
                 filtered = filter_low_quality_pseudo_gt_annotations(
                     annotations=pseudo_gt_annotations
                 )
-                logger.info(
-                    f"{len(filtered)} Pseudo GT annotations had sufficient quality"
-                )
+                logger.info(f"{len(filtered)} Pseudo GT annotations had sufficient quality")
 
                 if not _enough_bboxes_per_frame(
                     filtered,
@@ -132,10 +136,11 @@ async def _build_pgt_with_retries(
                 ):
                     logger.warning(
                         f"After quality filter, still too few bboxes on {required_n_frames} frames "
-                        f"(need >= {MIN_BBOXES_PER_FRAME}). Attempt {attempt+1}/{max_retries} → resample."
+                        f"(need >= {MIN_BBOXES_PER_FRAME}). quality attempt "
+                        f"{attempts_q+1}/{MAX_RETRIES_QUALITY} → resample."
                     )
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_filtered").inc()
-                    attempt += 1
+                    attempts_q += 1
                     continue
 
                 if len(filtered) >= required_n_frames:
@@ -143,24 +148,31 @@ async def _build_pgt_with_retries(
                     return challenge, payload, filtered
 
                 logger.warning(
-                    f"Low-quality filter kept only {len(filtered)}/{required_n_frames} frames "
-                    f"(attempt {attempt+1}/{max_retries}). Retrying with new frames…"
+                    f"Low-quality filter kept only {len(filtered)}/{required_n_frames} frames; "
+                    f"quality attempt {attempts_q+1}/{MAX_RETRIES_QUALITY} → resample."
                 )
                 RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_filtered_frames").inc()
-                attempt += 1
+                attempts_q += 1
 
             except Exception as e:
                 last_err = e
                 logger.warning(
-                    f"PGT generation failed on attempt {attempt+1}/{max_retries}: {e}. Retrying…"
+                    f"PGT generation failed (exception) on quality attempt "
+                    f"{attempts_q+1}/{MAX_RETRIES_QUALITY}: {e}. Retrying…"
                 )
                 RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
-                attempt += 1
+                attempts_q += 1
 
+        exhausted = []
+        if attempts_ne > MAX_RETRIES_NOT_ENOUGH:
+            exhausted.append(f"not_enough({attempts_ne}/{MAX_RETRIES_NOT_ENOUGH})")
+        if attempts_q > MAX_RETRIES_QUALITY:
+            exhausted.append(f"quality({attempts_q}/{MAX_RETRIES_QUALITY})")
         raise RuntimeError(
-            f"Failed to prepare high-quality PGT (and min-bboxes) after {max_retries} retries."
-            + (f" Last error: {last_err}" if last_err else "")
+            "Failed to prepare PGT after retries: " + ", ".join(exhausted)
+            + (f". Last error: {last_err}" if last_err else "")
         )
+        
     finally:
         if created_local_cache and video_cache:
             cached_path = video_cache.get("path")
