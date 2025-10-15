@@ -279,15 +279,27 @@ async def runner(slug: str | None = None) -> None:
                     )
 
                 emission_started = True
-                await emit_shard(
-                    slug=m.slug,
-                    challenge=challenge,
-                    miner_run=miner_output,
-                    evaluation=evaluation,
-                    miner_hotkey_ss58=m.hotkey,
-                )
-                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
-                emission_started = False
+                emit_start = loop.time()
+                try:
+                    await emit_shard(
+                        slug=m.slug,
+                        challenge=challenge,
+                        miner_run=miner_output,
+                        evaluation=evaluation,
+                        miner_hotkey_ss58=m.hotkey,
+                    )
+                except Exception:
+                    dt_emit = (loop.time() - emit_start) * 1000.0
+                    logger.exception(
+                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
+                    )
+                    raise
+                else:
+                    dt_emit = (loop.time() - emit_start) * 1000.0
+                    logger.info("[emit] success for %s in %.1fms", miner_label, dt_emit)
+                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
+                finally:
+                    emission_started = False
             except Exception as e:
                 logger.warning(
                     "Miner uid=%s slug=%s failed: %s",

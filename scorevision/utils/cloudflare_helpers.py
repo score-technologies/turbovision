@@ -11,7 +11,7 @@ from botocore.config import Config as BotoConfig
 from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
-from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.prometheus import (
     VALIDATOR_DATASET_LINES_TOTAL,
     VALIDATOR_DATASET_FETCH_ERRORS_TOTAL,
@@ -264,8 +264,17 @@ async def emit_shard(
 ) -> None:
 
     settings = get_settings()
+    rid = f"{challenge.challenge_id[:8]}:{miner_hotkey_ss58[-6:]}"
     st = await get_subtensor()
-    current_block = int(await st.get_current_block())
+    try:
+        current_block = int(await asyncio.wait_for(st.get_current_block(), timeout=5.0))
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[emit:%s] get_current_block timed out; resetting subtensor", rid
+        )
+        reset_subtensor()
+        st = await get_subtensor()
+        current_block = int(await st.get_current_block())
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
     ns = None
@@ -275,11 +284,11 @@ async def emit_shard(
 
     try:
         if getattr(miner_run, "predictions", None) is not None:
-            logger.info(f"[emit_shard] uploading responses blob to {resp_key}")
+            logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
             await asyncio.wait_for(
                 _put_json_object(resp_key, miner_run.predictions), timeout=timeout_s
             )
-            logger.info(f"[emit_shard] responses stored: {resp_key}")
+            logger.info(f"[emit:{rid}] responses stored: {resp_key}")
     except Exception as e:
         logger.error(f"storing responses blob failed: {e}")
         resp_key = None
@@ -315,13 +324,15 @@ async def emit_shard(
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
 
     try:
-        logger.info(f"[emit_shard] writing evaluation shard to {eval_key}")
+        logger.info(f"[emit:{rid}] writing evaluation shard to {eval_key}")
         hk, signed_lines = await asyncio.wait_for(
             sink_sv_at(eval_key, [shard_line]), timeout=timeout_s
         )
-        logger.info(f"Shard (evaluation) emitted: {eval_key} (1 line)")
+        logger.info(f"[emit:{rid}] evaluation shard emitted: {eval_key} (1 line)")
+    except asyncio.TimeoutError:
+        logger.error(f"[emit:{rid}] sink_sv_at timed out after {timeout_s}s")
     except Exception as e:
-        logger.error(f"sink_sv_at (evaluation) failed: {e}")
+        logger.error(f"[emit:{rid}] sink_sv_at failed: {e}")
 
     # --- logs run ---
     logger.info("\n=== SV Runner (R2) ===")
