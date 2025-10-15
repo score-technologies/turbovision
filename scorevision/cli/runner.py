@@ -24,7 +24,7 @@ from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
 )
 from scorevision.utils.miner_registry import get_miners_from_registry, Miner
-from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
@@ -338,10 +338,15 @@ async def runner_loop():
             RUNNER_BLOCK_HEIGHT.set(block)
 
             if block <= last_block or block % TEMPO != 0:
-                # Use asyncio.wait_for with timeout to check shutdown event
                 try:
                     await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
                 except asyncio.TimeoutError:
+                    continue
+                except (KeyError, ConnectionError, RuntimeError) as err:
+                    logger.warning("wait_for_block error (%s); resetting subtensor", err)
+                    reset_subtensor()
+                    st = None
+                    await asyncio.sleep(2.0)
                     continue
                 continue
 

@@ -127,21 +127,26 @@ def load_hotkey_keypair(wallet_name: str, hotkey_name: str) -> Keypair:
 
 
 async def get_subtensor():
-    """"""
+    """Return a cached async subtensor client, recreating on failure."""
     global _SUBTENSOR
     settings = get_settings()
 
+    async def _init(endpoint: str):
+        st = async_subtensor(endpoint)
+        await st.initialize()
+        return st
+
     if _SUBTENSOR is None:
-        _SUBTENSOR = async_subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
         try:
-            await _SUBTENSOR.initialize()
+            _SUBTENSOR = await _init(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
         except Exception as e:
-            logger.error(str(e))
             logger.warning(
-                f"Subtensor init failed; falling back to {settings.BITTENSOR_SUBTENSOR_FALLBACK}"
+                "Subtensor init failed for %s: %s; retrying with fallback %s",
+                settings.BITTENSOR_SUBTENSOR_ENDPOINT,
+                e,
+                settings.BITTENSOR_SUBTENSOR_FALLBACK,
             )
-            _SUBTENSOR = async_subtensor(settings.BITTENSOR_SUBTENSOR_FALLBACK)
-            await _SUBTENSOR.initialize()
+            _SUBTENSOR = await _init(settings.BITTENSOR_SUBTENSOR_FALLBACK)
     return _SUBTENSOR
 
 

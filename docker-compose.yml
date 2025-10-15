@@ -1,4 +1,4 @@
-x-common: &common
+x-common: &common #image: docker.io/mikhaelscore/turbovision:latest
   build: .
   restart: unless-stopped
   env_file: .env

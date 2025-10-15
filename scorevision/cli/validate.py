@@ -135,10 +135,16 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
             VALIDATOR_BLOCK_HEIGHT.set(block)
 
             if block % tempo != 0 or block <= last_done:
-                # Use asyncio.wait_for with timeout to check shutdown event
                 try:
                     await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
                 except asyncio.TimeoutError:
+                    continue
+                except (KeyError, ConnectionError, RuntimeError) as err:
+                    logger.warning("wait_for_block error (%s); resetting subtensor", err)
+                    VALIDATOR_LOOP_TOTAL.labels(outcome="subtensor_error").inc()
+                    reset_subtensor()
+                    st = None
+                    await asyncio.sleep(2.0)
                     continue
                 continue
 
