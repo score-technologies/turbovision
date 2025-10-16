@@ -94,6 +94,16 @@ VALIDATOR_WINNER_SCORE = Gauge(
     "Score for current winning miner",
     registry=PROM_REG,
 )
+VALIDATOR_LAST_LOOP_DURATION_SECONDS = Gauge(
+    "validator_last_loop_duration_seconds",
+    "Seconds taken by the most recent validator loop iteration",
+    registry=PROM_REG,
+)
+VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS = Gauge(
+    "validator_signer_request_duration_seconds",
+    "Seconds taken by the last validator signer request",
+    registry=PROM_REG,
+)
 VALIDATOR_RECENT_WINDOW_SAMPLES = Gauge(
     "validator_recent_window_samples",
     "Recent window sample count per miner",
@@ -168,6 +178,22 @@ RUNNER_SHARDS_EMITTED_TOTAL = Counter(
 RUNNER_ACTIVE_MINERS = Gauge(
     "runner_active_miners",
     "Active miners per runner invocation",
+    registry=PROM_REG,
+)
+RUNNER_LAST_RUN_DURATION_SECONDS = Gauge(
+    "runner_last_run_duration_seconds",
+    "Seconds taken by the most recent runner invocation",
+    registry=PROM_REG,
+)
+RUNNER_LAST_PGT_DURATION_SECONDS = Gauge(
+    "runner_last_pgt_duration_seconds",
+    "Seconds spent building PGT in the most recent runner invocation",
+    registry=PROM_REG,
+)
+RUNNER_MINER_LAST_DURATION_SECONDS = Gauge(
+    "runner_miner_last_duration_seconds",
+    "Seconds spent scoring per miner in the most recent run",
+    ["miner"],
     registry=PROM_REG,
 )
 

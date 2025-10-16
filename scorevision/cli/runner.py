@@ -41,6 +41,9 @@ from scorevision.utils.prometheus import (
     RUNNER_EVALUATION_FAIL_TOTAL,
     RUNNER_SHARDS_EMITTED_TOTAL,
     RUNNER_ACTIVE_MINERS,
+    RUNNER_LAST_RUN_DURATION_SECONDS,
+    RUNNER_LAST_PGT_DURATION_SECONDS,
+    RUNNER_MINER_LAST_DURATION_SECONDS,
 )
 from scorevision.utils.video_processing import FrameStore
 
@@ -200,6 +203,9 @@ def _enough_bboxes_per_frame(
 
 async def runner(slug: str | None = None) -> None:
     settings = get_settings()
+    loop = asyncio.get_running_loop()
+    run_start = loop.time()
+    last_pgt_duration = 0.0
     NETUID = settings.SCOREVISION_NETUID
     MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
     WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in (
@@ -231,16 +237,21 @@ async def runner(slug: str | None = None) -> None:
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
         try:
+            pgt_build_start = loop.time()
             challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                 chal_api=chal_api,
                 required_n_frames=REQUIRED_PGT_FRAMES,
                 max_retries=MAX_PGT_RETRIES,
                 video_cache=video_cache,
             )
+            last_pgt_duration = loop.time() - pgt_build_start
+            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
         except Exception as e:
             logger.warning(
                 f"PGT quality gating failed after retries, skipping challenge: {e}"
             )
+            last_pgt_duration = loop.time() - pgt_build_start
+            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
             run_result = "pgt_failed"
             return
 
@@ -248,6 +259,7 @@ async def runner(slug: str | None = None) -> None:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
             miner_output: SVPredictInput | None = None
             emission_started = False
+            miner_total_start = loop.time()
             try:
                 loop = asyncio.get_running_loop()
                 start = loop.time()
@@ -312,10 +324,16 @@ async def runner(slug: str | None = None) -> None:
                 if emission_started:
                     RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
+            finally:
+                duration = loop.time() - miner_total_start
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(duration)
     except Exception as e:
         logger.error(e)
         run_result = "error"
     finally:
+        loop_now = asyncio.get_running_loop()
+        run_duration = loop_now.time() - run_start
+        RUNNER_LAST_RUN_DURATION_SECONDS.set(run_duration)
         store_obj = video_cache.get("store") or frame_store
         if store_obj:
             try:

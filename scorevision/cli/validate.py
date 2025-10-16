@@ -44,6 +44,8 @@ from scorevision.utils.prometheus import (
     VALIDATOR_WINNER_SCORE,
     VALIDATOR_RECENT_WINDOW_SAMPLES,
     VALIDATOR_COMMIT_TOTAL,
+    VALIDATOR_LAST_LOOP_DURATION_SECONDS,
+    VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS,
 )
 from scorevision.utils.settings import get_settings
 
@@ -148,39 +150,67 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
                     continue
                 continue
 
-            uids, weights = await get_weights(tail=tail, m_min=m_min)
-            if not uids:
-                logger.warning("No eligible uids this round; skipping.")
-                VALIDATOR_LOOP_TOTAL.labels(outcome="no_uids").inc()
+            iter_loop = asyncio.get_running_loop()
+            iter_start = iter_loop.time()
+            loop_outcome = "unknown"
+            try:
+                uids, weights = await get_weights(tail=tail, m_min=m_min)
+                if not uids:
+                    logger.warning("No eligible uids this round; skipping.")
+                    CURRENT_WINNER.set(-1)
+                    VALIDATOR_WINNER_SCORE.set(0.0)
+                    VALIDATOR_LOOP_TOTAL.labels(outcome="no_uids").inc()
+                    loop_outcome = "no_uids"
+                    last_done = block
+                    continue
+
+                ok = await retry_set_weights(wallet, uids, weights)
+                if ok:
+                    LASTSET_GAUGE.set(time.time())
+                    VALIDATOR_LOOP_TOTAL.labels(outcome="success").inc()
+                    VALIDATOR_LAST_BLOCK_SUCCESS.set(block)
+                    loop_outcome = "success"
+                    logger.info("set_weights OK at block %d", block)
+                else:
+                    logger.warning("set_weights failed at block %d", block)
+                    VALIDATOR_LOOP_TOTAL.labels(outcome="set_weights_failed").inc()
+                    CURRENT_WINNER.set(-1)
+                    VALIDATOR_WINNER_SCORE.set(0.0)
+                    loop_outcome = "set_weights_failed"
+
+                try:
+                    sz = sum(
+                        f.stat().st_size for f in CACHE_DIR.glob("*.jsonl") if f.is_file()
+                    )
+                    CACHE_FILES.set(len(list(CACHE_DIR.glob("*.jsonl"))))
+                    VALIDATOR_CACHE_BYTES.set(sz)
+                except Exception:
+                    pass
+
+                try:
+                    await asyncio.to_thread(prune_sv, tail)
+                except Exception as e:
+                    logger.warning(f"Cache prune failed: {e}")
+
+                gc.collect()
                 last_done = block
-                continue
-
-            ok = await retry_set_weights(wallet, uids, weights)
-            if ok:
-                LASTSET_GAUGE.set(time.time())
-                VALIDATOR_LOOP_TOTAL.labels(outcome="success").inc()
-                VALIDATOR_LAST_BLOCK_SUCCESS.set(block)
-                logger.info("set_weights OK at block %d", block)
-            else:
-                logger.warning("set_weights failed at block %d", block)
-                VALIDATOR_LOOP_TOTAL.labels(outcome="set_weights_failed").inc()
-
-            try:
-                sz = sum(
-                    f.stat().st_size for f in CACHE_DIR.glob("*.jsonl") if f.is_file()
-                )
-                CACHE_FILES.set(len(list(CACHE_DIR.glob("*.jsonl"))))
-                VALIDATOR_CACHE_BYTES.set(sz)
-            except Exception:
-                pass
-
-            try:
-                await asyncio.to_thread(prune_sv, tail)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.warning(f"Cache prune failed: {e}")
-
-            gc.collect()
-            last_done = block
+                traceback.print_exc()
+                logger.warning("Validator loop error: %s — reconnecting…", e)
+                VALIDATOR_LOOP_TOTAL.labels(outcome="error").inc()
+                loop_outcome = "error"
+                st = None
+                reset_subtensor()
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+            finally:
+                duration = asyncio.get_running_loop().time() - iter_start
+                VALIDATOR_LAST_LOOP_DURATION_SECONDS.set(duration)
 
         except asyncio.CancelledError:
             break
@@ -475,6 +505,8 @@ async def retry_set_weights(wallet, uids, weights):
     MECHID = settings.SCOREVISION_MECHID
     signer_url = settings.SIGNER_URL
 
+    loop = asyncio.get_running_loop()
+    request_start = loop.time()
     try:
         timeout = aiohttp.ClientTimeout(connect=2, total=120)
         async with aiohttp.ClientSession(timeout=timeout) as sess:
@@ -492,14 +524,18 @@ async def retry_set_weights(wallet, uids, weights):
                 data = await resp.json()
             except Exception:
                 data = {"raw": await resp.text()}
+            duration = loop.time() - request_start
+            VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(duration)
             if resp.status == 200 and data.get("success"):
                 return True
             VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_http").inc()
             logger.warning("Signer error status=%s body=%s", resp.status, data)
     except aiohttp.ClientConnectorError as e:
+        VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
         logger.warning("Signer unreachable: %s — skipping local fallback", e)
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_connect").inc()
     except asyncio.TimeoutError:
+        VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
         logger.warning("Signer timed out — skipping local fallback")
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_timeout").inc()
 

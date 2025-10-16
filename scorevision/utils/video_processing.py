@@ -131,6 +131,7 @@ class FrameStore:
         self._max_flows = max_flows
         self._lock = RLock()
         self._capture: VideoCapture | None = None
+        self._current_frame_index: int | None = None
 
     def _ensure_capture(self) -> None:
         if self._capture is None:
@@ -156,12 +157,16 @@ class FrameStore:
             if not self._capture:
                 raise RuntimeError("Video capture not initialised")
 
-            self._capture.set(CAP_PROP_POS_FRAMES, frame_number)
+            if self._current_frame_index is None or frame_number < self._current_frame_index:
+                self._capture.set(CAP_PROP_POS_FRAMES, frame_number)
+            elif frame_number > self._current_frame_index + 1:
+                self._capture.set(CAP_PROP_POS_FRAMES, frame_number)
 
             ok, frame = self._capture.read()
             if not ok or frame is None:
                 raise IOError(f"Failed to read frame {frame_number}")
 
+            self._current_frame_index = frame_number
             result = frame.copy()
             self._frame_cache[frame_number] = result
             self._frame_cache.move_to_end(frame_number)
@@ -214,6 +219,7 @@ class FrameStore:
                 except Exception:
                     pass
                 self._capture = None
+                self._current_frame_index = None
 
     def clear(self) -> None:
         with self._lock:

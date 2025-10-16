@@ -4,6 +4,9 @@ from json import dumps, loads
 import asyncio
 import os
 from pathlib import Path
+import aiohttp
+import hashlib
+from urllib.parse import urljoin, urlparse
 
 from aiobotocore.session import get_session
 from botocore.config import Config as BotoConfig
@@ -11,6 +14,7 @@ from botocore.config import Config as BotoConfig
 from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
+from async_substrate_interface.errors import SubstrateRequestException
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.prometheus import (
     VALIDATOR_DATASET_LINES_TOTAL,
@@ -18,13 +22,23 @@ from scorevision.utils.prometheus import (
 )
 
 logger = getLogger(__name__)
-import os
-import asyncio
-from pathlib import Path
-from json import dumps, loads
-import aiohttp
-import hashlib
-from urllib.parse import urljoin, urlparse
+
+
+async def _safe_get_current_block(st, rid: str, retries: int = 1):
+    attempt = 0
+    while True:
+        try:
+            block = await asyncio.wait_for(st.get_current_block(), timeout=5.0)
+            return int(block), st
+        except (asyncio.TimeoutError, SubstrateRequestException, ConnectionError, KeyError) as e:
+            attempt += 1
+            logger.warning(
+                "[emit:%s] get_current_block failed (%s); resetting subtensor", rid, e
+            )
+            reset_subtensor()
+            if attempt > retries:
+                raise
+            st = await get_subtensor()
 
 
 def _loads(b):
@@ -266,15 +280,7 @@ async def emit_shard(
     settings = get_settings()
     rid = f"{challenge.challenge_id[:8]}:{miner_hotkey_ss58[-6:]}"
     st = await get_subtensor()
-    try:
-        current_block = int(await asyncio.wait_for(st.get_current_block(), timeout=5.0))
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[emit:%s] get_current_block timed out; resetting subtensor", rid
-        )
-        reset_subtensor()
-        st = await get_subtensor()
-        current_block = int(await st.get_current_block())
+    current_block, st = await _safe_get_current_block(st, rid)
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
     ns = None
@@ -282,16 +288,22 @@ async def emit_shard(
     eval_key = f"{prefix}{miner_hotkey_ss58}/evaluation/{current_block:09d}-{challenge.challenge_id}.json"
     resp_key = f"{prefix}{miner_hotkey_ss58}/responses/{current_block:09d}-{challenge.challenge_id}.json"
 
-    try:
-        if getattr(miner_run, "predictions", None) is not None:
-            logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
+    if getattr(miner_run, "predictions", None) is not None:
+        logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
+        try:
             await asyncio.wait_for(
                 _put_json_object(resp_key, miner_run.predictions), timeout=timeout_s
             )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[emit:{rid}] storing responses blob timed out after {timeout_s}s"
+            )
+            raise
+        except Exception as e:
+            logger.error(f"[emit:{rid}] storing responses blob failed: {e}")
+            raise
+        else:
             logger.info(f"[emit:{rid}] responses stored: {resp_key}")
-    except Exception as e:
-        logger.error(f"storing responses blob failed: {e}")
-        resp_key = None
 
     meta_out = (challenge.meta or {}).copy()
     meta_out["block"] = current_block
@@ -328,11 +340,14 @@ async def emit_shard(
         hk, signed_lines = await asyncio.wait_for(
             sink_sv_at(eval_key, [shard_line]), timeout=timeout_s
         )
-        logger.info(f"[emit:{rid}] evaluation shard emitted: {eval_key} (1 line)")
     except asyncio.TimeoutError:
         logger.error(f"[emit:{rid}] sink_sv_at timed out after {timeout_s}s")
+        raise
     except Exception as e:
         logger.error(f"[emit:{rid}] sink_sv_at failed: {e}")
+        raise
+    else:
+        logger.info(f"[emit:{rid}] evaluation shard emitted: {eval_key} (1 line)")
 
     # --- logs run ---
     logger.info("\n=== SV Runner (R2) ===")
