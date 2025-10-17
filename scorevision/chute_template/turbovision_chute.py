@@ -97,7 +97,7 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
-    userdefined_env_vars = image_config.getenv("with_env", [])
+    userdefined_env_vars = image_config.get("with_env", [])
     image_config["with_env"] = userdefined_env_vars + [
         ("HF_REPO_NAME", HF_REPO_NAME),
         ("HF_REPO_REVISION", HF_REPO_REVISION),
