@@ -9,8 +9,8 @@ from scorevision.utils.data_models import (
     SVRunOutput,
     SVEvaluation,
     TotalScore,
-    SVPredictInput,
 )
+from scorevision.chute_template.schemas import TVPredictInput
 
 from scorevision.vlm_pipeline.non_vlm_scoring.keypoints import evaluate_keypoints
 from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
@@ -95,7 +95,7 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
 
 
 def post_vlm_ranking(
-    payload: SVPredictInput,
+    payload: TVPredictInput,
     miner_run: SVRunOutput,
     challenge: SVChallenge,
     pseudo_gt_annotations: list[PseudoGroundTruth],

@@ -15,7 +15,7 @@ from scorevision.utils.challenges import (
     build_svchallenge_from_parts,
 )
 from scorevision.utils.data_models import SVChallenge
-from scorevision.chute_template.schemas import SVPredictInput
+from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.cloudflare_helpers import emit_shard
@@ -63,7 +63,7 @@ async def _build_pgt_with_retries(
     max_bbox_retries: int = 5,
     max_quality_retries: int = 5,
     video_cache: dict[str, Any] | None = None,
-) -> tuple[SVChallenge, SVPredictInput, list]:
+) -> tuple[SVChallenge, TVPredictInput, list]:
     """
     """
     created_local_cache = video_cache is None
@@ -257,7 +257,7 @@ async def runner(slug: str | None = None) -> None:
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
-            miner_output: SVPredictInput | None = None
+            miner_output: TVPredictInput | None = None
             emission_started = False
             miner_total_start = loop.time()
             try:

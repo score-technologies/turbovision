@@ -3,7 +3,7 @@ from typing import Any
 
 from numpy import ndarray
 
-from scorevision.chute_template.schemas import SVFrameResult, SVPredictInput
+from scorevision.chute_template.schemas import SVFrameResult, TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
@@ -74,7 +74,7 @@ class TotalScore(Evaluation):
 @dataclass
 class SVChallenge:
     env: str
-    payload: SVPredictInput
+    payload: TVPredictInput
     meta: dict[str, Any]
     prompt: str
     challenge_id: str

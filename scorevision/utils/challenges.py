@@ -17,7 +17,7 @@ from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.video_processing import download_video_cached, FrameStore
 from scorevision.utils.image_processing import image_to_base64, pil_from_array
-from scorevision.chute_template.schemas import SVPredictInput, SVFrame
+from scorevision.chute_template.schemas import TVPredictInput, SVFrame
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,
@@ -30,7 +30,7 @@ class ScoreVisionChallengeError(Exception):
     pass
 
 
-async def get_challenge_from_scorevision() -> tuple[SVChallenge, SVPredictInput]:
+async def get_challenge_from_scorevision() -> tuple[SVChallenge, TVPredictInput]:
     try:
         chal_api = await get_next_challenge()
     except ClientResponseError as e:
@@ -81,7 +81,7 @@ async def prepare_challenge_payload(
     mock_after_n_frames: int | None = None,
     *,
     video_cache: dict[str, Any] | None = None,
-) -> tuple[SVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
+) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
     settings = get_settings()
 
     video_url = challenge.get("video_url") or challenge.get("asset_url")
@@ -156,7 +156,7 @@ async def prepare_challenge_payload(
         meta["batch_size"] = batch_size
     if mock_after_n_frames:
         meta["mock_after_n_frames"] = mock_after_n_frames
-    payload = SVPredictInput(url=video_url, meta=meta)
+    payload = TVPredictInput(url=video_url, meta=meta)
     return (
         payload,
         selected_frame_numbers,
@@ -218,7 +218,7 @@ async def get_next_challenge() -> dict:
 
 def build_svchallenge_from_parts(
     chal_api: dict,
-    payload: SVPredictInput,
+    payload: TVPredictInput,
     frame_numbers: list[int],
     frames: list[ndarray],
     flows: list[ndarray],
@@ -252,7 +252,7 @@ async def get_challenge_from_scorevision_with_source(
     *,
     video_cache: dict[str, Any] | None = None,
 ) -> (
-    tuple[SVChallenge, SVPredictInput, dict, FrameStore]
+    tuple[SVChallenge, TVPredictInput, dict, FrameStore]
 ):
     try:
         chal_api = await get_next_challenge()

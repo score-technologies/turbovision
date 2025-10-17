@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 from asyncio import TimeoutError, sleep, gather
 from aiohttp import ClientError
 
-from scorevision.chute_template.schemas import SVPredictInput, SVPredictOutput
+from scorevision.chute_template.schemas import TVPredictInput, TVPredictOutput
 from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
@@ -20,7 +20,7 @@ logger = getLogger(__name__)
 
 
 async def call_miner_model_on_chutes(
-    slug: str, chute_id: str, payload: SVPredictInput
+    slug: str, chute_id: str, payload: TVPredictInput
 ) -> SVRunOutput:
     res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
     return SVRunOutput(
@@ -33,7 +33,7 @@ async def call_miner_model_on_chutes(
 
 
 async def predict_sv(
-    payload: SVPredictInput, slug: str, chute_id: str | None = None
+    payload: TVPredictInput, slug: str, chute_id: str | None = None
 ) -> SVPredictResult:
     settings = get_settings()
 
@@ -75,7 +75,7 @@ async def predict_sv(
                     logger.info(f"request status: {response.status}")
                     text = await response.text()
                     if response.status == 200:
-                        data = loads(text)  # SVPredictOutput
+                        data = loads(text)  # TVPredictOutput
                         return SVPredictResult(
                             success=bool(data.get("success", True)),
                             model=data.get("model"),
