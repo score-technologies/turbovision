@@ -10,7 +10,7 @@ from scorevision.utils.settings import get_settings
 from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
-from scorevision.cli.run_vlm_pipeline import vlm_pipeline
+from scorevision.cli.run_vlm_pipeline import run_vlm_pipeline_once_for_single_miner
 
 logger = getLogger(__name__)
 
@@ -52,11 +52,6 @@ def runner_cmd():
     default=None,
     help="Explicit revision SHA to commit (otherwise auto-detected).",
 )
-@click.option(
-    "--warmup-url",
-    default="https://scoredata.me/chunks/87aa0bba70f444f3a8841f8c214463.mp4",
-    help="warmup after deploy.",
-)
 @click.option("--no-deploy", is_flag=True, help="Skip Chutes deployment (HF only).")
 @click.option(
     "--no-commit", is_flag=True, help="Skip on-chain commitment (print payload only)."
@@ -64,7 +59,6 @@ def runner_cmd():
 def push(
     model_path,
     revision,
-    warmup_url,
     no_deploy,
     no_commit,
 ):
@@ -74,7 +68,6 @@ def push(
             push_ml_model(
                 ml_model_path=Path(model_path) if model_path else None,
                 hf_revision=revision,
-                warmup_video_url=warmup_url,
                 skip_chutes_deploy=no_deploy,
                 skip_bittensor_commit=no_commit,
             )
@@ -122,7 +115,7 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
 def test_vlm_pipeline(revision: str) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:
-        result = run(vlm_pipeline(hf_revision=revision))
+        result = run(run_vlm_pipeline_once_for_single_miner(hf_revision=revision))
         click.echo(result)
     except Exception as e:
         click.echo(e)

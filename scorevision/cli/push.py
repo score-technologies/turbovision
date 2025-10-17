@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from scorevision.utils.settings import get_settings
-from scorevision.utils.chutes_helpers import deploy_to_chutes, share_chute, warmup_chute
+from scorevision.utils.chutes_helpers import deploy_to_chutes
 
 from scorevision.utils.huggingface_helpers import (
     create_update_or_verify_huggingface_repo,
@@ -14,8 +14,7 @@ async def push_ml_model(
     hf_revision: str | None,
     skip_chutes_deploy: bool,
     skip_bittensor_commit: bool,
-    warmup_video_url: str | None,
-):
+) -> None:
     hf_revision = await create_update_or_verify_huggingface_repo(
         model_path=ml_model_path, hf_revision=hf_revision
     )
@@ -26,11 +25,10 @@ async def push_ml_model(
     )
 
     if chute_id:
-        await share_chute(chute_id=chute_id)
+        # await share_chute(chute_id=chute_id)
         await on_chain_commit(
             skip=skip_bittensor_commit,
             revision=hf_revision,
             chute_id=chute_id,
             chute_slug=chute_slug,
         )
-        await warmup_chute(chute_id=chute_id)

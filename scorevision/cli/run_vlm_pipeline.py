@@ -9,7 +9,6 @@ from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.data_models import SVChallenge, SVPredictResult, SVRunOutput
 from scorevision.utils.chutes_helpers import get_chute_slug_and_id
 from scorevision.utils.async_clients import get_async_client
-from scorevision.utils.settings import get_settings
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
@@ -22,9 +21,9 @@ from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
 logger = getLogger(__name__)
 
 
-async def vlm_pipeline(hf_revision: str) -> SVEvaluation:
-    """Run a single miner on the VLM pipeline off-chain"""
-    settings = get_settings()
+async def run_vlm_pipeline_once_for_single_miner(hf_revision: str) -> SVEvaluation:
+    """Run a single miner on the VLM pipeline off-chain
+    NOTE: This flow should match the flow in the runner"""
     challenge_data = {
         "task_id": "0",
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
@@ -37,6 +36,9 @@ async def vlm_pipeline(hf_revision: str) -> SVEvaluation:
         raise Exception("Failed to prepare payload from challenge.")
 
     chute_slug, chute_id = await get_chute_slug_and_id(revision=hf_revision)
+    if not chute_slug:
+        raise Exception("Failed to fetch chute slug")
+
     logger.info("Calling model from chutes API")
     miner_output = await call_miner_model_on_chutes(
         slug=chute_slug,
