@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+
+from typing import Any, Generator
+from requests import get
+from tempfile import NamedTemporaryFile
+from pathlib import Path
+from importlib.util import spec_from_file_location, module_from_spec
+from textwrap import dedent
+import sys, os, subprocess
+from inspect import signature
+
+from yaml import safe_load
+from pydantic import BaseModel
+from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
+from numpy import ndarray, zeros
+from huggingface_hub import snapshot_download
+
+from chutes.chute import Chute, NodeSelector
+from chutes.image import Image
+
+
+##============VARIABLES=======================
+HF_REPO_NAME = os.getenv("HF_REPO_NAME")
+if not HF_REPO_NAME:
+    raise Exception("Huggingface Repository Name (HF_REPO_NAME) not set")
+HF_REPO_REVISION = os.getenv("HF_REPO_REVISION")
+if not HF_REPO_REVISION:
+    raise Exception("Huggingface Repository Revision (HF_REPO_REVISION) not set")
+
+##============CONSTANTS=======================
+FILENAME = "miner.py"
+CLASSNAME = "Miner"
+CONFIGNAME = "config.yml"
+HF_REPO_PATH: Path | None = None
+FRAME_WIDTH = 960
+FRAME_HEIGHT = 540
+
+
+##=========DATA CLASSES================
+class TVPredictInput(BaseModel):
+    url: str
+    n_keypoints: int = 32  # for football
+    batch_size: int = 128
+
+
+class TVPredictOutput(BaseModel):
+    success: bool
+    predictions: dict[str, list[dict]] | None = None
+    error: str | None = None
+
+
+##=========UTILITY FUNCTIONS=================
+def load_chute_config_from_hf_repo(path_hf_repo: Path) -> dict:
+    config_path = path_hf_repo / CONFIGNAME
+    try:
+        if not config_path.exists():
+            raise ValueError("No config file found in repo")
+
+        with config_path.open() as configuration_file:
+            config = safe_load(configuration_file)
+            print(f"✅ Loaded Chutes Configuration")
+            return config or {}
+    except Exception as e:
+        print(f"⚠️ Failed to load Chutes Configuration. Using defaults: {e}")
+        return {}
+
+
+def safe_instantiate(cls, config: dict):
+    params = {k: v for k, v in config.items() if k in signature(cls).parameters}
+    print(
+        f"The following parameters will be applied when instantiating {cls.__name__}: {params}"
+    )
+    obj = cls(**params)
+    for function_name, value in config.items():
+        if not hasattr(obj, function_name) or not callable(getattr(obj, function_name)):
+            continue
+        print(f"applying .{function_name}({value})")
+        method = getattr(obj, function_name)
+        if isinstance(value, list):
+            for v in value:
+                method(v)
+        else:
+            method(value)
+    return obj
+
+
+def load_chute(hf_repo: str, hf_revision: str) -> Chute:
+    global HF_REPO_PATH
+    if HF_REPO_PATH is None:
+        HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
+        print("✅ Huggingface Hub repo downloaded")
+
+    config = load_chute_config_from_hf_repo(path_hf_repo=HF_REPO_PATH)
+    print("✅ Config file loaded")
+
+    image_config = config.get("Image", {})
+    chute_image = safe_instantiate(cls=Image, config=image_config)
+    print("✅ Image instantiated")
+
+    machine_specs = safe_instantiate(
+        cls=NodeSelector, config=config.get("NodeSelector", {})
+    )
+    print("✅ NodeSelector instantiated")
+
+    chute_config = {
+        "username": image_config.get("username"),
+        "name": image_config.get("name"),
+        "image": chute_image,
+        "node_selector": machine_specs,
+    }
+    chute_config.update(config.get("Chute", {}))
+    chute = safe_instantiate(cls=Chute, config=chute_config)
+    print("✅ Chute instantiated")
+    return chute
+
+
+def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
+    path = path_hf_repo / filename
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"❌ Required file '{filename}' not in repo {path_hf_repo}"
+        )
+
+    spec = spec_from_file_location("miner", path)
+    module = module_from_spec(spec)
+    sys.modules["miner"] = module
+    spec.loader.exec_module(module)
+    miner_object = getattr(module, classname)
+    return miner_object
+
+
+def get_video_frames_in_batches(
+    video: VideoCapture, batch_size: int
+) -> Generator[list[ndarray], None, None]:
+    batch = []
+    while True:
+        ok, frame = video.read()
+        if not ok:
+            if batch:
+                yield batch
+            break
+
+        batch.append(frame)
+
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+
+
+def validate_miner_nonet(
+    path_hf_repo: Path,
+    filename: str,
+    classname: str,
+    video_frame_width: int,
+    video_frame_height: int,
+) -> None:
+    """
+    Validates that the Miner can initialise and predict without network access.
+    """
+    mock_batch = [zeros((video_frame_height, video_frame_width, 3), dtype="uint8")]
+
+    with NamedTemporaryFile("w", suffix=".py") as test_script:
+        test_script.write(
+            dedent(
+                f"""
+            import sys, socket, traceback
+            from pathlib import Path
+            from importlib.util import spec_from_file_location, module_from_spec
+            from unittest.mock import patch
+            from numpy import array
+
+            def block_network(*args, **kwargs):
+                raise RuntimeError("Network access blocked")
+
+            def load_miner(path: str, filename: str, classname: str):
+                spec = spec_from_file_location("miner", path)
+                module = module_from_spec(spec)
+                sys.modules["miner"] = module
+                spec.loader.exec_module(module)
+                miner_object = getattr(module, classname)
+                return miner_object
+
+            mock_images = [array(img, dtype="uint8") for img in {repr([img.tolist() for img in mock_batch])}]
+
+            miner_class = load_miner(
+                path="{path_hf_repo / filename}", 
+                filename="{filename}", 
+                classname="{classname}"
+            )
+
+            with patch("socket.socket", side_effect=block_network), patch("socket.create_connection", side_effect=block_network):
+                miner = miner_class(path_hf_repo=Path("{path_hf_repo}"))
+                miner.predict_batch(batch_images=mock_images, offset=0, n_keypoints=32)
+        """
+            )
+        )
+        test_script.flush()
+
+        result = subprocess.run(
+            [sys.executable, "-u", test_script.name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env={**os.environ, "NETWORK_DISABLED": "1"},
+        )
+
+        if result.returncode != 0:
+            print(result.stdout)
+            raise RuntimeError(f"❌ Miner nonet validation failed")
+
+
+##=========ENDPOINTS================
+chute = load_chute(hf_repo=HF_REPO_NAME, hf_revision=HF_REPO_REVISION)
+
+
+@chute.on_startup()
+async def load_model(self) -> None:
+    try:
+        validate_miner_nonet(
+            path_hf_repo=HF_REPO_PATH,
+            filename=FILENAME,
+            classname=CLASSNAME,
+            video_frame_width=FRAME_WIDTH,
+            video_frame_height=FRAME_HEIGHT,
+        )
+        print("✅ Miner nonet validation passed")
+
+        miner_class = load_miner_from_hf_repo(
+            path_hf_repo=HF_REPO_PATH, filename=FILENAME, classname=CLASSNAME
+        )
+        self.miner = miner_class(HF_REPO_PATH)
+        print(f"✅ Miner loaded {self.miner}")
+    except Exception as e:
+        print(f"❌ Failed to load miner from Huggingface repo: {e}")
+        self.miner = None
+
+
+@chute.cord(public_api_path="/health")
+async def health(self, *args, **kwargs) -> dict[str, Any]:
+    return {
+        "status": "healthy",
+        "name": "turbovision-mterryjack-test-v2",
+        "model_loaded": str(self.miner),
+    }
+
+
+@chute.cord(
+    public_api_path="/predict",
+)
+async def predict(self, data: TVPredictInput) -> dict:
+    try:
+        if self.miner is None:
+            raise ValueError(f"Models were not properly loaded!")
+
+        response = get(data.url)
+        response.raise_for_status()
+        print(f"✅ Challenge video downloaded. Saving video to temporary file.")
+
+        with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
+            f.write(response.content)
+            cap = VideoCapture(f.name)
+            if not cap.isOpened():
+                raise ValueError(f"Problem accessing downloaded video {f.name}")
+
+            n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
+            print(
+                f"Processing video with {n_frames} frames in batches of {data.batch_size}"
+            )
+
+            frame_results = []
+            for batch_number, images in enumerate(
+                get_video_frames_in_batches(video=cap, batch_size=data.batch_size)
+            ):
+                frame_number = data.batch_size * batch_number
+                print(f"Predicting Batch: {batch_number+1}")
+                batch_frame_results = self.miner.predict_batch(
+                    batch_images=images,
+                    offset=frame_number,
+                    n_keypoints=data.n_keypoints,
+                )
+                frame_results.extend(
+                    [frame_result.model_dump() for frame_result in batch_frame_results]
+                )
+
+            cap.release()
+            print(f"✅ Frame Predictions Completed")
+
+        result = TVPredictOutput(success=True, predictions={"frames": frame_results})
+
+    except Exception as e:
+        result = TVPredictOutput(
+            success=False,
+            error=f"❌ There was a problem during prediction: {e}",
+        )
+    return result.model_dump(mode="json")
