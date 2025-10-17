@@ -10,16 +10,6 @@ from scorevision.utils.settings import get_settings
 from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
-from scorevision.chute_template.test import (
-    deploy_mock_chute,
-    test_chute_health_endpoint,
-    test_chute_predict_endpoint,
-    get_chute_logs,
-)
-from scorevision.utils.chutes_helpers import (
-    get_chute_slug_and_id,
-    delete_chute,
-)
 from scorevision.cli.run_vlm_pipeline import vlm_pipeline
 
 logger = getLogger(__name__)
@@ -78,6 +68,7 @@ def push(
     no_deploy,
     no_commit,
 ):
+    """Push the miner's ML model stored on Huggingface onto Chutes and commit information on-chain"""
     try:
         run(
             push_ml_model(
@@ -122,106 +113,16 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
     asyncio.run(_validate_main(tail=tail, alpha=alpha, m_min=m_min, tempo=tempo))
 
 
-@cli.command("deploy-local-chute")
-@click.option("--repo", type=str, default="tmoklc/scorevisionv1", required=True)
-@click.option(
-    "--revision",
-    type=str,
-    default="d3fb55db3573c4ff926efa64ba2c3a7479b829d0",
-    required=True,
-)
-def deploy_chute_locally(repo: str, revision: str):
-    """Locally deploy your model for testing on localhost:8000: simulating its behaviour when deployed on Chutes"""
-    deploy_mock_chute(
-        huggingface_repo=repo,
-        huggingface_revision=revision,
-    )
-
-
-@cli.command("ping-chute")
-@click.option("--local", is_flag=True, help="Use locally deployed mock chute server.")
-@click.option(
-    "--video-url",
-    type=str,
-    default="https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
-    required=True,
-)
-@click.option(
-    "--n-frames",
-    type=int,
-    default=11,
-    required=True,
-)
+@cli.command("run-once")
 @click.option(
     "--revision",
     type=str,
     required=True,
 )
-def test_chute(revision: str, video_url: str, n_frames: int, local: bool) -> None:
-    """Check the response of the model endpoints"""
-    if local:
-        base_url = "http://localhost:8000"
-    else:
-        slug, _ = run(get_chute_slug_and_id(revision=revision))
-        settings = get_settings()
-        base_url = settings.CHUTES_MINER_BASE_URL_TEMPLATE.format(
-            slug=slug,
-        )
-    run(test_chute_health_endpoint(base_url=base_url))
-    run(
-        test_chute_predict_endpoint(
-            base_url=base_url, video_url=video_url, first_n_frames=n_frames
-        )
-    )
-
-
-@cli.command("chute-slug")
-@click.option(
-    "--revision",
-    type=str,
-    required=True,
-)
-def query_chute_slug(revision: str) -> None:
-    chute_slug, chute_id = run(get_chute_slug_and_id(revision=revision))
-    click.echo(f"Slug: {chute_slug}\nID: {chute_id}")
-
-
-@cli.command("delete-chute")
-@click.option(
-    "--revision",
-    type=str,
-    required=True,
-)
-def delete_model_from_chutes(revision: str) -> None:
-    try:
-        run(delete_chute(revision=revision))
-    except Exception as e:
-        click.echo(e)
-
-
-@cli.command("chute-logs")
-@click.option("--instance-id", type=str, required=True)
-def chute_logs(instance_id: str) -> None:
-    try:
-        run(get_chute_logs(instance_id=instance_id))
-    except Exception as e:
-        click.echo(e)
-
-
-
-@cli.command("test-chute")
-@click.option(
-    "--revision",
-    type=str,
-    required=True,
-)
-@click.option(
-    "--local", is_flag=True, help="Use locally deployed mock chute server for model"
-)
-def test_vlm_pipeline(revision: str, local: bool) -> None:
+def test_vlm_pipeline(revision: str) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:
-        result = run(vlm_pipeline(hf_revision=revision, local_model=local))
+        result = run(vlm_pipeline(hf_revision=revision))
         click.echo(result)
     except Exception as e:
         click.echo(e)

@@ -22,7 +22,7 @@ from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
 logger = getLogger(__name__)
 
 
-async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
+async def vlm_pipeline(hf_revision: str) -> SVEvaluation:
     """Run a single miner on the VLM pipeline off-chain"""
     settings = get_settings()
     challenge_data = {
@@ -36,47 +36,13 @@ async def vlm_pipeline(hf_revision: str, local_model: bool) -> SVEvaluation:
     if not payload:
         raise Exception("Failed to prepare payload from challenge.")
 
-    if local_model:
-        logger.info("Calling model from mock chutes API")
-        base_url = "http://localhost:8000"
-        session = await get_async_client()
-        t0 = monotonic()
-        async with session.post(
-            f"{base_url}/{settings.CHUTES_MINER_PREDICT_ENDPOINT}",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.CHUTES_API_KEY.get_secret_value()}",
-            },
-            json=payload.model_dump(mode="json"),
-        ) as response:
-            text = await response.text()
-            logger.info(f"Response: {text} ({response.status})")
-            if response.status != 200:
-                raise Exception("Non-200 response from predict")
-            output = await response.json()
-            res = SVPredictResult(
-                success=bool(output.get("success", True)),
-                model=output.get("model"),
-                latency_seconds=monotonic() - t0,
-                predictions=output.get("predictions") or output.get("data"),
-                error=output.get("error"),
-                raw=output,
-            )
-            miner_output = SVRunOutput(
-                success=res.success,
-                latency_ms=res.latency_seconds * 1000.0,
-                predictions=res.predictions if res.success else None,
-                error=res.error,
-                model=res.model,
-            )
-    else:
-        chute_slug, chute_id = await get_chute_slug_and_id(revision=hf_revision)
-        logger.info("Calling model from chutes API")
-        miner_output = await call_miner_model_on_chutes(
-            slug=chute_slug,
-            chute_id=chute_id,
-            payload=payload,
-        )
+    chute_slug, chute_id = await get_chute_slug_and_id(revision=hf_revision)
+    logger.info("Calling model from chutes API")
+    miner_output = await call_miner_model_on_chutes(
+        slug=chute_slug,
+        chute_id=chute_id,
+        payload=payload,
+    )
     logger.info(f"Miner: {miner_output}")
 
     challenge = SVChallenge(
