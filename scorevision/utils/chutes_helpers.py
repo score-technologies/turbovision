@@ -6,6 +6,7 @@ from asyncio import create_subprocess_exec, subprocess
 from pathlib import Path
 from contextlib import contextmanager
 from random import Random
+from hashlib import sha256
 
 from jinja2 import Template
 import petname
@@ -354,3 +355,32 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
     except Exception as e:
         logger.error(e)
         return None, None
+
+
+def validate_chute_integrity(chute_id:str) -> bool:
+    """Check the deployed chute's code has not been modified in any way"""
+    settings = get_settings()
+    original_hash = sha256(settings.PATH_CHUTE_SCRIPT.read_bytes()).hexdigest()
+    logger.info(f"Original source code read: {original_hash[:10]}...")
+
+    logger.info("📄🔍 Inspecting source code of chute")
+    session = await get_async_client()
+    try:
+        async with session.get(
+            f"{settings.CHUTES_MINERS_ENDPOINT}/chutes/code/{chute_id}",
+            headers={"Authorization": settings.CHUTES_API_KEY.get_secret_value()},
+        ) as response:
+            response.raise_for_status()
+            remote_bytes = await response.read()
+            miner_hash = sha256(remote_bytes).hexdigest()
+            logger.info(f"Chute source code read: {miner_hash[:10]}...")
+    except Exception as e:
+        logger.error(f"❌ Error reading chute source code: {e}")
+        return False
+
+    valid = original_hash == miner_hash
+    if valid:
+        logger.info(f"✅ Miner source code matches original")
+    else:
+        logger.info(f"❌ Miner source code has been modified. Do not trust!")
+    return valid
