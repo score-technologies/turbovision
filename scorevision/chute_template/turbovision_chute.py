@@ -94,6 +94,11 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
+    run_commands = image_config.get("run_command", [])
+    image_config["run_command"] = [
+        f"export HF_REPO_NAME={HF_REPO_NAME}",
+        f"export HF_REPO_REVISION={HF_REPO_REVISION}",
+    ] + run_commands
     chute_image = safe_instantiate(cls=Image, config=image_config)
     print("✅ Image instantiated")
 
