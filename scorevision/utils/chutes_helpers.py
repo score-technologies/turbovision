@@ -131,7 +131,7 @@ async def share_chute(chute_id: str) -> None:
         raise ValueError("Chutes sharing failed.")
 
 
-async def build_chute(path: Path, revision:str) -> None:
+async def build_chute(path: Path, revision: str) -> None:
     logger.info(
         "🚧 Building model on chutes... This may take a while. Please don't exit."
     )
@@ -151,7 +151,7 @@ async def build_chute(path: Path, revision:str) -> None:
             **environ,
             "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
             "HF_REPO_NAME": get_huggingface_repo_name(),
-            "HF_REPO_REVISION": revision
+            "HF_REPO_REVISION": revision,
         },
         cwd=str(path.parent),
     )
@@ -291,7 +291,7 @@ async def delete_chute(revision: str) -> None:
         raise ValueError("Chutes delete failed.")
 
 
-async def build_and_deploy_chute(path: Path, revision:str) -> None:
+async def build_and_deploy_chute(path: Path, revision: str) -> None:
     settings = get_settings()
     if not settings.CHUTES_API_KEY.get_secret_value():
         raise ValueError("CHUTES_API_KEY missing.")
@@ -357,7 +357,7 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
         return None, None
 
 
-async def validate_chute_integrity(chute_id:str) -> bool:
+async def validate_chute_integrity(chute_id: str) -> bool:
     """Check the deployed chute's code has not been modified in any way"""
     settings = get_settings()
     original_hash = sha256(settings.PATH_CHUTE_SCRIPT.read_bytes()).hexdigest()

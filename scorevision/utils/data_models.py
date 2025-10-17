@@ -3,7 +3,8 @@ from typing import Any
 
 from numpy import ndarray
 
-from scorevision.chute_template.schemas import SVFrameResult, TVPredictInput
+from scorevision.chute_template.schemas import SVFrameResult
+from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )

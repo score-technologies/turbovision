@@ -20,6 +20,7 @@ _ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
 _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
 
+
 async def get_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
@@ -43,6 +44,7 @@ async def get_subtensor():
             raise RuntimeError("Unable to initialize async subtensor")
         return _ASYNC_SUBTENSOR
 
+
 def _get_sync_subtensor() -> bt.Subtensor:
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -65,6 +67,7 @@ def _get_sync_subtensor() -> bt.Subtensor:
             raise RuntimeError("Unable to initialize sync subtensor")
         return _SYNC_SUBTENSOR
 
+
 async def _reset_async_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
@@ -75,6 +78,7 @@ async def _reset_async_subtensor():
                 pass
             _ASYNC_SUBTENSOR = None
 
+
 def _reset_sync_subtensor():
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -84,6 +88,8 @@ def _reset_sync_subtensor():
             except Exception:
                 pass
             _SYNC_SUBTENSOR = None
+
+
 async def _set_weights_with_confirmation(
     wallet: "bt.wallet",
     netuid: int,
@@ -96,8 +102,7 @@ async def _set_weights_with_confirmation(
     delay_s: float = 2.0,
     log_prefix: str = "[signer]",
 ) -> bool:
-    """
-    """
+    """ """
     settings = get_settings()
     confirm_blocks = max(0, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
     earliest_ref_block = None
@@ -165,19 +170,28 @@ async def _set_weights_with_confirmation(
             except Exception as e:
                 msg_str = f"{type(e).__name__}: {e}"
                 if "SettingWeightsTooFast" in msg_str:
-                    logger.error("%s SettingWeightsTooFast (exception) → weights are likely set working on confirmation", log_prefix)
+                    logger.error(
+                        "%s SettingWeightsTooFast (exception) → weights are likely set working on confirmation",
+                        log_prefix,
+                    )
                     return True
                 raise
 
             if not success:
                 if "SettingWeightsTooFast" in msg_str:
-                    logger.error("%s SettingWeightsTooFast (return) → weights are likely set working on confirmation", log_prefix)
+                    logger.error(
+                        "%s SettingWeightsTooFast (return) → weights are likely set working on confirmation",
+                        log_prefix,
+                    )
                     return True
                 logger.warning("%s extrinsic submit failed: %s", log_prefix, msg_str)
 
             else:
                 if confirm_blocks <= 0:
-                    logger.info("%s extrinsic submitted; confirmation skipped (confirm_blocks=0) → weights are likely set working on confirmation", log_prefix)
+                    logger.info(
+                        "%s extrinsic submitted; confirmation skipped (confirm_blocks=0) → weights are likely set working on confirmation",
+                        log_prefix,
+                    )
                     return True
 
                 logger.info(
@@ -203,14 +217,20 @@ async def _set_weights_with_confirmation(
                             except TypeError:
                                 hotkey_present = False
                         if not hotkey_present:
-                            logger.warning("%s wallet hotkey not found in metagraph; continue waiting…", log_prefix)
+                            logger.warning(
+                                "%s wallet hotkey not found in metagraph; continue waiting…",
+                                log_prefix,
+                            )
                             continue
 
                         latest_lu = get_last_update_for_hotkey(
                             meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
                         )
                         if latest_lu is None:
-                            logger.warning("%s wallet hotkey found but no last_update entry; continue waiting…", log_prefix)
+                            logger.warning(
+                                "%s wallet hotkey found but no last_update entry; continue waiting…",
+                                log_prefix,
+                            )
                             continue
                         if latest_lu >= ref_block:
                             logger.info(
@@ -232,7 +252,9 @@ async def _set_weights_with_confirmation(
                     finally:
                         del meta
                         if latest_lu is not None:
-                            latest_known_update = max(latest_known_update or -1, latest_lu)
+                            latest_known_update = max(
+                                latest_known_update or -1, latest_lu
+                            )
 
                 logger.warning(
                     "%s not yet included after %d blocks (last_update=%s < ref=%d) → weights are likely set working on confirmation",
@@ -257,6 +279,7 @@ async def _set_weights_with_confirmation(
             gc.collect()
         await asyncio.sleep(delay_s)
     return False
+
 
 async def run_signer() -> None:
     settings = get_settings()

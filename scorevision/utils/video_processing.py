@@ -157,7 +157,10 @@ class FrameStore:
             if not self._capture:
                 raise RuntimeError("Video capture not initialised")
 
-            if self._current_frame_index is None or frame_number < self._current_frame_index:
+            if (
+                self._current_frame_index is None
+                or frame_number < self._current_frame_index
+            ):
                 self._capture.set(CAP_PROP_POS_FRAMES, frame_number)
             elif frame_number > self._current_frame_index + 1:
                 self._capture.set(CAP_PROP_POS_FRAMES, frame_number)

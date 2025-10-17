@@ -13,8 +13,7 @@ from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
 from scorevision.utils.challenges import prepare_challenge_payload
-from scorevision.utils.chutes_helpers import get_chute_slug_and_id
-from scorevision.utils.chutes_helpers import warmup_chute
+from scorevision.utils.chutes_helpers import get_chute_slug_and_id, warmup_chute
 
 logger = getLogger(__name__)
 

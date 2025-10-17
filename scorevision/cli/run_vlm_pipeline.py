@@ -30,8 +30,8 @@ async def vlm_pipeline(hf_revision: str) -> SVEvaluation:
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
     }
     logger.info(f"Challenge data from API: {challenge_data}")
-    payload, frame_numbers, frames, flows, frame_store = await prepare_challenge_payload(
-        challenge=challenge_data
+    payload, frame_numbers, frames, flows, frame_store = (
+        await prepare_challenge_payload(challenge=challenge_data)
     )
     if not payload:
         raise Exception("Failed to prepare payload from challenge.")

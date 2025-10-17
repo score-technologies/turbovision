@@ -5,6 +5,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 
+# ======NOTE: These must match what is in the chute ==========
 class TVPredictInput(BaseModel):
     url: str
     n_keypoints: int = 32  # for football
@@ -17,6 +18,7 @@ class TVPredictOutput(BaseModel):
     error: str | None = None
 
 
+# ==============================================================
 
 
 class SVFrame(BaseModel):
@@ -26,7 +28,6 @@ class SVFrame(BaseModel):
     @property
     def image(self) -> Image.Image:
         return Image.open(BytesIO(b64decode(self.data))).convert("RGB")
-
 
 
 class SVBox(BaseModel):

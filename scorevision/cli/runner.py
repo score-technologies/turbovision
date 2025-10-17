@@ -56,6 +56,7 @@ shutdown_event = asyncio.Event()
 def _chute_id_for_miner(m: Miner) -> str | None:
     return getattr(m, "chute_id", None) or getattr(m, "slug", None)
 
+
 async def _build_pgt_with_retries(
     chal_api: dict,
     *,
@@ -64,8 +65,7 @@ async def _build_pgt_with_retries(
     max_quality_retries: int = 5,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, list]:
-    """
-    """
+    """ """
     created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
@@ -79,13 +79,17 @@ async def _build_pgt_with_retries(
 
     try:
         for quality_attempt in range(max_quality_retries):
-            logger.info(f"[PGT] Starting quality attempt {quality_attempt+1}/{max_quality_retries}")
+            logger.info(
+                f"[PGT] Starting quality attempt {quality_attempt+1}/{max_quality_retries}"
+            )
 
             for bbox_attempt in range(max_bbox_retries):
                 try:
-                    payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
-                        challenge=chal_api,
-                        video_cache=video_cache,
+                    payload, frame_numbers, frames, flows, _frame_store = (
+                        await prepare_challenge_payload(
+                            challenge=chal_api,
+                            video_cache=video_cache,
+                        )
                     )
 
                     if len(frames) < required_n_frames:
@@ -93,7 +97,9 @@ async def _build_pgt_with_retries(
                             f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
                             f"bbox attempt {bbox_attempt+1}/{max_bbox_retries}"
                         )
-                        RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
+                        RUNNER_PGT_RETRY_TOTAL.labels(
+                            reason="insufficient_frames"
+                        ).inc()
                         continue
 
                     challenge = build_svchallenge_from_parts(
@@ -104,11 +110,13 @@ async def _build_pgt_with_retries(
                         flows=flows,
                     )
 
-                    pseudo_gt_annotations = await generate_annotations_for_select_frames(
-                        video_name=challenge.challenge_id,
-                        frames=challenge.frames,
-                        flow_frames=challenge.dense_optical_flow_frames,
-                        frame_numbers=challenge.frame_numbers,
+                    pseudo_gt_annotations = (
+                        await generate_annotations_for_select_frames(
+                            video_name=challenge.challenge_id,
+                            frames=challenge.frames,
+                            flow_frames=challenge.dense_optical_flow_frames,
+                            frame_numbers=challenge.frame_numbers,
+                        )
                     )
                     n_frames = len(pseudo_gt_annotations)
                     logger.info(
@@ -179,7 +187,12 @@ async def _build_pgt_with_retries(
             if cached_path:
                 try:
                     from pathlib import Path as _Path
-                    (_Path(cached_path) if not hasattr(cached_path, "unlink") else cached_path).unlink(missing_ok=True)
+
+                    (
+                        _Path(cached_path)
+                        if not hasattr(cached_path, "unlink")
+                        else cached_path
+                    ).unlink(missing_ok=True)
                 except Exception as e:
                     logger.debug(f"Failed to remove cached video {cached_path}: {e}")
 
@@ -214,7 +227,9 @@ async def runner(slug: str | None = None) -> None:
     WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
     MAX_PGT_RETRIES = int(os.getenv("SV_PGT_MAX_RETRIES", "3"))
-    MAX_PGT_BBOX_RETRIES = int(os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "5")))
+    MAX_PGT_BBOX_RETRIES = int(
+        os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "5"))
+    )
     MAX_PGT_QUALITY_RETRIES = int(os.getenv("SV_PGT_MAX_QUALITY_RETRIES", "5"))
 
     video_cache: dict[str, Any] = {}
@@ -326,7 +341,9 @@ async def runner(slug: str | None = None) -> None:
                 continue
             finally:
                 duration = loop.time() - miner_total_start
-                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(duration)
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
+                    duration
+                )
     except Exception as e:
         logger.error(e)
         run_result = "error"
@@ -352,6 +369,7 @@ async def runner(slug: str | None = None) -> None:
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
         gc.collect()
+
 
 async def runner_loop():
     """Runs `runner()` every 300 blocks, with robust triggering."""
@@ -397,13 +415,19 @@ async def runner_loop():
                     should_trigger = True
 
             if (now - last_progress_time) >= STALL_SECS_FALLBACK:
-                logger.warning("[RunnerLoop] no block progress for %.0fs → fallback trigger", now - last_progress_time)
+                logger.warning(
+                    "[RunnerLoop] no block progress for %.0fs → fallback trigger",
+                    now - last_progress_time,
+                )
                 should_trigger = True
                 last_progress_time = now
 
             if should_trigger:
-                logger.warning("[RunnerLoop] Triggering runner at block %s (last_trigger_block=%s)",
-                               block, last_trigger_block)
+                logger.warning(
+                    "[RunnerLoop] Triggering runner at block %s (last_trigger_block=%s)",
+                    block,
+                    last_trigger_block,
+                )
                 await runner()
                 gc.collect()
                 last_trigger_block = block
@@ -413,7 +437,10 @@ async def runner_loop():
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:
-                    logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
+                    logger.warning(
+                        "[RunnerLoop] wait_for_block error (%s); resetting subtensor",
+                        err,
+                    )
                     reset_subtensor()
                     st = None
                     await asyncio.sleep(2.0)
@@ -422,7 +449,9 @@ async def runner_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning("[RunnerLoop] Error: %s; resetting subtensor and retrying…", e)
+            logger.warning(
+                "[RunnerLoop] Error: %s; resetting subtensor and retrying…", e
+            )
             st = None
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)

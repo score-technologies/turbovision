@@ -17,7 +17,8 @@ from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.video_processing import download_video_cached, FrameStore
 from scorevision.utils.image_processing import image_to_base64, pil_from_array
-from scorevision.chute_template.schemas import TVPredictInput, SVFrame
+from scorevision.chute_template.schemas import SVFrame
+from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,
@@ -40,8 +41,8 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, TVPredictInput]
     except Exception as e:
         raise Exception(f"Unexpected error while fetching challenge: {e}")
 
-    payload, frame_numbers, frames, flows, frame_store = await prepare_challenge_payload(
-        challenge=chal_api
+    payload, frame_numbers, frames, flows, frame_store = (
+        await prepare_challenge_payload(challenge=chal_api)
     )
     if not payload:
         if frame_store:
@@ -135,9 +136,13 @@ async def prepare_challenge_payload(
 
     logger.info(f"frames {selected_frame_numbers} successful")
     if not select_frames:
-        raise ScoreVisionChallengeError("No Frames were successfully extracted from Video")
+        raise ScoreVisionChallengeError(
+            "No Frames were successfully extracted from Video"
+        )
     if not flow_frames:
-        raise ScoreVisionChallengeError("No Dense Optical Flows were successfully computed from Video")
+        raise ScoreVisionChallengeError(
+            "No Dense Optical Flows were successfully computed from Video"
+        )
 
     height, width = select_frames[0].shape[:2]
     meta = {
@@ -187,10 +192,10 @@ async def get_next_challenge() -> dict:
         wallet_name=settings.BITTENSOR_WALLET_COLD,
         hotkey_name=settings.BITTENSOR_WALLET_HOT,
     )
-    
+
     # Build query parameters required to authenticate with the validator API
     params = build_validator_query_params(keypair)
-    
+
     session = await get_async_client()
     async with session.get(
         f"{settings.SCOREVISION_API}/api/tasks/next/v2", params=params
@@ -251,9 +256,7 @@ def build_svchallenge_from_parts(
 async def get_challenge_from_scorevision_with_source(
     *,
     video_cache: dict[str, Any] | None = None,
-) -> (
-    tuple[SVChallenge, TVPredictInput, dict, FrameStore]
-):
+) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
     try:
         chal_api = await get_next_challenge()
     except ClientResponseError as e:
@@ -263,9 +266,11 @@ async def get_challenge_from_scorevision_with_source(
     except Exception as e:
         raise Exception(f"Unexpected error while fetching challenge: {e}")
 
-    payload, frame_numbers, frames, flows, frame_store = await prepare_challenge_payload(
-        challenge=chal_api,
-        video_cache=video_cache,
+    payload, frame_numbers, frames, flows, frame_store = (
+        await prepare_challenge_payload(
+            challenge=chal_api,
+            video_cache=video_cache,
+        )
     )
     if not payload:
         raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")

@@ -30,7 +30,12 @@ async def _safe_get_current_block(st, rid: str, retries: int = 1):
         try:
             block = await asyncio.wait_for(st.get_current_block(), timeout=5.0)
             return int(block), st
-        except (asyncio.TimeoutError, SubstrateRequestException, ConnectionError, KeyError) as e:
+        except (
+            asyncio.TimeoutError,
+            SubstrateRequestException,
+            ConnectionError,
+            KeyError,
+        ) as e:
             attempt += 1
             logger.warning(
                 "[emit:%s] get_current_block failed (%s); resetting subtensor", rid, e
@@ -115,7 +120,9 @@ async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
             head = await c.head_object(Bucket=settings.R2_BUCKET, Key=key)
             lm = head["LastModified"].isoformat()
         except c.exceptions.NoSuchKey:
-            VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="cache_head_missing").inc()
+            VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
+                stage="cache_head_missing"
+            ).inc()
             return out
 
         if out.exists() and mod.exists() and mod.read_text().strip() == lm:
@@ -446,7 +453,9 @@ async def _http_get_json(url: str, timeout_s: int = 20) -> any:
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.get(url) as r:
             if r.status != 200:
-                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="http_get_non200").inc()
+                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
+                    stage="http_get_non200"
+                ).inc()
                 raise RuntimeError(f"GET {url} -> {r.status}")
             return await r.json()
 
@@ -459,7 +468,9 @@ async def _http_head_meta(
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.head(url) as r:
             if r.status >= 400:
-                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="http_head_non200").inc()
+                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
+                    stage="http_head_non200"
+                ).inc()
                 return None, None
             return (r.headers.get("ETag"), r.headers.get("Last-Modified"))
 

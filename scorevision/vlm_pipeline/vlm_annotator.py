@@ -317,6 +317,7 @@ async def _step3_assign_classes_from_palette(
                 objects.append({"class": "player", "bbox": box, "team_id": 1})
     return {"objects": objects}
 
+
 def _to_shirtcolor(name: str | None, default: ShirtColor) -> ShirtColor:
     if not name:
         return default
@@ -330,8 +331,7 @@ def _to_shirtcolor(name: str | None, default: ShirtColor) -> ShirtColor:
 def _objects_to_frameannotation(
     objects: list[dict], ball_obj: dict, palette_roles: list[dict]
 ) -> FrameAnnotation:
-    """
-    """
+    """ """
     role_to_color = {
         r.get("role"): r.get("color") for r in (palette_roles or []) if r.get("role")
     }
