@@ -130,7 +130,7 @@ async def share_chute(chute_id: str) -> None:
         raise ValueError("Chutes sharing failed.")
 
 
-async def build_chute(path: Path) -> None:
+async def build_chute(path: Path, revision:str) -> None:
     logger.info(
         "🚧 Building model on chutes... This may take a while. Please don't exit."
     )
@@ -149,6 +149,8 @@ async def build_chute(path: Path) -> None:
         env={
             **environ,
             "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
+            "HF_REPO_NAME": get_huggingface_repo_name(),
+            "HF_REPO_REVISION": revision
         },
         cwd=str(path.parent),
     )
@@ -288,12 +290,12 @@ async def delete_chute(revision: str) -> None:
         raise ValueError("Chutes delete failed.")
 
 
-async def build_and_deploy_chute(path: Path) -> None:
+async def build_and_deploy_chute(path: Path, revision:str) -> None:
     settings = get_settings()
     if not settings.CHUTES_API_KEY.get_secret_value():
         raise ValueError("CHUTES_API_KEY missing.")
     chmod(str(path), stat(str(path)).st_mode | S_IEXEC)
-    await build_chute(path=path)
+    await build_chute(path=path, revision=revision)
     await deploy_chute(path=path)
 
 
@@ -345,7 +347,7 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
 
     settings = get_settings()
     try:
-        await build_and_deploy_chute(path=settings.PATH_CHUTE_SCRIPT)
+        await build_and_deploy_chute(path=settings.PATH_CHUTE_SCRIPT, revision=revision)
         chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
         logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
         return chute_id, chute_slug
