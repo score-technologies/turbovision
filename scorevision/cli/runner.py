@@ -56,126 +56,123 @@ shutdown_event = asyncio.Event()
 def _chute_id_for_miner(m: Miner) -> str | None:
     return getattr(m, "chute_id", None) or getattr(m, "slug", None)
 
-
 async def _build_pgt_with_retries(
     chal_api: dict,
     *,
     required_n_frames: int,
-    max_retries: int = 3,
+    max_bbox_retries: int = 5,
+    max_quality_retries: int = 5,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, SVPredictInput, list]:
-
+    """
+    """
     created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
 
-    MAX_RETRIES_NOT_ENOUGH = int(os.getenv("SV_PGT_MAX_RETRIES_NOT_ENOUGH", str(max_retries)))
-    MAX_RETRIES_QUALITY = int(os.getenv("SV_PGT_MAX_RETRIES_QUALITY", str(max_retries)))
-
-    attempts_ne = 0
-    attempts_q = 0
+    MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
+    MIN_FRAMES_REQUIRED = int(
+        os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames))
+    )
 
     last_err = None
 
-    MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
-    MIN_FRAMES_REQUIRED = int(os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames)))
-
     try:
-        while attempts_ne <= MAX_RETRIES_NOT_ENOUGH and attempts_q <= MAX_RETRIES_QUALITY:
-            payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
-                challenge=chal_api,
-                video_cache=video_cache,
-            )
+        for quality_attempt in range(max_quality_retries):
+            logger.info(f"[PGT] Starting quality attempt {quality_attempt+1}/{max_quality_retries}")
 
-            if len(frames) < required_n_frames:
-                logger.warning(
-                    f"Only {len(frames)} frames extracted (need >= {required_n_frames}). "
-                    f"not_enough attempt {attempts_ne+1}/{MAX_RETRIES_NOT_ENOUGH} → resample."
-                )
-                RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
-                attempts_ne += 1
-                continue
-
-            challenge = build_svchallenge_from_parts(
-                chal_api=chal_api,
-                payload=payload,
-                frame_numbers=frame_numbers,
-                frames=frames,
-                flows=flows,
-            )
-
-            try:
-                pseudo_gt_annotations = await generate_annotations_for_select_frames(
-                    video_name=challenge.challenge_id,
-                    frames=challenge.frames,
-                    flow_frames=challenge.dense_optical_flow_frames,
-                    frame_numbers=challenge.frame_numbers,
-                )
-                logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
-
-                if not _enough_bboxes_per_frame(
-                    pseudo_gt_annotations,
-                    min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                    min_frames_required=MIN_FRAMES_REQUIRED,
-                ):
-                    logger.warning(
-                        f"PGT has too few bboxes (need >= {MIN_BBOXES_PER_FRAME} on "
-                        f"{MIN_FRAMES_REQUIRED} frames). not_enough attempt "
-                        f"{attempts_ne+1}/{MAX_RETRIES_NOT_ENOUGH} → resample."
+            for bbox_attempt in range(max_bbox_retries):
+                try:
+                    payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
+                        challenge=chal_api,
+                        video_cache=video_cache,
                     )
-                    RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
-                    attempts_ne += 1
-                    continue
 
-                filtered = filter_low_quality_pseudo_gt_annotations(
-                    annotations=pseudo_gt_annotations
-                )
-                logger.info(f"{len(filtered)} Pseudo GT annotations had sufficient quality")
+                    if len(frames) < required_n_frames:
+                        logger.warning(
+                            f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
+                            f"bbox attempt {bbox_attempt+1}/{max_bbox_retries}"
+                        )
+                        RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
+                        continue
 
-                if not _enough_bboxes_per_frame(
-                    filtered,
-                    min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                    min_frames_required=required_n_frames,
-                ):
+                    challenge = build_svchallenge_from_parts(
+                        chal_api=chal_api,
+                        payload=payload,
+                        frame_numbers=frame_numbers,
+                        frames=frames,
+                        flows=flows,
+                    )
+
+                    pseudo_gt_annotations = await generate_annotations_for_select_frames(
+                        video_name=challenge.challenge_id,
+                        frames=challenge.frames,
+                        flow_frames=challenge.dense_optical_flow_frames,
+                        frame_numbers=challenge.frame_numbers,
+                    )
+                    n_frames = len(pseudo_gt_annotations)
+                    logger.info(
+                        f"[PGT] {n_frames} pseudo-GT annotations generated "
+                        f"(bbox attempt {bbox_attempt+1}/{max_bbox_retries})"
+                    )
+
+                    if not _enough_bboxes_per_frame(
+                        pseudo_gt_annotations,
+                        min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
+                        min_frames_required=MIN_FRAMES_REQUIRED,
+                    ):
+                        logger.warning(
+                            f"[PGT] Too few bboxes per frame. bbox retry "
+                            f"{bbox_attempt+1}/{max_bbox_retries}"
+                        )
+                        RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
+                        continue
+
+                    filtered = filter_low_quality_pseudo_gt_annotations(
+                        annotations=pseudo_gt_annotations
+                    )
+                    logger.info(f"[PGT] {len(filtered)} filtered annotations kept")
+
+                    if _enough_bboxes_per_frame(
+                        filtered,
+                        min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
+                        min_frames_required=required_n_frames,
+                    ):
+                        RUNNER_PGT_FRAMES.set(len(filtered))
+                        logger.info(
+                            f"[PGT] Success: enough filtered frames "
+                            f"(quality attempt {quality_attempt+1}/{max_quality_retries}, "
+                            f"bbox attempt {bbox_attempt+1}/{max_bbox_retries})"
+                        )
+                        return challenge, payload, filtered
+
                     logger.warning(
-                        f"After quality filter, still too few bboxes on {required_n_frames} frames "
-                        f"(need >= {MIN_BBOXES_PER_FRAME}). quality attempt "
-                        f"{attempts_q+1}/{MAX_RETRIES_QUALITY} → resample."
+                        f"[PGT] Not enough quality frames after filtering "
+                        f"({len(filtered)}/{required_n_frames}), "
+                        f"quality attempt {quality_attempt+1}/{max_quality_retries}, "
+                        f"bbox attempt {bbox_attempt+1}/{max_bbox_retries}"
                     )
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_filtered").inc()
-                    attempts_q += 1
+
+                except Exception as e:
+                    last_err = e
+                    logger.warning(
+                        f"[PGT] Exception during bbox attempt {bbox_attempt+1}/{max_bbox_retries}: {e}"
+                    )
+                    RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
                     continue
 
-                if len(filtered) >= required_n_frames:
-                    RUNNER_PGT_FRAMES.set(len(filtered))
-                    return challenge, payload, filtered
+            logger.warning(
+                f"[PGT] Bbox phase failed after {max_bbox_retries} retries "
+                f"→ new quality attempt ({quality_attempt+1}/{max_quality_retries})"
+            )
+            RUNNER_PGT_RETRY_TOTAL.labels(reason="bbox_phase_failed").inc()
 
-                logger.warning(
-                    f"Low-quality filter kept only {len(filtered)}/{required_n_frames} frames; "
-                    f"quality attempt {attempts_q+1}/{MAX_RETRIES_QUALITY} → resample."
-                )
-                RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_filtered_frames").inc()
-                attempts_q += 1
-
-            except Exception as e:
-                last_err = e
-                logger.warning(
-                    f"PGT generation failed (exception) on quality attempt "
-                    f"{attempts_q+1}/{MAX_RETRIES_QUALITY}: {e}. Retrying…"
-                )
-                RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
-                attempts_q += 1
-
-        exhausted = []
-        if attempts_ne > MAX_RETRIES_NOT_ENOUGH:
-            exhausted.append(f"not_enough({attempts_ne}/{MAX_RETRIES_NOT_ENOUGH})")
-        if attempts_q > MAX_RETRIES_QUALITY:
-            exhausted.append(f"quality({attempts_q}/{MAX_RETRIES_QUALITY})")
         raise RuntimeError(
-            "Failed to prepare PGT after retries: " + ", ".join(exhausted)
-            + (f". Last error: {last_err}" if last_err else "")
+            f"Failed to prepare high-quality PGT after {max_quality_retries} quality attempts "
+            f"× {max_bbox_retries} bbox retries. Last error: {last_err}"
         )
-        
+
     finally:
         if created_local_cache and video_cache:
             cached_path = video_cache.get("path")
@@ -217,6 +214,8 @@ async def runner(slug: str | None = None) -> None:
     WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
     MAX_PGT_RETRIES = int(os.getenv("SV_PGT_MAX_RETRIES", "3"))
+    MAX_PGT_BBOX_RETRIES = int(os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "5")))
+    MAX_PGT_QUALITY_RETRIES = int(os.getenv("SV_PGT_MAX_QUALITY_RETRIES", "5"))
 
     video_cache: dict[str, Any] = {}
     frame_store: FrameStore | None = None
@@ -241,7 +240,8 @@ async def runner(slug: str | None = None) -> None:
             challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                 chal_api=chal_api,
                 required_n_frames=REQUIRED_PGT_FRAMES,
-                max_retries=MAX_PGT_RETRIES,
+                max_bbox_retries=MAX_PGT_BBOX_RETRIES,
+                max_quality_retries=MAX_PGT_QUALITY_RETRIES,
                 video_cache=video_cache,
             )
             last_pgt_duration = loop.time() - pgt_build_start
@@ -353,61 +353,80 @@ async def runner(slug: str | None = None) -> None:
         close_http_clients()
         gc.collect()
 
-
 async def runner_loop():
-    """Runs `runner()` every N blocks (default: 300)."""
+    """Runs `runner()` every 300 blocks, with robust triggering."""
     settings = get_settings()
     TEMPO = 300
+    STALL_SECS_FALLBACK = 5400
 
-    # Set up signal handlers for graceful shutdown
     def signal_handler():
-        logger.info("Received shutdown signal, stopping runner...")
+        logger.warning("Received shutdown signal, stopping runner...")
         shutdown_event.set()
 
-    # Register signal handlers
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, f: signal_handler())
 
     st = None
-    last_block = -1
+    last_trigger_block = None
+    last_seen_block = None
+    last_progress_time = asyncio.get_running_loop().time()
+
+    logger.warning("[RunnerLoop] starting, TEMPO=%s blocks", TEMPO)
 
     while not shutdown_event.is_set():
         try:
             if st is None:
+                logger.warning("[RunnerLoop] (re)connecting subtensor…")
                 st = await get_subtensor()
 
             block = await st.get_current_block()
             RUNNER_BLOCK_HEIGHT.set(block)
 
-            if block <= last_block or block % TEMPO != 0:
+            now = asyncio.get_running_loop().time()
+
+            if last_seen_block is None or block > last_seen_block:
+                last_seen_block = block
+                last_progress_time = now
+
+            should_trigger = False
+            if last_trigger_block is None:
+                should_trigger = True
+                logger.warning("[RunnerLoop] first trigger at block %s", block)
+            else:
+                if block - last_trigger_block >= TEMPO:
+                    should_trigger = True
+
+            if (now - last_progress_time) >= STALL_SECS_FALLBACK:
+                logger.warning("[RunnerLoop] no block progress for %.0fs → fallback trigger", now - last_progress_time)
+                should_trigger = True
+                last_progress_time = now
+
+            if should_trigger:
+                logger.warning("[RunnerLoop] Triggering runner at block %s (last_trigger_block=%s)",
+                               block, last_trigger_block)
+                await runner()
+                gc.collect()
+                last_trigger_block = block
+            else:
                 try:
                     await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:
-                    logger.warning("wait_for_block error (%s); resetting subtensor", err)
+                    logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
                     reset_subtensor()
                     st = None
                     await asyncio.sleep(2.0)
                     continue
-                continue
-
-            logger.info(f"[RunnerLoop] Triggering runner at block {block}")
-            await runner()
-            gc.collect()
-
-            last_block = block
 
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning(f"[RunnerLoop] Error: {e}; retrying…")
+            logger.warning("[RunnerLoop] Error: %s; resetting subtensor and retrying…", e)
             st = None
-            # Check shutdown event during sleep
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
-                break
             except asyncio.TimeoutError:
-                continue
-    
-    logger.info("Runner loop shutting down gracefully...")
+                pass
+
+    logger.warning("Runner loop shutting down gracefully...")

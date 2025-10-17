@@ -419,3 +419,72 @@ async def _first_commit_block_by_miner(netuid: int) -> dict[str, int]:
             first_block_by_hk[hk] = first_block
 
     return first_block_by_hk
+
+
+async def _wait_n_blocks(n: int, timeout_per_block: float = 30.0) -> None:
+    """Wait for n new blocks on the current subtensor client."""
+    if n <= 0:
+        return
+    st = await get_subtensor()
+    for i in range(n):
+        try:
+            await asyncio.wait_for(st.wait_for_block(), timeout=timeout_per_block)
+        except asyncio.TimeoutError:
+            logger.warning("[commit-retry] wait_for_block timed out (i=%d/%d), continuing…", i + 1, n)
+            continue
+
+async def on_chain_commit_validator_retry(
+    index_url: str,
+    *,
+    wait_blocks: int = 100,
+    confirm_after: int = 3,
+    max_retries: int | None = None,
+) -> bool:
+    """
+    """
+    settings = get_settings()
+    w = wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
+    )
+
+    if await _already_committed_same_index(settings.SCOREVISION_NETUID, index_url):
+        logger.info("[validator-commit] Already published %s; skipping.", index_url)
+        return True
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            sub = await get_subtensor()
+            logger.info("[validator-commit] attempt #%d submitting…", attempt)
+            await sub.set_reveal_commitment(
+                wallet=w,
+                netuid=settings.SCOREVISION_NETUID,
+                data=dumps({
+                    "role": "validator",
+                    "hotkey": w.hotkey.ss58_address,
+                    "index_url": index_url,
+                    "chute_name": settings.CHUTES_USERNAME,
+                    "version": 1,
+                }),
+                blocks_until_reveal=1,
+            )
+            logger.info("[validator-commit] submitted; waiting %d block(s) for confirm check…", confirm_after)
+            await _wait_n_blocks(confirm_after)
+
+            if await _already_committed_same_index(settings.SCOREVISION_NETUID, index_url):
+                logger.info("[validator-commit] confirmed on-chain.")
+                return True
+
+            logger.warning("[validator-commit] not visible yet after %d blocks; will retry after %d more blocks.",
+                           confirm_after, wait_blocks)
+
+        except Exception as e:
+            logger.warning("[validator-commit] attempt #%d failed: %s: %s", attempt, type(e).__name__, e)
+
+        if max_retries is not None and attempt >= max_retries:
+            logger.error("[validator-commit] giving up after %d attempts.", attempt)
+            return False
+
+        await _wait_n_blocks(wait_blocks)

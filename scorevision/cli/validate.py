@@ -8,6 +8,7 @@ import gc
 from json import loads
 from collections import defaultdict, deque
 from functools import lru_cache
+from aiohttp import ClientSession, ClientTimeout
 
 import aiohttp
 import bittensor as bt
@@ -57,7 +58,6 @@ shutdown_event = asyncio.Event()
 for noisy in ["websockets", "websockets.client", "substrateinterface", "urllib3"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
-
 @lru_cache(maxsize=1)
 def _validator_hotkey_ss58() -> str:
     settings = get_settings()
@@ -67,53 +67,51 @@ def _validator_hotkey_ss58() -> str:
     )
     return wallet.hotkey.ss58_address
 
-
 async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     R2_BUCKET_PUBLIC_URL = settings.R2_BUCKET_PUBLIC_URL
 
-    # Set up signal handlers for graceful shutdown
     def signal_handler():
         logger.info("Received shutdown signal, stopping validator...")
         shutdown_event.set()
 
-    # Register signal handlers
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, f: signal_handler())
 
-    # ---- Commit validator on start ----
-    if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") not in (
-        "0",
-        "false",
-        "False",
-    ):
+    if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") not in ("0", "false", "False"):
         try:
             await ensure_index_exists()
             index_url = None
-
             if R2_BUCKET_PUBLIC_URL:
-                from scorevision.utils.cloudflare_helpers import (
-                    build_public_index_url_from_public_base,
-                )
-
-                index_url = build_public_index_url_from_public_base(
-                    R2_BUCKET_PUBLIC_URL
-                )
-
+                from scorevision.utils.cloudflare_helpers import build_public_index_url_from_public_base
+                index_url = build_public_index_url_from_public_base(R2_BUCKET_PUBLIC_URL)
             if not index_url:
                 from scorevision.utils.cloudflare_helpers import build_public_index_url
-
                 index_url = build_public_index_url()
 
             if index_url:
+                from scorevision.utils.bittensor_helpers import on_chain_commit_validator_retry, _already_committed_same_index
+                wait_blocks = int(os.getenv("VALIDATOR_COMMIT_WAIT_BLOCKS", "100"))
+                confirm_after = int(os.getenv("VALIDATOR_COMMIT_CONFIRM_AFTER", "3"))
+                max_retries = os.getenv("VALIDATOR_COMMIT_MAX_RETRIES")
+                max_retries = int(max_retries) if (max_retries and max_retries.isdigit()) else None
+
                 same = await _already_committed_same_index(NETUID, index_url)
                 if same:
                     logger.info(f"[validator-commit] Already published {index_url}; skipping.")
                     VALIDATOR_COMMIT_TOTAL.labels(result="already_published").inc()
                 else:
-                    await on_chain_commit_validator(index_url)
-                    VALIDATOR_COMMIT_TOTAL.labels(result="committed").inc()
+                    ok = await on_chain_commit_validator_retry(
+                        index_url,
+                        wait_blocks=wait_blocks,
+                        confirm_after=confirm_after,
+                        max_retries=max_retries,
+                    )
+                    if ok:
+                        VALIDATOR_COMMIT_TOTAL.labels(result="committed").inc()
+                    else:
+                        VALIDATOR_COMMIT_TOTAL.labels(result="error").inc()
             else:
                 logger.warning("[validator-commit] R2 not configured or no public index URL; skipping.")
                 VALIDATOR_COMMIT_TOTAL.labels(result="no_index").inc()
@@ -372,7 +370,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
         mus: list[float] = []
         wtilde: list[float] = []
-        triplets: list[tuple[str, float, int]] = []  # (V, mu, n)
+        triplets: list[tuple[str, float, int]] = []
 
         for (V, mm), (mu, n) in mu_by_V_m.items():
             if mm != m:
@@ -496,10 +494,8 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     VALIDATOR_WINNER_SCORE.set(S_by_m.get(winner_uid, 0.0))
 
     return [winner_uid], [65535]
-
-
 async def retry_set_weights(wallet, uids, weights):
-    """ """
+    
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     MECHID = settings.SCOREVISION_MECHID
@@ -517,26 +513,40 @@ async def retry_set_weights(wallet, uids, weights):
                     "mechid": MECHID,
                     "uids": uids,
                     "weights": weights,
-                    "wait_for_inclusion": False,
+                    "wait_for_inclusion": True,
+                    "wait_for_finalization": True,
                 },
             )
             try:
                 data = await resp.json()
             except Exception:
                 data = {"raw": await resp.text()}
+
             duration = loop.time() - request_start
             VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(duration)
+
             if resp.status == 200 and data.get("success"):
                 return True
+
+            body_txt = ""
+            try:
+                body_txt = data if isinstance(data, str) else (data.get("error") or data.get("raw") or "")
+            except Exception:
+                pass
+            if "SettingWeightsTooFast" in str(body_txt):
+                logger.warning("Signer returns SettingWeightsTooFast; weights are likely set working on confirmation.")
+                return True
+
             VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_http").inc()
             logger.warning("Signer error status=%s body=%s", resp.status, data)
+
     except aiohttp.ClientConnectorError as e:
         VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
         logger.warning("Signer unreachable: %s — skipping local fallback", e)
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_connect").inc()
     except asyncio.TimeoutError:
         VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
-        logger.warning("Signer timed out — skipping local fallback")
+        logger.warning("Signer timed out — weights are likely set working on confirmation")
         VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_timeout").inc()
 
     return False

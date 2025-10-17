@@ -1,4 +1,5 @@
 import os, time, socket, asyncio, logging, signal, gc, threading
+from typing import Tuple
 
 from aiohttp import web
 import bittensor as bt
@@ -18,7 +19,6 @@ _ASYNC_SUBTENSOR: bt.AsyncSubtensor | None = None
 _ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
 _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
-
 
 async def get_subtensor():
     global _ASYNC_SUBTENSOR
@@ -43,7 +43,6 @@ async def get_subtensor():
             raise RuntimeError("Unable to initialize async subtensor")
         return _ASYNC_SUBTENSOR
 
-
 def _get_sync_subtensor() -> bt.Subtensor:
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -66,7 +65,6 @@ def _get_sync_subtensor() -> bt.Subtensor:
             raise RuntimeError("Unable to initialize sync subtensor")
         return _SYNC_SUBTENSOR
 
-
 async def _reset_async_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
@@ -77,7 +75,6 @@ async def _reset_async_subtensor():
                 pass
             _ASYNC_SUBTENSOR = None
 
-
 def _reset_sync_subtensor():
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -87,8 +84,6 @@ def _reset_sync_subtensor():
             except Exception:
                 pass
             _SYNC_SUBTENSOR = None
-
-
 async def _set_weights_with_confirmation(
     wallet: "bt.wallet",
     netuid: int,
@@ -96,13 +91,15 @@ async def _set_weights_with_confirmation(
     uids: list[int],
     weights: list[float],
     wait_for_inclusion: bool,
+    wait_for_finalization: bool,
     retries: int = 10,
     delay_s: float = 2.0,
     log_prefix: str = "[signer]",
 ) -> bool:
-    """"""
+    """
+    """
     settings = get_settings()
-    confirm_blocks = max(1, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
+    confirm_blocks = max(0, int(os.getenv("SIGNER_CONFIRM_BLOCKS", "6")))
     earliest_ref_block = None
     latest_known_update = None
     baseline_last_update = None
@@ -148,34 +145,47 @@ async def _set_weights_with_confirmation(
                     )
                     return True
 
-            # extrinsic - use sync subtensor for set_weights call
             try:
                 sync_st = _get_sync_subtensor()
             except Exception:
                 _reset_sync_subtensor()
                 sync_st = _get_sync_subtensor()
-            success, message = sync_st.set_weights(
-                wallet=wallet,
-                netuid=netuid,
-                mechid=mechid,
-                uids=uids,
-                weights=weights,
-                wait_for_inclusion=wait_for_inclusion,
-            )
+
+            try:
+                success, message = sync_st.set_weights(
+                    wallet=wallet,
+                    netuid=netuid,
+                    mechid=mechid,
+                    uids=uids,
+                    weights=weights,
+                    wait_for_inclusion=wait_for_inclusion,
+                    wait_for_finalization=wait_for_finalization,
+                )
+                msg_str = str(message or "")
+            except Exception as e:
+                msg_str = f"{type(e).__name__}: {e}"
+                if "SettingWeightsTooFast" in msg_str:
+                    logger.error("%s SettingWeightsTooFast (exception) → weights are likely set working on confirmation", log_prefix)
+                    return True
+                raise
 
             if not success:
-                logger.warning(
-                    "%s extrinsic submit failed: %s",
-                    log_prefix,
-                    message or "unknown error",
-                )
+                if "SettingWeightsTooFast" in msg_str:
+                    logger.error("%s SettingWeightsTooFast (return) → weights are likely set working on confirmation", log_prefix)
+                    return True
+                logger.warning("%s extrinsic submit failed: %s", log_prefix, msg_str)
+
             else:
+                if confirm_blocks <= 0:
+                    logger.info("%s extrinsic submitted; confirmation skipped (confirm_blocks=0) → weights are likely set working on confirmation", log_prefix)
+                    return True
+
                 logger.info(
                     "%s extrinsic submitted; monitoring up to %d blocks … (ref=%d, msg=%s)",
                     log_prefix,
                     confirm_blocks,
                     ref_block,
-                    message or "",
+                    msg_str,
                 )
 
                 latest_lu = None
@@ -192,22 +202,15 @@ async def _set_weights_with_confirmation(
                                 hotkey_present = hotkey in list(meta_hotkeys)
                             except TypeError:
                                 hotkey_present = False
-                        
                         if not hotkey_present:
-                            logger.warning(
-                                "%s wallet hotkey not found in metagraph; continue waiting…",
-                                log_prefix,
-                            )
+                            logger.warning("%s wallet hotkey not found in metagraph; continue waiting…", log_prefix)
                             continue
 
                         latest_lu = get_last_update_for_hotkey(
                             meta, hotkey, pubkey_hex=wallet.hotkey.public_key.hex()
                         )
                         if latest_lu is None:
-                            logger.warning(
-                                "%s wallet hotkey found but no last_update entry; continue waiting…",
-                                log_prefix,
-                            )
+                            logger.warning("%s wallet hotkey found but no last_update entry; continue waiting…", log_prefix)
                             continue
                         if latest_lu >= ref_block:
                             logger.info(
@@ -227,41 +230,19 @@ async def _set_weights_with_confirmation(
                             confirm_blocks,
                         )
                     finally:
-                        # Clean up metagraph object to prevent memory accumulation
                         del meta
                         if latest_lu is not None:
-                            latest_known_update = (
-                                max(latest_known_update or -1, latest_lu)
-                            )
+                            latest_known_update = max(latest_known_update or -1, latest_lu)
 
-                if latest_lu is not None:
-                    logger.warning(
-                        "%s not yet included after %d blocks (last_update=%d < ref=%d), retry…",
-                        log_prefix,
-                        confirm_blocks,
-                        latest_lu,
-                        ref_block,
-                    )
-                    latest_known_update = max(latest_known_update or -1, latest_lu)
-                else:
-                    logger.warning(
-                        "%s not yet included after %d blocks (hotkey missing), retry…",
-                        log_prefix,
-                        confirm_blocks,
-                    )
-                    # no latest_lu observed this round; keep prior cache
-                if (
-                    baseline_last_update is not None
-                    and latest_known_update is not None
-                    and latest_known_update > baseline_last_update
-                ):
-                    logger.info(
-                        "%s detected last_update jump %d -> %d; treating as confirmed.",
-                        log_prefix,
-                        baseline_last_update,
-                        latest_known_update,
-                    )
-                    return True
+                logger.warning(
+                    "%s not yet included after %d blocks (last_update=%s < ref=%d) → weights are likely set working on confirmation",
+                    log_prefix,
+                    confirm_blocks,
+                    "None" if latest_lu is None else latest_lu,
+                    ref_block,
+                )
+                return True
+
         except Exception as e:
             logger.warning(
                 "%s attempt %d error: %s: %s",
@@ -277,22 +258,18 @@ async def _set_weights_with_confirmation(
         await asyncio.sleep(delay_s)
     return False
 
-
 async def run_signer() -> None:
     settings = get_settings()
     host = settings.SIGNER_HOST
     port = settings.SIGNER_PORT
 
-    # Set up signal handlers for graceful shutdown
     def signal_handler():
         logger.info("Received shutdown signal, stopping signer...")
         shutdown_event.set()
 
-    # Register signal handlers
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, f: signal_handler())
 
-    # Wallet Bittensor
     cold = settings.BITTENSOR_WALLET_COLD
     hot = settings.BITTENSOR_WALLET_HOT
     wallet = bt.wallet(name=cold, hotkey=hot)
@@ -345,6 +322,7 @@ async def run_signer() -> None:
             uids = payload.get("uids") or []
             wgts = payload.get("weights") or []
             wfi = bool(payload.get("wait_for_inclusion", False))
+            wff = bool(payload.get("wait_for_finalization", False))
 
             if isinstance(uids, int):
                 uids = [uids]
@@ -379,6 +357,7 @@ async def run_signer() -> None:
                 uids,
                 wgts,
                 wfi,
+                wff,
                 retries=int(os.getenv("SIGNER_RETRIES", "10")),
                 delay_s=float(os.getenv("SIGNER_RETRY_DELAY", "2")),
                 log_prefix="[signer]",
