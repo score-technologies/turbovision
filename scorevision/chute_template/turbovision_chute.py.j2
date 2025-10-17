@@ -93,14 +93,14 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
-    chute_image = safe_instantiate(cls=Image, config=image_config)
-    chute_image.update(
+    image_config.update(
         {
             "username": "{{ chute_username }}",
             "name": "{{ chute_name }}",
             "tag":"latest",
         }
     )
+    chute_image = safe_instantiate(cls=Image, config=image_config)
     print("✅ Image instantiated")
 
     machine_specs = safe_instantiate(
