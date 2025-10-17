@@ -49,38 +49,6 @@ def guess_chute_slug(hf_revision: str) -> str:
     return f"{chute_username}-{chute_name}"
 
 
-def render_chute_template(
-    revision: str,
-) -> Template:
-
-    settings = get_settings()
-    hf_repo_name = get_huggingface_repo_name()
-    chute_name = get_chute_name(hf_revision=revision)
-
-    path_template = settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_MAIN
-    template = Template(path_template.read_text())
-    rendered = template.render(
-        predict_endpoint=settings.CHUTES_MINER_PREDICT_ENDPOINT,
-        repo_name=hf_repo_name,
-        revision=revision,
-        chute_user=settings.CHUTES_USERNAME,
-        chute_name=chute_name,
-        schema_defs=(
-            settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_SCHEMAS
-        ).read_text(),
-        setup_utils=(
-            settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_SETUP_UTILS
-        ).read_text(),
-        load_utils=(
-            settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_LOAD_UTILS
-        ).read_text(),
-        predict_utils=(
-            settings.PATH_CHUTE_TEMPLATES / settings.FILENAME_CHUTE_PREDICT_UTILS
-        ).read_text(),
-    )
-    return rendered
-
-
 async def get_chute_slug_and_id(revision: str) -> tuple[str, str | None]:
     settings = get_settings()
     proc = await create_subprocess_exec(
@@ -375,19 +343,9 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
     if skip:
         return None, None
 
+    settings = get_settings()
     try:
-        chute_deployment_script = render_chute_template(
-            revision=revision,
-        )
-        with temporary_chutes_config_file(prefix="sv_chutes", delete=True) as (
-            tmp,
-            tmp_path,
-        ):
-            tmp.write(chute_deployment_script)
-            tmp.flush()
-            logger.info(f"Wrote Chute config: {tmp_path}")
-            await build_and_deploy_chute(path=tmp_path)
-            logger.info(f"Chute deployment successful")
+        await build_and_deploy_chute(path=settings.PATH_CHUTE_SCRIPT)
         chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
         logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
         return chute_id, chute_slug

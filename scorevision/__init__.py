@@ -17,7 +17,6 @@ from scorevision.chute_template.test import (
     get_chute_logs,
 )
 from scorevision.utils.chutes_helpers import (
-    render_chute_template,
     get_chute_slug_and_id,
     delete_chute,
 )
@@ -208,21 +207,6 @@ def chute_logs(instance_id: str) -> None:
     except Exception as e:
         click.echo(e)
 
-
-@cli.command("generate-chute-script")
-@click.option(
-    "--revision",
-    type=str,
-    required=True,
-)
-def generate_chute_file(revision: str) -> None:
-    with open("my_chute.py", "w+") as f:
-        f.write(
-            render_chute_template(
-                revision=revision,
-            )
-        )
-        f.flush()
 
 
 @cli.command("test-chute")
