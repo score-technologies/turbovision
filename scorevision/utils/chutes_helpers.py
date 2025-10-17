@@ -357,7 +357,7 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
         return None, None
 
 
-def validate_chute_integrity(chute_id:str) -> bool:
+async def validate_chute_integrity(chute_id:str) -> bool:
     """Check the deployed chute's code has not been modified in any way"""
     settings = get_settings()
     original_hash = sha256(settings.PATH_CHUTE_SCRIPT.read_bytes()).hexdigest()
