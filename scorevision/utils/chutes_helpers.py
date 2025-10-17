@@ -50,7 +50,7 @@ def guess_chute_slug(hf_revision: str) -> str:
     return f"{chute_username}-{chute_name}"
 
 
-async def get_chute_slug_and_id(revision: str) -> tuple[str, str | None]:
+async def get_chute_slug_and_id(revision: str) -> tuple[str | None, str | None]:
     settings = get_settings()
     proc = await create_subprocess_exec(
         "chutes",
@@ -80,12 +80,14 @@ async def get_chute_slug_and_id(revision: str) -> tuple[str, str | None]:
         json_response = {}
     slug = json_response.get("slug")
     chute_id = json_response.get("chute_id")
-    if slug:
-        logger.info(f"Slug found: {slug}\n Chute Id: {chute_id}")
-        return slug, chute_id
-    slug = guess_chute_slug(hf_revision=revision)
-    logger.info(f"No Slug returned. Guessing Slug {slug}\n Chute Id: {chute_id}")
+    logger.info(f"Slug: {slug}\n Chute Id: {chute_id}")
     return slug, chute_id
+    # if slug:
+    # logger.info(f"Slug found: {slug}\n Chute Id: {chute_id}")
+    # return slug, chute_id
+    # slug = guess_chute_slug(hf_revision=revision)
+    # logger.info(f"No Slug returned. Guessing Slug {slug}\n Chute Id: {chute_id}")
+    # return slug, chute_id
 
 
 async def share_chute(chute_id: str) -> None:
@@ -253,44 +255,6 @@ async def deploy_chute(path: Path) -> None:
         raise ValueError("Chutes deployment failed.")
 
 
-async def delete_chute(revision: str) -> None:
-    logger.info(" Removing model from chutes..")
-
-    settings = get_settings()
-    _, chute_id = await get_chute_slug_and_id(revision=revision)
-    proc = await create_subprocess_exec(
-        "chutes",
-        "chutes",
-        "delete",
-        chute_id,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.PIPE,
-        env={
-            **environ,
-            "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
-        },
-    )
-    if proc.stdin:
-        proc.stdin.write(b"y\n")  # auto-confirm
-        await proc.stdin.drain()
-        proc.stdin.close()
-
-    assert proc.stdout is not None
-    full_output = []
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        decoded_line = line.decode(errors="ignore").rstrip()
-        full_output.append(decoded_line)
-        logger.info(f"[chutes delete] {decoded_line}")
-
-    returncode = await proc.wait()
-    if returncode != 0:
-        raise ValueError("Chutes delete failed.")
-
-
 async def build_and_deploy_chute(path: Path, revision: str) -> None:
     settings = get_settings()
     if not settings.CHUTES_API_KEY.get_secret_value():
@@ -342,7 +306,7 @@ async def resolve_chute_id_and_slug(model_name: str) -> tuple[str, str]:
     return chute_id, chute_slug
 
 
-async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str, str]:
+async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str | None, str | None]:
     if skip:
         return None, None
 
