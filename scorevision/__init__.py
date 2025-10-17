@@ -44,7 +44,7 @@ def runner_cmd():
 @cli.command("push")
 @click.option(
     "--model-path",
-    required=True,
+    default=None,
     help="Local path to model artifacts. If none provided, upload skipped",
 )
 @click.option(
