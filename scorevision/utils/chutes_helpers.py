@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from random import Random
 from hashlib import sha256
+from re import sub, DOTALL
 
 from jinja2 import Template
 import petname
@@ -50,6 +51,21 @@ def guess_chute_slug(hf_revision: str) -> str:
     return f"{chute_username}-{chute_name}"
 
 
+def render_chute_template(
+    revision: str,
+) -> Template:
+
+    settings = get_settings()
+    template = Template(settings.PATH_CHUTE_SCRIPT.read_text())
+    rendered = template.render(
+        huggingface_repository_name=get_huggingface_repo_name(),
+        huggingface_repository_revision=revision,
+        chute_username=settings.CHUTES_USERNAME,
+        chute_name=get_chute_name(hf_revision=revision),
+    )
+    return rendered
+
+
 async def get_chute_slug_and_id(revision: str) -> tuple[str | None, str | None]:
     settings = get_settings()
     proc = await create_subprocess_exec(
@@ -80,14 +96,12 @@ async def get_chute_slug_and_id(revision: str) -> tuple[str | None, str | None]:
         json_response = {}
     slug = json_response.get("slug")
     chute_id = json_response.get("chute_id")
-    logger.info(f"Slug: {slug}\n Chute Id: {chute_id}")
+    if slug:
+        logger.info(f"Slug found: {slug}\n Chute Id: {chute_id}")
+        return slug, chute_id
+    slug = guess_chute_slug(hf_revision=revision)
+    logger.info(f"No Slug returned. Guessing Slug {slug}\n Chute Id: {chute_id}")
     return slug, chute_id
-    # if slug:
-    # logger.info(f"Slug found: {slug}\n Chute Id: {chute_id}")
-    # return slug, chute_id
-    # slug = guess_chute_slug(hf_revision=revision)
-    # logger.info(f"No Slug returned. Guessing Slug {slug}\n Chute Id: {chute_id}")
-    # return slug, chute_id
 
 
 async def share_chute(chute_id: str) -> None:
@@ -133,7 +147,7 @@ async def share_chute(chute_id: str) -> None:
         raise ValueError("Chutes sharing failed.")
 
 
-async def build_chute(path: Path, revision: str) -> None:
+async def build_chute(path: Path) -> None:
     logger.info(
         "🚧 Building model on chutes... This may take a while. Please don't exit."
     )
@@ -152,8 +166,6 @@ async def build_chute(path: Path, revision: str) -> None:
         env={
             **environ,
             "CHUTES_API_KEY": settings.CHUTES_API_KEY.get_secret_value(),
-            "HF_REPO_NAME": get_huggingface_repo_name(),
-            "HF_REPO_REVISION": revision,
         },
         cwd=str(path.parent),
     )
@@ -255,12 +267,12 @@ async def deploy_chute(path: Path) -> None:
         raise ValueError("Chutes deployment failed.")
 
 
-async def build_and_deploy_chute(path: Path, revision: str) -> None:
+async def build_and_deploy_chute(path: Path) -> None:
     settings = get_settings()
     if not settings.CHUTES_API_KEY.get_secret_value():
         raise ValueError("CHUTES_API_KEY missing.")
     chmod(str(path), stat(str(path)).st_mode | S_IEXEC)
-    await build_chute(path=path, revision=revision)
+    await build_chute(path=path)
     await deploy_chute(path=path)
 
 
@@ -312,7 +324,17 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str | None, str |
 
     settings = get_settings()
     try:
-        await build_and_deploy_chute(path=settings.PATH_CHUTE_SCRIPT, revision=revision)
+        chute_deployment_script = render_chute_template(
+            revision=revision,
+        )
+        with temporary_chutes_config_file(prefix="sv_chutes", delete=True) as (
+            tmp,
+            tmp_path,
+        ):
+            tmp.write(chute_deployment_script)
+            tmp.flush()
+            logger.info(f"Wrote Chute script with user-specific data: {tmp_path}")
+            await build_and_deploy_chute(path=tmp_path)
         chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
         logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
         return chute_id, chute_slug
@@ -321,12 +343,33 @@ async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str | None, str |
         return None, None
 
 
+def mask_and_encode(content: bytes) -> str:
+    content_masked = content.decode("utf-8", errors="replace")
+    content_masked = sub(
+        r'HF_REPO_NAME\s*=\s*["\'].*?["\']', 'HF_REPO_NAME=""', content_masked
+    )
+    content_masked = sub(
+        r'HF_REPO_REVISION\s*=\s*["\'].*?["\']', 'HF_REPO_REVISION=""', content_masked
+    )
+    content_masked = sub(
+        r'"username"\s*:\s*["\'].*?["\']\s*,?',
+        '"username":""',
+        content_masked,
+        flags=DOTALL,
+    )
+    content_masked = sub(
+        r'"name"\s*:\s*["\'].*?["\']\s*,?', '"name":""', content_masked, flags=DOTALL
+    )
+    logger.info(content_masked)
+    return sha256(content_masked.encode("utf-8")).hexdigest()
+
+
 async def validate_chute_integrity(chute_id: str) -> bool:
     """Check the deployed chute's code has not been modified in any way"""
-    settings = get_settings()
-    original_hash = sha256(settings.PATH_CHUTE_SCRIPT.read_bytes()).hexdigest()
-    logger.info(f"Original source code read: {original_hash[:10]}...")
 
+    settings = get_settings()
+    original_hash = mask_and_encode(content=settings.PATH_CHUTE_SCRIPT.read_bytes())
+    logger.info(f"Original source code read: {original_hash[:10]}...")
     logger.info("📄🔍 Inspecting source code of chute")
     session = await get_async_client()
     try:
@@ -336,7 +379,7 @@ async def validate_chute_integrity(chute_id: str) -> bool:
         ) as response:
             response.raise_for_status()
             remote_bytes = await response.read()
-            miner_hash = sha256(remote_bytes).hexdigest()
+            miner_hash = mask_and_encode(content=remote_bytes)
             logger.info(f"Chute source code read: {miner_hash[:10]}...")
     except Exception as e:
         logger.error(f"❌ Error reading chute source code: {e}")

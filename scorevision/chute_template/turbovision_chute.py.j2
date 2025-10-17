@@ -20,12 +20,8 @@ from chutes.image import Image
 
 
 ##============VARIABLES=======================
-HF_REPO_NAME = os.getenv("HF_REPO_NAME")
-if not HF_REPO_NAME:
-    raise Exception("Huggingface Repository Name (HF_REPO_NAME) not set")
-HF_REPO_REVISION = os.getenv("HF_REPO_REVISION")
-if not HF_REPO_REVISION:
-    raise Exception("Huggingface Repository Revision (HF_REPO_REVISION) not set")
+HF_REPO_NAME = "{{ huggingface_repository_name }}"
+HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
 
 ##============CONSTANTS=======================
 FILENAME = "miner.py"
@@ -97,12 +93,14 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
-    userdefined_env_vars = image_config.get("with_env", [])
-    image_config["with_env"] = userdefined_env_vars + [
-        ("HF_REPO_NAME", HF_REPO_NAME),
-        ("HF_REPO_REVISION", HF_REPO_REVISION),
-    ]
     chute_image = safe_instantiate(cls=Image, config=image_config)
+    chute_image.update(
+        {
+            "username": "{{ chute_username }}",
+            "name": "{{ chute_name }}",
+            "tag":"latest",
+        }
+    )
     print("✅ Image instantiated")
 
     machine_specs = safe_instantiate(
@@ -110,13 +108,15 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     )
     print("✅ NodeSelector instantiated")
 
-    chute_config = {
-        "username": image_config.get("username"),
-        "name": image_config.get("name"),
-        "image": chute_image,
-        "node_selector": machine_specs,
-    }
-    chute_config.update(config.get("Chute", {}))
+    chute_config = config.get("Chute", {})
+    chute_config.update(
+        {
+            "username": "{{ chute_username }}",
+            "name": "{{ chute_name }}",
+            "image": chute_image,
+            "node_selector": machine_specs,
+        }
+    )
     chute = safe_instantiate(cls=Chute, config=chute_config)
     print("✅ Chute instantiated")
     return chute

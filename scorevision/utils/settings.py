@@ -180,7 +180,8 @@ def get_settings() -> Settings:
         HUGGINGFACE_CONCURRENCY=int(getenv("HUGGINGFACE_CONCURRENCY", 2)),
         PATH_CHUTE_SCRIPT=Path(
             getenv(
-                "PATH_CHUTE_SCRIPT", "scorevision/chute_template/turbovision_chute.py"
+                "PATH_CHUTE_SCRIPT",
+                "scorevision/chute_template/turbovision_chute.py.j2",
             )
         ),
         PATH_CHUTE_TEMPLATES=Path(
