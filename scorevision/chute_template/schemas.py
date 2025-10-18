@@ -1,5 +1,6 @@
 from io import BytesIO
 from base64 import b64decode
+from typing import Any
 
 from PIL import Image
 from pydantic import BaseModel
@@ -8,8 +9,7 @@ from pydantic import BaseModel
 # ======NOTE: These must match what is in the chute ==========
 class TVPredictInput(BaseModel):
     url: str
-    n_keypoints: int = 32  # for football
-    batch_size: int = 128
+    meta: dict[str, Any] = {}
 
 
 class TVPredictOutput(BaseModel):

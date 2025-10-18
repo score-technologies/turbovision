@@ -78,7 +78,7 @@ async def get_challenge_from_scorevision() -> tuple[SVChallenge, TVPredictInput]
 
 async def prepare_challenge_payload(
     challenge: dict,
-    batch_size: int = 128,
+    batch_size: int = 64,
     *,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
@@ -156,9 +156,11 @@ async def prepare_challenge_payload(
     }
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]
-    payload = TVPredictInput(
-        url=video_url, batch_size=batch_size, n_keypoints=32
-    )  # TODO: update n_keypoints based on challenge type (32 is for football)
+    meta["batch_size"] = batch_size
+    meta["n_keypoints"] = (
+        32  # TODO: update n_keypoints based on challenge type (32 is for football)
+    )
+    payload = TVPredictInput(url=video_url, meta=meta)
     return (
         payload,
         selected_frame_numbers,

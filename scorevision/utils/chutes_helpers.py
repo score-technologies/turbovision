@@ -362,10 +362,9 @@ def mask_and_encode(content: bytes) -> str:
         '"name":""',
         content_masked,
     )
-    logger.info(content_masked)
-    tree = ast.parse(content_masked)
-    normalized = ast.dump(tree, include_attributes=False)
-    return sha256(normalized.encode("utf-8")).hexdigest()
+    source_code_tree = ast.parse(content_masked)
+    normalised_source_code = ast.dump(source_code_tree, include_attributes=False)
+    return sha256(normalised_source_code.encode("utf-8")).hexdigest()
 
 
 async def validate_chute_integrity(chute_id: str) -> bool:
@@ -373,8 +372,7 @@ async def validate_chute_integrity(chute_id: str) -> bool:
 
     settings = get_settings()
     original_hash = mask_and_encode(content=settings.PATH_CHUTE_SCRIPT.read_bytes())
-    logger.info(f"Original source code read: {original_hash[:10]}...")
-    logger.info("📄🔍 Inspecting source code of chute")
+    logger.info(f"Original source code: {original_hash[:10]}...")
     session = await get_async_client()
     try:
         async with session.get(
@@ -384,14 +382,16 @@ async def validate_chute_integrity(chute_id: str) -> bool:
             response.raise_for_status()
             remote_bytes = await response.read()
             miner_hash = mask_and_encode(content=remote_bytes)
-            logger.info(f"Chute source code read: {miner_hash[:10]}...")
+            logger.info(f"Miner's source code: {miner_hash[:10]}...")
     except Exception as e:
-        logger.error(f"❌ Error reading chute source code: {e}")
+        logger.error(f"❌ Error reading miner's source code: {e}")
         return False
 
     valid = original_hash == miner_hash
     if valid:
-        logger.info(f"✅ Miner source code matches original")
+        logger.info(f"✅ Miner's source code matches original")
     else:
-        logger.info(f"❌ Miner source code has been modified. Do not trust!")
+        logger.info(
+            f"{remote_bytes.decode("utf-8", errors="replace")}\n\n❌ Miner's source code was modified. Do not trust!"
+        )
     return valid

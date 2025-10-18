@@ -35,6 +35,7 @@ FRAME_HEIGHT = 540
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
     url: str
+    meta:dict[str, Any] = {}
     n_keypoints: int = 32  # for football
     batch_size: int = 128
 
@@ -256,6 +257,9 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     public_api_path="/predict",
 )
 async def predict(self, data: TVPredictInput) -> dict:
+    batch_size = data.get('batch_size',64)
+    n_keypoints = data.get('n_keypoints',32)
+
     try:
         if self.miner is None:
             raise ValueError(f"Models were not properly loaded!")
@@ -272,19 +276,19 @@ async def predict(self, data: TVPredictInput) -> dict:
 
             n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
             print(
-                f"Processing video with {n_frames} frames in batches of {data.batch_size}"
+                f"Processing video with {n_frames} frames in batches of {batch_size}"
             )
 
             frame_results = []
             for batch_number, images in enumerate(
-                get_video_frames_in_batches(video=cap, batch_size=data.batch_size)
+                get_video_frames_in_batches(video=cap, batch_size=batch_size)
             ):
-                frame_number = data.batch_size * batch_number
+                frame_number = batch_size * batch_number
                 print(f"Predicting Batch: {batch_number+1}")
                 batch_frame_results = self.miner.predict_batch(
                     batch_images=images,
                     offset=frame_number,
-                    n_keypoints=data.n_keypoints,
+                    n_keypoints=n_keypoints,
                 )
                 frame_results.extend(
                     [frame_result.model_dump() for frame_result in batch_frame_results]
