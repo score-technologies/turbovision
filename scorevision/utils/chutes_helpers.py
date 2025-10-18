@@ -7,10 +7,11 @@ from pathlib import Path
 from contextlib import contextmanager
 from random import Random
 from hashlib import sha256
-from re import sub, DOTALL
+from re import sub
 
 from jinja2 import Template
 import petname
+import ast
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
@@ -352,16 +353,19 @@ def mask_and_encode(content: bytes) -> str:
         r'HF_REPO_REVISION\s*=\s*["\'].*?["\']', 'HF_REPO_REVISION=""', content_masked
     )
     content_masked = sub(
-        r'"username"\s*:\s*["\'].*?["\']\s*,?',
+        r'"username"\s*:\s*["\'].*?["\']',
         '"username":""',
         content_masked,
-        flags=DOTALL,
     )
     content_masked = sub(
-        r'"name"\s*:\s*["\'].*?["\']\s*,?', '"name":""', content_masked, flags=DOTALL
+        r'"name"\s*:\s*["\'].*?["\']',
+        '"name":""',
+        content_masked,
     )
     logger.info(content_masked)
-    return sha256(content_masked.encode("utf-8")).hexdigest()
+    tree = ast.parse(content_masked)
+    normalized = ast.dump(tree, include_attributes=False)
+    return sha256(normalized.encode("utf-8")).hexdigest()
 
 
 async def validate_chute_integrity(chute_id: str) -> bool:
@@ -390,7 +394,4 @@ async def validate_chute_integrity(chute_id: str) -> bool:
         logger.info(f"✅ Miner source code matches original")
     else:
         logger.info(f"❌ Miner source code has been modified. Do not trust!")
-        logger.error(
-            f'Modified Source Code: {remote_bytes.decode("utf-8", errors="replace")}'
-        )
     return valid
