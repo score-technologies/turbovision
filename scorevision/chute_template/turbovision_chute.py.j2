@@ -254,8 +254,9 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     public_api_path="/predict",
 )
 async def predict(self, data: TVPredictInput) -> dict:
-    batch_size = data.get('batch_size',64)
-    n_keypoints = data.get('n_keypoints',32)
+    metadata = data.meta
+    batch_size = metadata.get('batch_size',64)
+    n_keypoints = metadata.get('n_keypoints',32)
 
     try:
         if self.miner is None:
