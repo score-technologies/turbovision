@@ -107,11 +107,7 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
 
 
 @cli.command("run-once")
-@click.option(
-    "--revision",
-    type=str,
-    required=True,
-)
+@click.option("--revision", type=str, default=None)
 def test_vlm_pipeline(revision: str) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:

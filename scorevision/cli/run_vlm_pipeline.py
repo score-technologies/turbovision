@@ -1,6 +1,8 @@
 from logging import getLogger
 from time import monotonic
 
+from huggingface_hub import HfApi
+
 from scorevision.utils.challenges import prepare_challenge_payload
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
@@ -20,11 +22,15 @@ from scorevision.utils.data_models import SVEvaluation
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
+from scorevision.utils.huggingface_helpers import get_huggingface_repo_revision
+from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
 
-async def run_vlm_pipeline_once_for_single_miner(hf_revision: str) -> SVEvaluation:
+async def run_vlm_pipeline_once_for_single_miner(
+    hf_revision: str | None,
+) -> SVEvaluation:
     """Run a single miner on the VLM pipeline off-chain
     NOTE: This flow should match the flow in the runner"""
     challenge_data = {
@@ -32,6 +38,11 @@ async def run_vlm_pipeline_once_for_single_miner(hf_revision: str) -> SVEvaluati
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
     }
     logger.info(f"Challenge data from API: {challenge_data}")
+    if not hf_revision:
+        settings = get_settings()
+        hf_api = HfApi(token=settings.HUGGINGFACE_API_KEY.get_secret_value())
+        hf_revision = await get_huggingface_repo_revision(hf_api=hf_api)
+
     payload, frame_numbers, frames, flows, frame_store = (
         await prepare_challenge_payload(challenge=challenge_data)
     )
