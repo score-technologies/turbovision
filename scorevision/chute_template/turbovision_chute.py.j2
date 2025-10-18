@@ -36,9 +36,6 @@ FRAME_HEIGHT = 540
 class TVPredictInput(BaseModel):
     url: str
     meta:dict[str, Any] = {}
-    n_keypoints: int = 32  # for football
-    batch_size: int = 128
-
 
 class TVPredictOutput(BaseModel):
     success: bool
