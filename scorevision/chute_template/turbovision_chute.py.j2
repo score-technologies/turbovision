@@ -27,7 +27,6 @@ HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
 FILENAME = "miner.py"
 CLASSNAME = "Miner"
 CONFIGNAME = "config.yml"
-HF_REPO_PATH: Path | None = None
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
 
@@ -82,10 +81,8 @@ def safe_instantiate(cls, config: dict):
 
 
 def load_chute(hf_repo: str, hf_revision: str) -> Chute:
-    global HF_REPO_PATH
-    if HF_REPO_PATH is None:
-        HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
-        print("✅ Huggingface Hub repo downloaded")
+    HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
+    print("✅ Huggingface Hub repo downloaded")
 
     config = load_chute_config_from_hf_repo(path_hf_repo=HF_REPO_PATH)
     print("✅ Config file loaded")
@@ -222,6 +219,8 @@ chute = load_chute(hf_repo=HF_REPO_NAME, hf_revision=HF_REPO_REVISION)
 @chute.on_startup()
 async def load_model(self) -> None:
     try:
+        HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
+        print("�~\~E Huggingface Hub repo downloaded") 
         validate_miner_nonet(
             path_hf_repo=HF_REPO_PATH,
             filename=FILENAME,
