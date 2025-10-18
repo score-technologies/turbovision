@@ -245,7 +245,7 @@ async def load_model(self) -> None:
 async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": "healthy",
-        "name": "turbovision-mterryjack-test-v2",
+        "name": "{{ chute_name }}",
         "model_loaded": str(self.miner),
     }
 
