@@ -53,7 +53,7 @@ async def run_vlm_pipeline_once_for_single_miner(
     if not chute_slug:
         raise Exception("Failed to fetch chute slug")
 
-    logger.info("Verifying chute model is vaid and hot")
+    logger.info("Verifying chute model is valid and hot")
     trustworthy = await validate_chute_integrity(chute_id=chute_id)
     if not trustworthy:
         raise Exception("Chute integrity did not pass")
