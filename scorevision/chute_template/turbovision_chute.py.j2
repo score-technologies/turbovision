@@ -19,21 +19,13 @@ from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
 
 
-##============CONSTANTS=======================
-FILENAME = "miner.py"
-CLASSNAME = "Miner"
-CONFIGNAME = "config.yml"
-FRAME_WIDTH = 960
-FRAME_HEIGHT = 540
-
-
-##============CHUTE=======================
+##============VARIABLES=======================
 HF_REPO_NAME = "{{ huggingface_repository_name }}"
 HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
 CHUTES_USERNAME = "{{ chute_username }}"
 CHUTE_NAME = "{{ chute_name }}"
- 
-
+FILENAME = "miner.py"
+CLASSNAME = "Miner"
 
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
@@ -47,8 +39,7 @@ class TVPredictOutput(BaseModel):
 
 
 ##=========UTILITY FUNCTIONS=================
-def load_chute_config_from_hf_repo(path_hf_repo: Path) -> dict:
-    config_path = path_hf_repo / CONFIGNAME
+def load_chute_config_from_hf_repo(config_path: Path) -> dict:
     try:
         if not config_path.exists():
             raise ValueError("No config file found in repo")
@@ -84,11 +75,20 @@ def safe_instantiate(cls, config: dict):
     return obj
 
 
-def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:str) -> Chute:
+def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:str, miner_filename:str, miner_classname:str, config_filename:str, width:int, height:int) -> Chute:
     hf_repo_path = Path(snapshot_download(hf_repo, revision=hf_revision))
     print("✅ Huggingface Hub repo downloaded")
 
-    config = load_chute_config_from_hf_repo(path_hf_repo=hf_repo_path)
+    validate_miner_nonet(
+        path_hf_repo=hf_repo_path,
+        filename=miner_filename,
+        classname=miner_classname,
+        video_frame_width=width,
+        video_frame_height=height,
+    )
+    print("✅ Miner nonet validation passed")
+
+    config = load_chute_config_from_hf_repo(config_path = hf_repo_path / config_filename)
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
@@ -221,22 +221,19 @@ chute = load_chute(
     hf_repo=HF_REPO_NAME, 
     hf_revision=HF_REPO_REVISION, 
     chutes_username=CHUTES_USERNAME, 
-    chute_name=CHUTE_NAME
+    chute_name=CHUTE_NAME,
+    config_filename="config.yml",
+    miner_filename=FILENAME,
+    miner_classname=CLASSNAME,
+    width=960,
+    height=540
 )
 
 @chute.on_startup()
 async def load_model(self) -> None:
     try:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
-        print("�~\~E Huggingface Hub repo downloaded") 
-        #validate_miner_nonet(
-        #    path_hf_repo=hf_repo_path,
-        #    filename=FILENAME,
-        #    classname=CLASSNAME,
-        #    video_frame_width=FRAME_WIDTH,
-        #    video_frame_height=FRAME_HEIGHT,
-        #)
-        #print("✅ Miner nonet validation passed")
+        print("�~\~E Huggingface Hub repo downloaded")         
 
         miner_class = load_miner_from_hf_repo(
             path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
