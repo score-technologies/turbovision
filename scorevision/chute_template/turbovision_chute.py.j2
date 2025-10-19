@@ -33,12 +33,7 @@ HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
 CHUTES_USERNAME = "{{ chute_username }}"
 CHUTE_NAME = "{{ chute_name }}"
  
-chute = load_chute(
-    hf_repo=HF_REPO_NAME, 
-    hf_revision=HF_REPO_REVISION, 
-    chutes_username=CHUTES_USERNAME, 
-    chute_name=CHUTE_NAME
-)
+
 
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
@@ -222,6 +217,13 @@ def validate_miner_nonet(
 
 
 ##=========ENDPOINTS================
+chute = load_chute(
+    hf_repo=HF_REPO_NAME, 
+    hf_revision=HF_REPO_REVISION, 
+    chutes_username=CHUTES_USERNAME, 
+    chute_name=CHUTE_NAME
+)
+
 @chute.on_startup()
 async def load_model(self) -> None:
     try:
