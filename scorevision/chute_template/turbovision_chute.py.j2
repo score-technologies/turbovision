@@ -22,7 +22,9 @@ from chutes.image import Image
 ##============VARIABLES=======================
 HF_REPO_NAME = "{{ huggingface_repository_name }}"
 HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
-
+CHUTES_USERNAME = "{{ chute_username }}"
+CHUTE_NAME = "{{ chute_name }}"
+ 
 ##============CONSTANTS=======================
 FILENAME = "miner.py"
 CLASSNAME = "Miner"
@@ -90,8 +92,8 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     image_config = config.get("Image", {})
     image_config.update(
         {
-            "username": "{{ chute_username }}",
-            "name": "{{ chute_name }}",
+            "username": CHUTES_USERNAME, 
+            "name": CHUTE_NAME,
             "tag":"latest",
         }
     )
@@ -106,8 +108,8 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     chute_config = config.get("Chute", {})
     chute_config.update(
         {
-            "username": "{{ chute_username }}",
-            "name": "{{ chute_name }}",
+            "username": CHUTES_USERNAME,
+            "name": CHUTE_NAME,
             "image": chute_image,
             "node_selector": machine_specs,
         }
@@ -244,7 +246,7 @@ async def load_model(self) -> None:
 async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": "healthy",
-        "name": "{{ chute_name }}",
+        "name": CHUTE_NAME,
         "model_loaded": str(self.miner),
     }
 

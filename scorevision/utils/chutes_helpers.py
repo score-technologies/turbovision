@@ -353,14 +353,10 @@ def mask_and_encode(content: bytes) -> str:
         r'HF_REPO_REVISION\s*=\s*["\'].*?["\']', 'HF_REPO_REVISION=""', content_masked
     )
     content_masked = sub(
-        r'"username"\s*:\s*["\'].*?["\']',
-        '"username":""',
-        content_masked,
+        r'CHUTES_USERNAME\s*=\s*["\'].*?["\']', 'CHUTES_USERNAME=""', content_masked
     )
     content_masked = sub(
-        r'"name"\s*:\s*["\'].*?["\']',
-        '"name":""',
-        content_masked,
+        r'CHUTE_NAME\s*=\s*["\'].*?["\']', 'CHUTE_NAME=""', content_masked
     )
     source_code_tree = ast.parse(content_masked)
     normalised_source_code = ast.dump(source_code_tree, include_attributes=False)
