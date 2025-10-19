@@ -106,7 +106,7 @@ def load_chute(
             "name": chute_name,
             "image": chute_image,
             "node_selector": machine_specs,
-            "allow_external_egress":False
+            "allow_external_egress":True #False
         }
     )
     chute = safe_instantiate(cls=Chute, config=chute_config)
