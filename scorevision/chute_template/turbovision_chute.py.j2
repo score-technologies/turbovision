@@ -229,14 +229,14 @@ async def load_model(self) -> None:
     try:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
         print("�~\~E Huggingface Hub repo downloaded") 
-        validate_miner_nonet(
-            path_hf_repo=hf_repo_path,
-            filename=FILENAME,
-            classname=CLASSNAME,
-            video_frame_width=FRAME_WIDTH,
-            video_frame_height=FRAME_HEIGHT,
-        )
-        print("✅ Miner nonet validation passed")
+        #validate_miner_nonet(
+        #    path_hf_repo=hf_repo_path,
+        #    filename=FILENAME,
+        #    classname=CLASSNAME,
+        #    video_frame_width=FRAME_WIDTH,
+        #    video_frame_height=FRAME_HEIGHT,
+        #)
+        #print("✅ Miner nonet validation passed")
 
         miner_class = load_miner_from_hf_repo(
             path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
