@@ -114,6 +114,7 @@ def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:s
             "name": chute_name,
             "image": chute_image,
             "node_selector": machine_specs,
+            #"allow_external_egress":False
         }
     )
     chute = safe_instantiate(cls=Chute, config=chute_config)
