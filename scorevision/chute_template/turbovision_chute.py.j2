@@ -5,14 +5,13 @@ from requests import get
 from tempfile import NamedTemporaryFile
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
-from textwrap import dedent
-import sys, os, subprocess
+import sys
 from inspect import signature
 
 from yaml import safe_load
 from pydantic import BaseModel
 from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
-from numpy import ndarray, zeros
+from numpy import ndarray
 from huggingface_hub import snapshot_download
 
 from chutes.chute import Chute, NodeSelector
@@ -75,18 +74,11 @@ def safe_instantiate(cls, config: dict):
     return obj
 
 
-def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:str, miner_filename:str, miner_classname:str, config_filename:str, width:int, height:int) -> Chute:
+def load_chute(
+    hf_repo: str, hf_revision: str, config_filename:str,  chutes_username:str, chute_name:str, 
+) -> Chute:
     hf_repo_path = Path(snapshot_download(hf_repo, revision=hf_revision))
     print("✅ Huggingface Hub repo downloaded")
-
-    validate_miner_nonet(
-        path_hf_repo=hf_repo_path,
-        filename=miner_filename,
-        classname=miner_classname,
-        video_frame_width=width,
-        video_frame_height=height,
-    )
-    print("✅ Miner nonet validation passed")
 
     config = load_chute_config_from_hf_repo(config_path = hf_repo_path / config_filename)
     print("✅ Config file loaded")
@@ -114,7 +106,7 @@ def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:s
             "name": chute_name,
             "image": chute_image,
             "node_selector": machine_specs,
-            #"allow_external_egress":False
+            "allow_external_egress":False
         }
     )
     chute = safe_instantiate(cls=Chute, config=chute_config)
@@ -155,68 +147,6 @@ def get_video_frames_in_batches(
             batch = []
 
 
-def validate_miner_nonet(
-    path_hf_repo: Path,
-    filename: str,
-    classname: str,
-    video_frame_width: int,
-    video_frame_height: int,
-) -> None:
-    """
-    Validates that the Miner can initialise and predict without network access.
-    """
-    mock_batch = [zeros((video_frame_height, video_frame_width, 3), dtype="uint8")]
-
-    with NamedTemporaryFile("w", suffix=".py") as test_script:
-        test_script.write(
-            dedent(
-                f"""
-            import sys, socket, traceback
-            from pathlib import Path
-            from importlib.util import spec_from_file_location, module_from_spec
-            from unittest.mock import patch
-            from numpy import array
-
-            def block_network(*args, **kwargs):
-                raise RuntimeError("Network access blocked")
-
-            def load_miner(path: str, filename: str, classname: str):
-                spec = spec_from_file_location("miner", path)
-                module = module_from_spec(spec)
-                sys.modules["miner"] = module
-                spec.loader.exec_module(module)
-                miner_object = getattr(module, classname)
-                return miner_object
-
-            mock_images = [array(img, dtype="uint8") for img in {repr([img.tolist() for img in mock_batch])}]
-
-            miner_class = load_miner(
-                path="{path_hf_repo / filename}", 
-                filename="{filename}", 
-                classname="{classname}"
-            )
-
-            with patch("socket.socket", side_effect=block_network), patch("socket.create_connection", side_effect=block_network):
-                miner = miner_class(path_hf_repo=Path("{path_hf_repo}"))
-                miner.predict_batch(batch_images=mock_images, offset=0, n_keypoints=32)
-        """
-            )
-        )
-        test_script.flush()
-
-        result = subprocess.run(
-            [sys.executable, "-u", test_script.name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env={**os.environ, "NETWORK_DISABLED": "1"},
-        )
-
-        if result.returncode != 0:
-            print(result.stdout)
-            raise RuntimeError(f"❌ Miner nonet validation failed")
-
-
 ##=========ENDPOINTS================
 chute = load_chute(
     hf_repo=HF_REPO_NAME, 
@@ -224,10 +154,6 @@ chute = load_chute(
     chutes_username=CHUTES_USERNAME, 
     chute_name=CHUTE_NAME,
     config_filename="config.yml",
-    miner_filename=FILENAME,
-    miner_classname=CLASSNAME,
-    width=960,
-    height=540
 )
 
 @chute.on_startup()
