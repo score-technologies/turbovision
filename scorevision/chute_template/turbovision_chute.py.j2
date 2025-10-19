@@ -239,9 +239,9 @@ async def load_model(self) -> None:
         print("✅ Miner nonet validation passed")
 
         miner_class = load_miner_from_hf_repo(
-            path_hf_repo=HF_REPO_PATH, filename=FILENAME, classname=CLASSNAME
+            path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
         )
-        self.miner = miner_class(HF_REPO_PATH)
+        self.miner = miner_class(hf_repo_path)
         print(f"✅ Miner loaded {self.miner}")
     except Exception as e:
         print(f"❌ Failed to load miner from Huggingface repo: {e}")
