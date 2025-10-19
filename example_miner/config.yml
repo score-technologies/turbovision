@@ -1,7 +1,4 @@
 Image:
-  username: score_test
-  name: turbovision-mterryjack-test-v2
-  tag: latest
   from_base: parachutes/python:3.12
   run_command:
     - pip install --upgrade setuptools wheel
