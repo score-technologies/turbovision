@@ -19,12 +19,6 @@ from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
 
 
-##============VARIABLES=======================
-HF_REPO_NAME = "{{ huggingface_repository_name }}"
-HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
-CHUTES_USERNAME = "{{ chute_username }}"
-CHUTE_NAME = "{{ chute_name }}"
- 
 ##============CONSTANTS=======================
 FILENAME = "miner.py"
 CLASSNAME = "Miner"
@@ -32,6 +26,19 @@ CONFIGNAME = "config.yml"
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
 
+
+##============CHUTE=======================
+HF_REPO_NAME = "{{ huggingface_repository_name }}"
+HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
+CHUTES_USERNAME = "{{ chute_username }}"
+CHUTE_NAME = "{{ chute_name }}"
+ 
+chute = load_chute(
+    hf_repo=HF_REPO_NAME, 
+    hf_revision=HF_REPO_REVISION, 
+    chutes_username=CHUTES_USERNAME, 
+    chute_name=CHUTE_NAME
+)
 
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
@@ -82,18 +89,18 @@ def safe_instantiate(cls, config: dict):
     return obj
 
 
-def load_chute(hf_repo: str, hf_revision: str) -> Chute:
-    HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
+def load_chute(hf_repo: str, hf_revision: str, chutes_username:str, chute_name:str) -> Chute:
+    hf_repo_path = Path(snapshot_download(hf_repo, revision=hf_revision))
     print("✅ Huggingface Hub repo downloaded")
 
-    config = load_chute_config_from_hf_repo(path_hf_repo=HF_REPO_PATH)
+    config = load_chute_config_from_hf_repo(path_hf_repo=hf_repo_path)
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
     image_config.update(
         {
-            "username": CHUTES_USERNAME, 
-            "name": CHUTE_NAME,
+            "username": chutes_username, 
+            "name": chute_name,
             "tag":"latest",
         }
     )
@@ -108,8 +115,8 @@ def load_chute(hf_repo: str, hf_revision: str) -> Chute:
     chute_config = config.get("Chute", {})
     chute_config.update(
         {
-            "username": CHUTES_USERNAME,
-            "name": CHUTE_NAME,
+            "username": chutes_username,
+            "name": chute_name,
             "image": chute_image,
             "node_selector": machine_specs,
         }
@@ -215,16 +222,13 @@ def validate_miner_nonet(
 
 
 ##=========ENDPOINTS================
-chute = load_chute(hf_repo=HF_REPO_NAME, hf_revision=HF_REPO_REVISION)
-
-
 @chute.on_startup()
 async def load_model(self) -> None:
     try:
-        HF_REPO_PATH = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
+        hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
         print("�~\~E Huggingface Hub repo downloaded") 
         validate_miner_nonet(
-            path_hf_repo=HF_REPO_PATH,
+            path_hf_repo=hf_repo_path,
             filename=FILENAME,
             classname=CLASSNAME,
             video_frame_width=FRAME_WIDTH,
@@ -246,7 +250,6 @@ async def load_model(self) -> None:
 async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": "healthy",
-        "name": CHUTE_NAME,
         "model_loaded": str(self.miner),
     }
 
@@ -255,14 +258,14 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     public_api_path="/predict",
 )
 async def predict(self, data: TVPredictInput) -> dict:
-    metadata = data.meta
-    batch_size = metadata.get('batch_size',64)
-    n_keypoints = metadata.get('n_keypoints',32)
-
     try:
         if self.miner is None:
             raise ValueError(f"Models were not properly loaded!")
 
+        metadata = data.meta
+        batch_size = metadata.get('batch_size',64)
+        n_keypoints = metadata.get('n_keypoints',32)
+        
         response = get(data.url)
         response.raise_for_status()
         print(f"✅ Challenge video downloaded. Saving video to temporary file.")
