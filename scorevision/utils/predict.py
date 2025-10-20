@@ -25,7 +25,7 @@ logger = getLogger(__name__)
 async def call_miner_model_on_chutes(
     slug: str, chute_id: str, payload: TVPredictInput
 ) -> SVRunOutput:
-    logger.info("Verifying chute model is valid and hot")
+    logger.info("Verifying chute model is valid")
     trustworthy = await validate_chute_integrity(chute_id=chute_id)
     if not trustworthy:
         logger.error("Chute integrity check failed")
