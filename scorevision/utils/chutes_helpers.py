@@ -385,9 +385,9 @@ async def validate_chute_integrity(chute_id: str) -> bool:
 
     valid = original_hash == miner_hash
     if valid:
-        logger.info(f"✅ Miner's source code matches original")
+        logger.info("✅ Miner's source code matches original")
     else:
-        logger.info(
-            f"{remote_bytes.decode("utf-8", errors="replace")}\n\n❌ Miner's source code was modified. Do not trust!"
-        )
+        text = remote_bytes.decode('utf-8', errors='replace')
+        logger.warning("%s\n\n❌ Miner's source code was modified. Do not trust!", text)
+
     return valid
