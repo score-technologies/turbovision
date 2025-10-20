@@ -11,7 +11,6 @@ from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.data_models import SVChallenge, SVPredictResult, SVRunOutput
 from scorevision.utils.chutes_helpers import (
     get_chute_slug_and_id,
-    validate_chute_integrity,
 )
 from scorevision.utils.async_clients import get_async_client
 from scorevision.utils.evaluate import post_vlm_ranking
@@ -52,11 +51,6 @@ async def run_vlm_pipeline_once_for_single_miner(
     chute_slug, chute_id = await get_chute_slug_and_id(revision=hf_revision)
     if not chute_slug:
         raise Exception("Failed to fetch chute slug")
-
-    logger.info("Verifying chute model is valid and hot")
-    trustworthy = await validate_chute_integrity(chute_id=chute_id)
-    if not trustworthy:
-        raise Exception("Chute integrity did not pass")
 
     logger.info("Calling model from chutes API")
     miner_output = await call_miner_model_on_chutes(

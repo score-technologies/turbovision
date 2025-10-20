@@ -28,7 +28,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
-from scorevision.utils.chutes_helpers import warmup_chute, validate_chute_integrity
+from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
     RUNNER_RUNS_TOTAL,
@@ -276,11 +276,6 @@ async def runner(slug: str | None = None) -> None:
             emission_started = False
             miner_total_start = loop.time()
             try:
-                trustworthy = await validate_chute_integrity(chute_id=m.chute_id)
-                if not trustworthy:
-                    raise Exception(
-                        "Chute integrity check failed. Skip it"
-                    )  # NOTE: do we want to skip evaluating these miners or give them 0 scores?
                 loop = asyncio.get_running_loop()
                 start = loop.time()
                 miner_output = await call_miner_model_on_chutes(

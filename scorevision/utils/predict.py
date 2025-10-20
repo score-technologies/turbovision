@@ -13,7 +13,11 @@ from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
 from scorevision.utils.challenges import prepare_challenge_payload
-from scorevision.utils.chutes_helpers import get_chute_slug_and_id, warmup_chute
+from scorevision.utils.chutes_helpers import (
+    get_chute_slug_and_id,
+    warmup_chute,
+    validate_chute_integrity,
+)
 
 logger = getLogger(__name__)
 
@@ -21,6 +25,17 @@ logger = getLogger(__name__)
 async def call_miner_model_on_chutes(
     slug: str, chute_id: str, payload: TVPredictInput
 ) -> SVRunOutput:
+    logger.info("Verifying chute model is valid and hot")
+    trustworthy = await validate_chute_integrity(chute_id=chute_id)
+    if not trustworthy:
+        logger.error("Chute integrity check failed")
+        return SVRunOutput(
+            success=False,
+            latency_ms=0.0,
+            predictions=None,
+            error="Chute integrity check failed",
+            model=None,
+        )
     res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
     return SVRunOutput(
         success=res.success,
