@@ -62,7 +62,9 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
                 except (TypeError, ValueError):
                     object_id = None
 
-                looked_up = OBJECT_ID_LOOKUP.get(object_id) if object_id is not None else None
+                looked_up = (
+                    OBJECT_ID_LOOKUP.get(object_id) if object_id is not None else None
+                )
 
                 object_type: ObjectOfInterest
                 object_colour: ShirtColor = ShirtColor.OTHER
@@ -82,7 +84,9 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
 
                 else:
                     object_type = looked_up
-                    team_field = (bbox.get("team") or bbox.get("team_id") or "").strip().lower()
+                    team_field = (
+                        (bbox.get("team") or bbox.get("team_id") or "").strip().lower()
+                    )
                     if team_field in {"1", "team1"}:
                         object_colour = TEAM1_SHIRT_COLOUR
                     elif team_field in {"2", "team2"}:

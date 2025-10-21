@@ -19,6 +19,7 @@ _ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
 _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
 
+
 async def get_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
@@ -42,6 +43,7 @@ async def get_subtensor():
             raise RuntimeError("Unable to initialize async subtensor")
         return _ASYNC_SUBTENSOR
 
+
 def _get_sync_subtensor() -> bt.Subtensor:
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -64,6 +66,7 @@ def _get_sync_subtensor() -> bt.Subtensor:
             raise RuntimeError("Unable to initialize sync subtensor")
         return _SYNC_SUBTENSOR
 
+
 async def _reset_async_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
@@ -74,6 +77,7 @@ async def _reset_async_subtensor():
                 pass
             _ASYNC_SUBTENSOR = None
 
+
 def _reset_sync_subtensor():
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
@@ -83,6 +87,7 @@ def _reset_sync_subtensor():
             except Exception:
                 pass
             _SYNC_SUBTENSOR = None
+
 
 def _set_weights(
     *,
@@ -95,8 +100,7 @@ def _set_weights(
     wait_for_finalization: bool,
     log_prefix: str = "[signer]",
 ) -> bool:
-    """
-    """
+    """ """
     try:
         st = _get_sync_subtensor()
     except Exception:
@@ -117,7 +121,9 @@ def _set_weights(
     except Exception as e:
         msg_str = f"{type(e).__name__}: {e}"
         if "SettingWeightsTooFast" in msg_str:
-            logger.error(f"{log_prefix} SettingWeightsTooFast (exception) → treating as success.")
+            logger.error(
+                f"{log_prefix} SettingWeightsTooFast (exception) → treating as success."
+            )
             return True
         logger.warning(f"{log_prefix} set_weights exception: {msg_str}")
         return False
@@ -127,11 +133,14 @@ def _set_weights(
         return True
 
     if "SettingWeightsTooFast" in msg_str:
-        logger.error(f"{log_prefix} SettingWeightsTooFast (return) → treating as success.")
+        logger.error(
+            f"{log_prefix} SettingWeightsTooFast (return) → treating as success."
+        )
         return True
 
     logger.warning(f"{log_prefix} set_weights failed: {msg_str or 'unknown error'}")
     return False
+
 
 async def run_signer() -> None:
     settings = get_settings()
@@ -234,7 +243,11 @@ async def run_signer() -> None:
                 log_prefix="[signer]",
             )
             return web.json_response(
-                ({"success": True} if ok else {"success": False, "error": "set_weights failed"}),
+                (
+                    {"success": True}
+                    if ok
+                    else {"success": False, "error": "set_weights failed"}
+                ),
                 status=200 if ok else 500,
             )
         except Exception as e:
