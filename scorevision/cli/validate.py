@@ -81,64 +81,53 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, f: signal_handler())
 
-    if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") not in (
-        "0",
-        "false",
-        "False",
-    ):
+    if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") not in ("0", "false", "False"):
         try:
-            await ensure_index_exists()
             index_url = None
             if R2_BUCKET_PUBLIC_URL:
-                from scorevision.utils.cloudflare_helpers import (
-                    build_public_index_url_from_public_base,
-                )
-
-                index_url = build_public_index_url_from_public_base(
-                    R2_BUCKET_PUBLIC_URL
-                )
+                from scorevision.utils.cloudflare_helpers import build_public_index_url_from_public_base
+                index_url = build_public_index_url_from_public_base(R2_BUCKET_PUBLIC_URL)
             if not index_url:
                 from scorevision.utils.cloudflare_helpers import build_public_index_url
-
                 index_url = build_public_index_url()
 
-            if index_url:
-                from scorevision.utils.bittensor_helpers import (
-                    on_chain_commit_validator_retry,
-                    _already_committed_same_index,
-                )
-
-                wait_blocks = int(os.getenv("VALIDATOR_COMMIT_WAIT_BLOCKS", "100"))
-                confirm_after = int(os.getenv("VALIDATOR_COMMIT_CONFIRM_AFTER", "3"))
-                max_retries = os.getenv("VALIDATOR_COMMIT_MAX_RETRIES")
-                max_retries = (
-                    int(max_retries)
-                    if (max_retries and max_retries.isdigit())
-                    else None
-                )
-
-                same = await _already_committed_same_index(NETUID, index_url)
-                if same:
-                    logger.info(
-                        f"[validator-commit] Already published {index_url}; skipping."
-                    )
-                    VALIDATOR_COMMIT_TOTAL.labels(result="already_published").inc()
-                else:
-                    ok = await on_chain_commit_validator_retry(
-                        index_url,
-                        wait_blocks=wait_blocks,
-                        confirm_after=confirm_after,
-                        max_retries=max_retries,
-                    )
-                    if ok:
-                        VALIDATOR_COMMIT_TOTAL.labels(result="committed").inc()
-                    else:
-                        VALIDATOR_COMMIT_TOTAL.labels(result="error").inc()
-            else:
-                logger.warning(
-                    "[validator-commit] R2 not configured or no public index URL; skipping."
-                )
+            if not index_url:
+                logger.warning("[validator-commit] No public index URL configured; skipping.")
                 VALIDATOR_COMMIT_TOTAL.labels(result="no_index").inc()
+            else:
+                bootstrap_ok = True
+                try:
+                    await ensure_index_exists()
+                except Exception as e:
+                    bootstrap_ok = False
+                    logger.warning("[validator-commit] ensure_index_exists failed (non-fatal bootstrap): %s", e)
+
+                force_bootstrap = os.getenv("VALIDATOR_BOOTSTRAP_COMMIT", "1") in ("1", "true", "True")
+                if bootstrap_ok or force_bootstrap:
+                    from scorevision.utils.bittensor_helpers import on_chain_commit_validator_retry, _already_committed_same_index
+                    wait_blocks = int(os.getenv("VALIDATOR_COMMIT_WAIT_BLOCKS", "100"))
+                    confirm_after = int(os.getenv("VALIDATOR_COMMIT_CONFIRM_AFTER", "3"))
+                    max_retries_env = os.getenv("VALIDATOR_COMMIT_MAX_RETRIES")
+                    max_retries = int(max_retries_env) if (max_retries_env and max_retries_env.isdigit()) else None
+
+                    same = await _already_committed_same_index(NETUID, index_url)
+                    if same:
+                        logger.info(f"[validator-commit] Already published {index_url}; skipping.")
+                        VALIDATOR_COMMIT_TOTAL.labels(result="already_published").inc()
+                    else:
+                        ok = await on_chain_commit_validator_retry(
+                            index_url,
+                            wait_blocks=wait_blocks,
+                            confirm_after=confirm_after,
+                            max_retries=max_retries,
+                        )
+                        if ok:
+                            VALIDATOR_COMMIT_TOTAL.labels(result="committed").inc()
+                        else:
+                            VALIDATOR_COMMIT_TOTAL.labels(result="error").inc()
+                else:
+                    logger.warning("[validator-commit] Skipping commit because ensure_index_exists failed and VALIDATOR_BOOTSTRAP_COMMIT is not set.")
+                    VALIDATOR_COMMIT_TOTAL.labels(result="no_index").inc()
 
         except Exception as e:
             logger.warning(f"[validator-commit] failed (non-fatal): {e}")
