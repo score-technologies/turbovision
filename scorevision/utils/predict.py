@@ -4,7 +4,6 @@ from json import loads, dumps
 from random import uniform
 from logging import getLogger
 from typing import AsyncGenerator
-from urllib.parse import quote
 
 from asyncio import TimeoutError, sleep, gather
 from aiohttp import ClientError
@@ -55,8 +54,7 @@ async def predict_sv(
     base_url = settings.CHUTES_MINER_BASE_URL_TEMPLATE.format(
         slug=slug,
     )
-    url_ = f"{base_url}/{settings.CHUTES_MINER_PREDICT_ENDPOINT}"
-    url = f"{settings.CHUTES_MINERS_ENDPOINT}/misc/proxy?url={quote(url_, safe='')}"
+    url = f"{base_url}/{settings.CHUTES_MINER_PREDICT_ENDPOINT}"
     api_key = settings.CHUTES_API_KEY
     retries = settings.SCOREVISION_API_N_RETRIES
     backoff = settings.SCOREVISION_BACKOFF_RATE
