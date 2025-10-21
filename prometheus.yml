@@ -4,7 +4,7 @@ global:
 scrape_configs:
   - job_name: 'scorevision-validator'
     static_configs:
-      - targets: ['validator:8010']
+      - targets: ['validator:8110']
         labels:
           instance: validator
 
