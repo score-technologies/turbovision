@@ -642,7 +642,7 @@ wheels = [
 
 [[package]]
 name = "chutes"
-version = "0.3.28"
+version = "0.3.47"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -652,6 +652,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fickling" },
     { name = "graval" },
+    { name = "huggingface-hub" },
     { name = "loguru" },
     { name = "netifaces" },
     { name = "orjson" },
@@ -669,7 +670,7 @@ dependencies = [
     { name = "uvicorn" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/01/55576285521d83901a406ce7703e42e13d275c5631628f67796d7ce59554/chutes-0.3.28-py3-none-any.whl", hash = "sha256:174ef68d169756292f355c156857280c6715977992f59db6938fa4a6c8d79b0d", size = 10150865, upload-time = "2025-09-11T09:56:44.465Z" },
+    { url = "https://files.pythonhosted.org/packages/79/21/73f949c57ee7b3b18d60f31667863874250257063e186a89c089abf41e8d/chutes-0.3.47-py3-none-any.whl", hash = "sha256:aa376ca1495a6a3a28e37b963858d98e41782f55d757b8959613a36c8a38d7a0", size = 10176338, upload-time = "2025-10-21T13:58:23.999Z" },
 ]
 
 [[package]]
@@ -3129,7 +3130,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = "==2.13.1" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "bittensor", specifier = ">=9.12.0" },
-    { name = "chutes", specifier = ">=0.3.23" },
+    { name = "chutes", specifier = ">=0.3.47" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi" },
     { name = "httpx" },
