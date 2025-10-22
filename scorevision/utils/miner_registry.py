@@ -137,7 +137,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             chute_id=chute_id,
             block=int(block or 0) if uid != 0 else 0,  # mirror special-case for uid 0
         )
-
+    print(candidates)
     if not candidates:
         return {}
 
@@ -146,21 +146,25 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     for uid, m in candidates.items():
         gated = _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
+            print("HF gated or not accessible")
             continue
 
         ok = True
         if m.chute_id:
             info = await fetch_chute_info(m.chute_id)
             if not info:
+                print("Chutes unfetched")
                 ok = False
             else:
                 # cross-check slug (light-normalize)
                 slug_chutes = (info.get("slug") or "").strip()
                 if slug_chutes and slug_chutes != (m.slug or ""):
                     ok = False
+                    print("no slug")
                 ch_rev = info.get("revision")
                 if ch_rev and m.revision and str(ch_rev) != str(m.revision):
                     ok = False
+                    print("no rev")
         if ok:
             filtered[uid] = m
 
