@@ -25,7 +25,6 @@ async def push_ml_model(
     )
 
     if chute_id:
-        await share_chute(chute_id=chute_id)
         await on_chain_commit(
             skip=skip_bittensor_commit,
             revision=hf_revision,

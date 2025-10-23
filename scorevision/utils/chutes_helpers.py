@@ -237,7 +237,7 @@ async def deploy_chute(path: Path) -> None:
         f"{path.stem}:chute",
         # "--public",
         "--accept-fee",
-        "--logging-enabled",
+        # "--logging-enabled",
         "--debug",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -388,6 +388,9 @@ async def validate_chute_integrity(chute_id: str) -> bool:
         logger.info("✅ Miner's source code matches original")
     else:
         logger.warning("❌ Miner's source code was modified. Do not trust!")
-        logger.warning("Validator:%s",settings.PATH_CHUTE_SCRIPT.read_bytes().decode("utf-8", errors="replace"))
-        logger.warning("Miner:%s",remote_bytes.decode("utf-8", errors="replace"))
+        logger.warning(
+            "Validator:%s",
+            settings.PATH_CHUTE_SCRIPT.read_bytes().decode("utf-8", errors="replace"),
+        )
+        logger.warning("Miner:%s", remote_bytes.decode("utf-8", errors="replace"))
     return valid
