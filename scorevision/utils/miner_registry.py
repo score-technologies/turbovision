@@ -105,6 +105,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     st = await get_subtensor()
     mechid = settings.SCOREVISION_MECHID
     meta = await st.metagraph(netuid, mechid=mechid)
+    print("extracting candidates")
     commits = await st.get_all_revealed_commitments(netuid)
 
     # 1) Extract candidates (uid -> Miner)
@@ -139,6 +140,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
         )
     print(candidates)
     if not candidates:
+        print("No onchain candidates")
         return {}
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
@@ -169,6 +171,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             filtered[uid] = m
 
     if not filtered:
+        print("Filter unchecked")
         return {}
 
     # 3) De-duplicate by model: keep earliest block per model (stable)
