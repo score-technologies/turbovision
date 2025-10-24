@@ -452,6 +452,7 @@ async def runner_loop():
             logger.warning(
                 "[RunnerLoop] Error: %s; resetting subtensor and retrying…", e
             )
+            reset_subtensor()
             st = None
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
