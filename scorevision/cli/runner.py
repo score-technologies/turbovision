@@ -286,7 +286,6 @@ async def runner(slug: str | None = None) -> None:
                 latency_ms = (loop.time() - start) * 1000.0
                 RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(latency_ms)
                 RUNNER_MINER_CALLS_TOTAL.labels(outcome="success").inc()
-                logger.info(f"Miner {miner_output}")
 
                 try:
                     evaluation = post_vlm_ranking(
