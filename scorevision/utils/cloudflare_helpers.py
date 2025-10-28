@@ -295,11 +295,21 @@ async def emit_shard(
     eval_key = f"{prefix}{miner_hotkey_ss58}/evaluation/{current_block:09d}-{challenge.challenge_id}.json"
     resp_key = f"{prefix}{miner_hotkey_ss58}/responses/{current_block:09d}-{challenge.challenge_id}.json"
 
+    video_url = None
+    try:
+        video_url = getattr(getattr(challenge, "payload", None), "url", None)
+    except Exception:
+        video_url = None
+
     if getattr(miner_run, "predictions", None) is not None:
         logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
+        resp_blob = {
+            "video_url": video_url,
+            "predictions": miner_run.predictions,
+        }
         try:
             await asyncio.wait_for(
-                _put_json_object(resp_key, miner_run.predictions), timeout=timeout_s
+                _put_json_object(resp_key, resp_blob), timeout=timeout_s
             )
         except asyncio.TimeoutError:
             logger.error(
