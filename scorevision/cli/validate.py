@@ -412,18 +412,14 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     S_by_m: dict[int, float] = {}
 
     for m in miners_seen:
-        n_total = sum(n for (V, mm), (_mu, n) in mu_by_V_m.items() if mm == m)
-        if n_total < m_min:
-            logger.info(f"Miner {m} skipped: only {n_total} shards (< {m_min})")
-            VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="insufficient_samples").inc()
-            continue
-
         mus: list[float] = []
         wtilde: list[float] = []
         triplets: list[tuple[str, float, int]] = []
 
         for (V, mm), (mu, n) in mu_by_V_m.items():
             if mm != m:
+                continue
+            if n < m_min:
                 continue
             stake = stake_by_hk.get(V, 0.0)
             wt = (stake**a_rob) * ((max(1, n)) ** b_rob)
