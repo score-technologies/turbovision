@@ -167,6 +167,17 @@ async def run_benchmark_on_best_miner() -> None:
             payload=payload,
         )
 
+        # TODO: remove this (only for testing - quicker than calling chute)
+        # from scorevision.utils.data_models import SVRunOutput
+        # with Path(f'benchmark_data/Nothin/{gt.name}.jsonl').open() as f:
+        #    miner_run = SVRunOutput(
+        #        success=True,
+        #        latency_ms=0.0,
+        #        predictions={"frames": [loads(line) for line in f]},
+        #        error=None,
+        #        model=None,
+        #    )
+
         logger.info("post VLM evaluation")
         evaluation = post_vlm_ranking(
             payload=payload,
