@@ -97,6 +97,8 @@ class Settings(BaseModel):
     SCOREVISION_WINDOW_DELTA_ABS: float
     SCOREVISION_WINDOW_DELTA_REL: float
 
+    SOCCERNET_TOKEN: SecretStr
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -234,6 +236,7 @@ def get_settings() -> Settings:
         SCOREVISION_WINDOW_DELTA_REL=float(
             getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
         ),
+        SOCCERNET_TOKEN=getenv("SOCCERNET_TOKEN"),
     )
 
 

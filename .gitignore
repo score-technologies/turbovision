@@ -74,3 +74,7 @@ todo
 my_ml_model
 my_chute.py
 **/sv_chutes.py
+
+
+# Benchmark
+benchmark_data/*

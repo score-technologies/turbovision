@@ -32,6 +32,7 @@ dependencies = [
   "uvicorn",
   "petname",
   "ultralytics",
+  "SoccerNet"
 ]
  
 [project.scripts]
