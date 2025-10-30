@@ -447,7 +447,6 @@ async def dataset_sv(tail: int, *, max_concurrency: int = None):
                         VALIDATOR_DATASET_LINES_TOTAL.labels(
                             source="local", result="invalid"
                         ).inc()
-                    logger.info(f"[dataset] {key} -> valid_lines={valid_lines}")
                 except Exception:
                     VALIDATOR_DATASET_LINES_TOTAL.labels(
                         source="local", result="error"
@@ -636,7 +635,6 @@ async def dataset_sv_multi(
                         source="cross", result="error"
                     ).inc()
                     continue
-        logger.info(f"[dataset-multi] {url} -> valid_lines={valid_lines}")
 
 
 def prune_sv(tail: int):
