@@ -3,6 +3,7 @@ from pathlib import Path
 from zipfile import ZipFile
 from json import loads, load
 from logging import getLogger
+from typing import Generator
 
 from numpy import ndarray
 from pydantic import BaseModel
@@ -440,8 +441,7 @@ def load_annotations_for_videos(
     video_path: Path,
     annotation_json_filename: str,
     image_subdirectory_name: str,
-) -> dict[str, list[TVFrameResult]]:
-    dataset = {}
+) -> Generator[tuple[str, list[TVFrameResult]], None, None]:
     for i, path in enumerate(
         dataset_directory.glob(f"*/{annotation_json_filename}.json")
     ):
@@ -485,8 +485,7 @@ def load_annotations_for_videos(
                         frame_height=h,
                         frame_width=w,
                     )
-        dataset[videoname] = turbovision_data
-    return dataset
+        yield videoname, turbovision_data
 
 
 def convert_soccernet_to_turbovision_annotation_format(

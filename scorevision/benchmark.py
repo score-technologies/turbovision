@@ -1,6 +1,7 @@
 from logging import getLogger
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from typing import Generator
 
 from numpy import zeros
 
@@ -12,7 +13,6 @@ from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.video_processing import FrameStore
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
-    CHALLENGE_ID_LOOKUP,
 )
 from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.cloudflare_helpers import emit_shard
@@ -40,15 +40,12 @@ class GroundTruth:
     challenge_type: ChallengeType
     url: str
     annotations: list[PseudoGroundTruth]
-
-    @property
-    def challenge_id(self) -> int:
-        return CHALLENGE_ID_LOOKUP[self.challenge_type]
+    name: str
 
 
 def load_ground_truth_dataset(
     dataset_name: str = "gamestate-2025", data_split: str = "test"
-) -> list[GroundTruth]:
+) -> Generator[GroundTruth, None, None]:
     dataset_directory = GT_DATASET_PATH / dataset_name
     if not dataset_directory.is_dir() or not any(dataset_directory.iterdir()):
         logger.info("Dataset not found. Downloading from soccernet")
@@ -73,9 +70,10 @@ def load_ground_truth_dataset(
     logger.info("Dataset loaded")
     challenge_type = ChallengeType.FOOTBALL
     gts = []
-    for videoname, ground_truth in dataset.items():
+    for videoname, ground_truth in dataset:
         logger.info(f"Formatting {videoname} as PseudoGroundTruth")
         gt = GroundTruth(
+            name=videoname,
             challenge_type=challenge_type,
             url=f"https://scoredata.me/benchmark/{challenge_type.value}/{videoname}.mp4",
             annotations=[],
@@ -119,14 +117,21 @@ def load_ground_truth_dataset(
             for data in ground_truth[1:]
         ]
         gt.annotations = annotations
-        gts.append(gt)
-    return gts
+        yield gt
 
 
-async def get_winning_miner() -> Miner:
+async def get_winning_miner() -> Miner | None:
     settings = get_settings()
-    miners = await get_miners_from_registry(netuid=settings.SCOREVISION_NETUID)
-    return miners[0]  # TODO: Mikhael
+    # miners = await get_miners_from_registry(netuid=settings.SCOREVISION_NETUID)
+
+    # TODO: Mikhael replace this:
+
+    from unittest.mock import MagicMock
+
+    miner = MagicMock("Miner")
+    miner.slug = "score-test-turbovision-mterryjack-tarpon"
+    miner.chute_id = "0b87cec7-9faa-5248-b0a7-a0234c7e9363"
+    return miner
 
 
 async def run_benchmark_on_best_miner() -> None:
@@ -135,17 +140,20 @@ async def run_benchmark_on_best_miner() -> None:
 
     logger.info("Fetching winning miner")
     miner = await get_winning_miner()
+    if miner is None:
+        logger.info("No winning miner found")
+        return
 
     logger.info("Evaluating miner on GT dataset")
     for gt in gt_dataset:
-        frame_store = FrameStore(CACHED_VIDEO_PATH / f"{gt.url.stem}.mp4")
-        payload = TVPredictInput(url=gt.url, meta={"challenge_type": gt.challenge_id})
+        frame_store = FrameStore(CACHED_VIDEO_PATH / f"{gt.name}.mp4")
+        payload = TVPredictInput(url=gt.url, meta={})
         challenge = SVChallenge(
             env="SVEnv",
             payload=payload,
             meta={},
             prompt="ScoreVision benchmarking",
-            challenge_id=gt.challenge_id,
+            challenge_id=gt.challenge_type.value,
             frame_numbers=list(range(750)),
             frames=[],
             dense_optical_flow_frames=[],
