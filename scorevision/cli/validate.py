@@ -477,6 +477,8 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
 
+    logger.info("Final miner means: " + ", ".join(f"uid={m}: {s:.4f}" for m, s in sorted(S_by_m.items())))
+
     winner_uid = max(S_by_m, key=S_by_m.get)
     logger.info(
         "Provisional winner uid=%d S=%.4f over last %d blocks",
