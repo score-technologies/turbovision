@@ -402,6 +402,10 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     for key, n in cnt_by_V_m.items():
         s = sums_by_V_m.get(key, 0.0)
         mu_by_V_m[key] = (s / max(1, n), n)
+    logger.info(
+        "Validator→Miner means: "
+        + ", ".join(f"{V}->{m}: μ={mu:.4f} (n={n})" for (V, m), (mu, n) in mu_by_V_m.items())
+    )
 
     a_rob, b_rob = 0.5, 0.5
     k = 2.5
@@ -438,10 +442,17 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         thresh = k * (MAD / 0.6745)
 
         filtered: list[tuple[str, float, int]] = []
+        rejected: list[tuple[str, float, int]] = []
         for V, mu, n in triplets:
             if abs(mu - med) <= thresh:
                 filtered.append((V, mu, n))
-
+            else:
+                rejected.append((V, mu, n))
+        if rejected:
+            logger.info(
+                f"Miner {m}: rejected {len(rejected)} validator means (outliers) → "
+                + ", ".join(f"{V}: μ={mu:.4f} (n={n})" for V, mu, n in rejected)
+            )
         if len(filtered) < 2:
             VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="insufficient_filtered").inc()
             continue
