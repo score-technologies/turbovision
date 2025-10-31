@@ -44,6 +44,7 @@ class Settings(BaseModel):
 
     # Cloudflare R2
     R2_BUCKET: str
+    R2_BUCKET_BENCHMARK: str
     R2_ACCOUNT_ID: SecretStr
     R2_WRITE_ACCESS_KEY_ID: SecretStr
     R2_WRITE_SECRET_ACCESS_KEY: SecretStr
@@ -115,6 +116,7 @@ def get_settings() -> Settings:
         ).expanduser(),
         OPENROUTER_API_KEY=getenv("OPENROUTER_API_KEY", ""),
         R2_BUCKET=getenv("R2_BUCKET", ""),
+        R2_BUCKET_BENCHMARK=getenv("R2_BUCKET_BENCHMARK", "benchmark-results"),
         R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
         R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),

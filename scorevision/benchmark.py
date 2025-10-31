@@ -2,8 +2,12 @@ from logging import getLogger
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Generator
+from datetime import datetime
+from json import dumps
 
 from numpy import zeros
+from aiobotocore.session import get_session
+from botocore.config import Config as BotoConfig
 
 from scorevision.soccernet_utils import *
 from scorevision.utils.settings import get_settings
@@ -15,9 +19,9 @@ from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
 from scorevision.chute_template.schemas import TVPredictInput
-from scorevision.utils.cloudflare_helpers import emit_shard
+from scorevision.utils.cloudflare_helpers import get_s3_client
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
-from scorevision.utils.data_models import SVChallenge
+from scorevision.utils.data_models import SVChallenge, SVEvaluation
 from scorevision.vlm_pipeline.utils.response_models import FrameAnnotation, BoundingBox
 from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     FOOTBALL_DEFAULT_CATEGORY,
@@ -120,6 +124,31 @@ def load_ground_truth_dataset(
         yield gt
 
 
+async def save_results(results: SVEvaluation, key: str) -> None:
+    settings = get_settings()
+    if not (
+        settings.R2_BUCKET_PUBLIC_URL
+        and settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+        and settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+    ):
+        raise RuntimeError("R2 credentials not set")
+
+    session = get_session()
+    async with session.create_client(
+        "s3",
+        endpoint_url=settings.R2_BUCKET_PUBLIC_URL,
+        aws_access_key_id=settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value(),
+        aws_secret_access_key=settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value(),
+        config=BotoConfig(max_pool_connections=settings.R2_CONCURRENCY),
+    ) as client:
+        await client.put_object(
+            Bucket=settings.R2_BUCKET_BENCHMARK,
+            Key=key,
+            Body=dumps(asdict(results)),
+            ContentType="application/json",
+        )
+
+
 async def get_winning_miner() -> Miner | None:
     settings = get_settings()
     # miners = await get_miners_from_registry(netuid=settings.SCOREVISION_NETUID)
@@ -129,12 +158,15 @@ async def get_winning_miner() -> Miner | None:
     from unittest.mock import MagicMock
 
     miner = MagicMock("Miner")
-    miner.slug = "score-test-turbovision-mterryjack-tarpon"
+    miner.slug = "nothin-turbovision-nothinn-swine"
     miner.chute_id = "0b87cec7-9faa-5248-b0a7-a0234c7e9363"
     return miner
 
 
 async def run_benchmark_on_best_miner() -> None:
+    timestamp = datetime.now().strftime("%H-%d-%m-%Y")
+    logger.info(f"Benchmark run started at: {timestamp}")
+
     logger.info("Loading GT dataset")
     gt_dataset = load_ground_truth_dataset()
 
@@ -161,22 +193,23 @@ async def run_benchmark_on_best_miner() -> None:
         )
 
         logger.info(f"Calling model {miner.slug}")
-        miner_run = await call_miner_model_on_chutes(
-            slug=miner.slug,
-            chute_id=miner.chute_id,
-            payload=payload,
-        )
+        # miner_run = await call_miner_model_on_chutes(
+        #     slug=miner.slug,
+        #     chute_id=miner.chute_id,
+        #     payload=payload,
+        # )
 
         # TODO: remove this (only for testing - quicker than calling chute)
-        # from scorevision.utils.data_models import SVRunOutput
-        # with Path(f'benchmark_data/Nothin/{gt.name}.jsonl').open() as f:
-        #    miner_run = SVRunOutput(
-        #        success=True,
-        #        latency_ms=0.0,
-        #        predictions={"frames": [loads(line) for line in f]},
-        #        error=None,
-        #        model=None,
-        #    )
+        from scorevision.utils.data_models import SVRunOutput
+
+        with Path(f"benchmark_data/Nothin/{gt.name}.jsonl").open() as f:
+            miner_run = SVRunOutput(
+                success=True,
+                latency_ms=0.0,
+                predictions={"frames": [loads(line) for line in f]},
+                error=None,
+                model=None,
+            )
 
         logger.info("post VLM evaluation")
         evaluation = post_vlm_ranking(
@@ -186,17 +219,11 @@ async def run_benchmark_on_best_miner() -> None:
             pseudo_gt_annotations=gt.annotations,
             frame_store=frame_store,
         )
-        results = asdict(evaluation)
 
-        logger.info(f"saving results to R2: {results}")
-    #     #TODO: add note when saving that this is benchmark data
-    #     await emit_shard(
-    #         slug=miner.slug,
-    #         challenge=challenge,
-    #         miner_run=miner_run,
-    #         evaluation=evaluation,
-    #         miner_hotkey_ss58=miner.hotkey,
-    #     )
+        logger.info(f"saving results to R2: {evaluation}")
+        key = f"{miner.slug}/run_{timestamp}/{gt.name}.json"
+        await save_results(results=evaluation, key=key)
+        logger.info(f"✅ Benchmark results saved: {settings.R2_BUCKET_BENCHMARK}/{key}")
 
 
 if __name__ == "__main__":
