@@ -1,4 +1,5 @@
 from logging import getLogger
+from collections import defaultdict
 
 from numpy import logical_and, logical_or, ndarray
 
@@ -104,3 +105,44 @@ def bbox_smoothness(
     logger.info(f"Jerkiness: {jerkiness}")
     logger.info(f"Smoothness: {smoothness}")
     return smoothness
+
+
+def bbox_smoothness_per_type(
+    video_bboxes: list[list[BoundingBox]],
+    image_height: int,
+    image_width: int,
+) -> float:
+    """
+    Computes smoothness for each object type separately using bbox_smoothness(),
+    then aggregates them (mean or weighted mean).
+    """
+    by_type: dict[int, list[list[BoundingBox]]] = defaultdict(list)
+    for frame_bboxes in video_bboxes:
+        grouped = defaultdict(list)
+        for bbox in frame_bboxes:
+            grouped[bbox.cls_id].append(bbox)
+        for cls_id, boxes in grouped.items():
+            by_type[cls_id].append(boxes)
+
+    per_type_scores: dict[int, float] = {}
+
+    for cls_id, frames in by_type.items():
+        if len(frames) < 2:
+            per_type_scores[cls_id] = 0.0
+            continue
+
+        score = bbox_smoothness(
+            video_bboxes=frames,
+            image_height=image_height,
+            image_width=image_width,
+        )
+        per_type_scores[cls_id] = score
+        logger.info(f"[bbox_smoothness_per_type] cls_id={cls_id} -> smoothness={score:.4f}")
+
+    if not per_type_scores:
+        return 0.0
+
+    logger.info(f"Per-type smoothness: {per_type_scores}")
+    overall = sum(per_type_scores.values()) / len(per_type_scores)
+    logger.info(f"Overall smoothness (mean): {overall:.4f}")
+    return overall
