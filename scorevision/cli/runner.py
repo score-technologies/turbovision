@@ -228,9 +228,9 @@ async def runner(slug: str | None = None) -> None:
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
     MAX_PGT_RETRIES = int(os.getenv("SV_PGT_MAX_RETRIES", "3"))
     MAX_PGT_BBOX_RETRIES = int(
-        os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "5"))
+        os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "3"))
     )
-    MAX_PGT_QUALITY_RETRIES = int(os.getenv("SV_PGT_MAX_QUALITY_RETRIES", "5"))
+    MAX_PGT_QUALITY_RETRIES = int(os.getenv("SV_PGT_MAX_QUALITY_RETRIES", "4"))
 
     video_cache: dict[str, Any] = {}
     frame_store: FrameStore | None = None
@@ -375,6 +375,8 @@ async def runner_loop():
     settings = get_settings()
     TEMPO = 300
     STALL_SECS_FALLBACK = 5400
+    GET_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", "15.0"))
+    WAIT_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", "15.0"))
 
     def signal_handler():
         logger.warning("Received shutdown signal, stopping runner...")
@@ -386,7 +388,9 @@ async def runner_loop():
     st = None
     last_trigger_block = None
     last_seen_block = None
-    last_progress_time = asyncio.get_running_loop().time()
+    loop = asyncio.get_running_loop()
+    last_progress_time = loop.time()
+    last_trigger_time = loop.time()
 
     logger.warning("[RunnerLoop] starting, TEMPO=%s blocks", TEMPO)
 
@@ -396,10 +400,24 @@ async def runner_loop():
                 logger.warning("[RunnerLoop] (re)connecting subtensor…")
                 st = await get_subtensor()
 
-            block = await st.get_current_block()
+            try:
+                block = await asyncio.wait_for(st.get_current_block(), timeout=GET_BLOCK_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning("[RunnerLoop] get_current_block() timed out after %.1fs → resetting subtensor", GET_BLOCK_TIMEOUT)
+                reset_subtensor()
+                st = None
+                await asyncio.sleep(2.0)
+                continue
+            except (KeyError, ConnectionError, RuntimeError) as err:
+                logger.warning("[RunnerLoop] get_current_block error (%s) → resetting subtensor", err)
+                reset_subtensor()
+                st = None
+                await asyncio.sleep(2.0)
+                continue
+
             RUNNER_BLOCK_HEIGHT.set(block)
 
-            now = asyncio.get_running_loop().time()
+            now = loop.time()
 
             if last_seen_block is None or block > last_seen_block:
                 last_seen_block = block
@@ -421,6 +439,13 @@ async def runner_loop():
                 should_trigger = True
                 last_progress_time = now
 
+            if (now - last_trigger_time) >= STALL_SECS_FALLBACK:
+                logger.warning(
+                    "[RunnerLoop] no run triggered for %.0fs (wall clock) → fallback trigger",
+                    now - last_trigger_time,
+                )
+                should_trigger = True
+
             if should_trigger:
                 logger.warning(
                     "[RunnerLoop] Triggering runner at block %s (last_trigger_block=%s)",
@@ -430,9 +455,10 @@ async def runner_loop():
                 await runner()
                 gc.collect()
                 last_trigger_block = block
+                last_trigger_time = loop.time()
             else:
                 try:
-                    await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
+                    await asyncio.wait_for(st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT)
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:
