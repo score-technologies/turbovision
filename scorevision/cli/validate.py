@@ -404,7 +404,9 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         mu_by_V_m[key] = (s / max(1, n), n)
     logger.info(
         "Validator→Miner means: "
-        + ", ".join(f"{V}->{m}: μ={mu:.4f} (n={n})" for (V, m), (mu, n) in mu_by_V_m.items())
+        + ", ".join(
+            f"{V}->{m}: μ={mu:.4f} (n={n})" for (V, m), (mu, n) in mu_by_V_m.items()
+        )
     )
 
     a_rob, b_rob = 0.5, 0.5
@@ -488,7 +490,10 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
 
-    logger.info("Final miner means: " + ", ".join(f"uid={m}: {s:.4f}" for m, s in sorted(S_by_m.items())))
+    logger.info(
+        "Final miner means: "
+        + ", ".join(f"uid={m}: {s:.4f}" for m, s in sorted(S_by_m.items()))
+    )
 
     winner_uid = max(S_by_m, key=S_by_m.get)
     logger.info(

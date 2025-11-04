@@ -120,7 +120,7 @@ def bbox_smoothness_per_type(
     for frame_bboxes in video_bboxes:
         grouped = defaultdict(list)
         for bbox in frame_bboxes:
-            grouped[bbox.cls_id].append(bbox)
+            grouped[f"{bbox.label.value}_{bbox.cluster_id.value}"].append(bbox)
         for cls_id, boxes in grouped.items():
             by_type[cls_id].append(boxes)
 
@@ -137,7 +137,9 @@ def bbox_smoothness_per_type(
             image_width=image_width,
         )
         per_type_scores[cls_id] = score
-        logger.info(f"[bbox_smoothness_per_type] cls_id={cls_id} -> smoothness={score:.4f}")
+        logger.info(
+            f"[bbox_smoothness_per_type] cls_id={cls_id} -> smoothness={score:.4f}"
+        )
 
     if not per_type_scores:
         return 0.0
