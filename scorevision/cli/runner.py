@@ -401,15 +401,23 @@ async def runner_loop():
                 st = await get_subtensor()
 
             try:
-                block = await asyncio.wait_for(st.get_current_block(), timeout=GET_BLOCK_TIMEOUT)
+                block = await asyncio.wait_for(
+                    st.get_current_block(), timeout=GET_BLOCK_TIMEOUT
+                )
             except asyncio.TimeoutError:
-                logger.warning("[RunnerLoop] get_current_block() timed out after %.1fs → resetting subtensor", GET_BLOCK_TIMEOUT)
+                logger.warning(
+                    "[RunnerLoop] get_current_block() timed out after %.1fs → resetting subtensor",
+                    GET_BLOCK_TIMEOUT,
+                )
                 reset_subtensor()
                 st = None
                 await asyncio.sleep(2.0)
                 continue
             except (KeyError, ConnectionError, RuntimeError) as err:
-                logger.warning("[RunnerLoop] get_current_block error (%s) → resetting subtensor", err)
+                logger.warning(
+                    "[RunnerLoop] get_current_block error (%s) → resetting subtensor",
+                    err,
+                )
                 reset_subtensor()
                 st = None
                 await asyncio.sleep(2.0)
@@ -458,7 +466,9 @@ async def runner_loop():
                 last_trigger_time = loop.time()
             else:
                 try:
-                    await asyncio.wait_for(st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT)
+                    await asyncio.wait_for(
+                        st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT
+                    )
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:

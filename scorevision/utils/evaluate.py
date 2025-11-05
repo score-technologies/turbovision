@@ -39,7 +39,7 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     OBJECT_ID_LOOKUP,
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
-from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness
+from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
 
 logger = getLogger(__name__)
 
@@ -155,7 +155,7 @@ def post_vlm_ranking(
         score_breakdown.objects.enumeration = compare_object_counts(
             pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
         )
-        score_breakdown.objects.tracking_stability = bbox_smoothness(
+        score_breakdown.objects.tracking_stability = bbox_smoothness_per_type(
             video_bboxes=[
                 miner_annotations[frame_num]["bboxes"]
                 for frame_num in sorted(miner_annotations.keys())
