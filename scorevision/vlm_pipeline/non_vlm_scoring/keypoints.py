@@ -262,7 +262,7 @@ def evaluate_keypoints(
                 template_keypoints=template_keypoints,
                 frame_keypoints=miner_keypoints,
                 frame=frame_image,  # array(frame_image.image),
-                floor_markings_template=template_image,
+                floor_markings_template=template_image.copy(),
             )
         logger.info(f"[evaluate_keypoints] Frame {frame_number}: {frame_score}")
         frame_scores.append(frame_score)
