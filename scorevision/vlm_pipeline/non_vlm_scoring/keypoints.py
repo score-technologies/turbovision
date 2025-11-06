@@ -125,7 +125,7 @@ def project_image_using_keypoints(
     filtered_dst = []
 
     for src_pt, dst_pt in zip(source_keypoints, destination_keypoints, strict=True):
-        if dst_pt == (0.0, 0.0):  # ignore default / missing points
+        if dst_pt[0] == 0.0 and dst_pt[1] == 0.0:  # ignore default / missing points
             continue
         filtered_src.append(src_pt)
         filtered_dst.append(dst_pt)
