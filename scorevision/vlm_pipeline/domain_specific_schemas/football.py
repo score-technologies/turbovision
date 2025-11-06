@@ -1,9 +1,9 @@
 from enum import Enum
 import json
+from pathlib import Path
 
 from numpy import ndarray
 from cv2 import imread
-
 
 class ShirtColor(Enum):
     WHITE = "white"
@@ -81,8 +81,9 @@ INDEX_KEYPOINT_CORNER_TOP_RIGHT = 24
 
 
 def football_pitch() -> ndarray:
+    current_dir = Path(__file__).parent
     return imread(
-        "scorevision/vlm_pipeline/domain_specific_schemas/football_pitch_template.png"
+        str(current_dir/"football_pitch_template.png")
     )
 
 
