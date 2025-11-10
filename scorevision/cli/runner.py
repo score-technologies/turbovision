@@ -377,6 +377,7 @@ async def runner_loop():
     STALL_SECS_FALLBACK = 5400
     GET_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", "15.0"))
     WAIT_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", "15.0"))
+    RECONNECT_DELAY_S = float(os.getenv("SUBTENSOR_RECONNECT_DELAY_S", "5.0"))
 
     def signal_handler():
         logger.warning("Received shutdown signal, stopping runner...")
@@ -398,7 +399,17 @@ async def runner_loop():
         try:
             if st is None:
                 logger.warning("[RunnerLoop] (re)connecting subtensor…")
-                st = await get_subtensor()
+                try:
+                    st = await get_subtensor()
+                except Exception as e:
+                    logger.warning(
+                        "[RunnerLoop] subtensor connect failed: %s → retrying in %.1fs",
+                        e, RECONNECT_DELAY_S
+                    )
+                    reset_subtensor()
+                    st = None
+                    await asyncio.sleep(RECONNECT_DELAY_S)
+                    continue
 
             try:
                 block = await asyncio.wait_for(
