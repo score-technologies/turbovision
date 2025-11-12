@@ -182,7 +182,7 @@ async def load_model(self) -> None:
         self.cuda_status = verify_cuda_version()
     except Exception as e:
         self.cuda_status = f"❌ Failed to check cuda status: {e}"
-    print(self.cuda_version_message)
+    print(self.cuda_status)
 
     try:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
