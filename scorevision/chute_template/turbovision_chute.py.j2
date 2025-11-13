@@ -42,7 +42,7 @@ class TVPredictOutput(BaseModel):
 ##=========UTILITY FUNCTIONS=================
 def verify_cuda_version() -> str:
     min_version = (12,8)
-    if not torch.cude.is_available():
+    if not torch.cuda.is_available():
         return "❌ CUDA is not available. Make sure you have a CUDA-capable GPU and correct drivers installed"
     device_count = torch.cuda.device_count()
     if device_count < 1:
