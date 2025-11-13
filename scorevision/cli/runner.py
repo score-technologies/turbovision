@@ -13,6 +13,7 @@ from scorevision.utils.challenges import (
     get_challenge_from_scorevision_with_source,
     prepare_challenge_payload,
     build_svchallenge_from_parts,
+    ScoreVisionChallengeError,
 )
 from scorevision.utils.data_models import SVChallenge
 from scorevision.chute_template.schemas import TVPredictInput
@@ -46,6 +47,7 @@ from scorevision.utils.prometheus import (
     RUNNER_MINER_LAST_DURATION_SECONDS,
 )
 from scorevision.utils.video_processing import FrameStore
+from scorevision.utils.manifest import get_current_manifest 
 
 logger = getLogger(__name__)
 
@@ -235,7 +237,35 @@ async def runner(slug: str | None = None) -> None:
     video_cache: dict[str, Any] = {}
     frame_store: FrameStore | None = None
     run_result = "success"
+
+    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
+        "0",
+        "false",
+        "False",
+    )
+    manifest = None
+    manifest_hash: str | None = None
+    expected_window_id: str | None = None
+
     try:
+        if use_v3:
+            try:
+                manifest = get_current_manifest(block_number=None)
+                manifest_hash = manifest.manifest_hash
+                expected_window_id = manifest.window_id
+                logger.info(
+                    "[Runner] Loaded Manifest: hash=%s window_id=%s",
+                    manifest_hash,
+                    expected_window_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "[Runner] SCOREVISION_USE_CHALLENGE_V3=1 but failed to load Manifest: %s",
+                    e,
+                )
+                run_result = "manifest_error"
+                return
+
         miners = await get_miners_from_registry(NETUID)
         if not miners:
             logger.warning("No eligible miners found on-chain.")
@@ -243,9 +273,58 @@ async def runner(slug: str | None = None) -> None:
             run_result = "no_miners"
             return
 
-        challenge, payload, chal_api, frame_store = (
-            await get_challenge_from_scorevision_with_source(video_cache=video_cache)
-        )
+        try:
+            if use_v3:
+                challenge, payload, chal_api, frame_store = (
+                    await get_challenge_from_scorevision_with_source(
+                        video_cache=video_cache,
+                        manifest_hash=manifest_hash,
+                    )
+                )
+
+                chal_mh = chal_api.get("manifest_hash")
+                chal_wid = chal_api.get("window_id")
+
+                if manifest_hash and chal_mh and chal_mh != manifest_hash:
+                    logger.warning(
+                        "[Runner] Manifest hash mismatch between local Manifest (%s) and challenge (%s).",
+                        manifest_hash,
+                        chal_mh,
+                    )
+
+                if expected_window_id and chal_wid and chal_wid != expected_window_id:
+                    logger.warning(
+                        "[Runner] Window ID mismatch between local Manifest (%s) and challenge (%s).",
+                        expected_window_id,
+                        chal_wid,
+                    )
+            else:
+                challenge, payload, chal_api, frame_store = (
+                    await get_challenge_from_scorevision_with_source(
+                        video_cache=video_cache
+                    )
+                )
+        except ScoreVisionChallengeError as ce:
+            msg = str(ce)
+            if "No active evaluation window" in msg:
+                logger.warning(
+                    "[Runner] No active evaluation window (404) from challenge API v3. Skipping run."
+                )
+                run_result = "no_window"
+            elif "Rate limited by /api/challenge/v3" in msg:
+                logger.warning(
+                    "[Runner] Rate limited by challenge API v3 (409). Backing off this run."
+                )
+                run_result = "rate_limited"
+            elif "Manifest expired or rejected" in msg:
+                logger.warning(
+                    "[Runner] Manifest expired or rejected (410). Operator action required."
+                )
+                run_result = "manifest_expired"
+            else:
+                logger.error("[Runner] Challenge API error: %s", msg)
+                run_result = "challenge_error"
+            return
 
         miner_list = list(miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))

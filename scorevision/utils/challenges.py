@@ -6,6 +6,7 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
+import os
 
 from aiohttp import ClientResponseError
 from numpy import ndarray
@@ -23,6 +24,7 @@ from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,
 )
+from scorevision.utils.manifest import Manifest
 
 logger = getLogger(__name__)
 
@@ -229,6 +231,11 @@ def build_svchallenge_from_parts(
 ) -> SVChallenge:
     prompt = f"ScoreVision video task {chal_api.get('task_id')}"
     meta = payload.meta | {"seed": chal_api.get("seed", 0)}
+
+    for k in ("element_id", "window_id", "manifest_hash"):
+        if chal_api.get(k) is not None:
+            meta[k] = chal_api[k]
+
     canonical = {
         "env": "SVEnv",
         "prompt": prompt,
@@ -255,9 +262,24 @@ def build_svchallenge_from_parts(
 async def get_challenge_from_scorevision_with_source(
     *,
     video_cache: dict[str, Any] | None = None,
+    manifest_hash: str | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
+    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
+        "0",
+        "false",
+        "False",
+    )
+
     try:
-        chal_api = await get_next_challenge()
+        if use_v3:
+            if manifest_hash is None:
+                raise ScoreVisionChallengeError(
+                    "SCOREVISION_USE_CHALLENGE_V3=1 but no manifest_hash provided "
+                    "to get_challenge_from_scorevision_with_source()."
+                )
+            chal_api = await get_next_challenge_v3(manifest_hash=manifest_hash)
+        else:
+            chal_api = await get_next_challenge()
     except ClientResponseError as e:
         raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
     except ScoreVisionChallengeError as e:
@@ -282,3 +304,115 @@ async def get_challenge_from_scorevision_with_source(
         flows=flows,
     )
     return challenge, payload, chal_api, frame_store
+
+async def get_next_challenge_v3(
+    manifest_hash: str | None = None,
+) -> dict:
+    """
+    New v3 challenge client using Manifest hash + new schema.
+
+    Request:
+      GET /api/challenge/v3
+        - query params: same auth as /tasks/next/v2
+        - header: X-Manifest-Hash: <manifest_hash>
+
+    Response attendu (exemple simplifié):
+      {
+        "task_id": "...",
+        "video_url": "...",
+        "fps": 25,
+        "seed": 123,
+        "element_id": "PlayerDetect_v1@1.0",
+        "window_id": "block-123456",
+        "manifest_hash": "..."  # idéalement égal à ce qu'on a envoyé
+        ...
+      }
+    """
+    settings = get_settings()
+
+    if not settings.SCOREVISION_API:
+        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
+
+    if manifest_hash is None:
+        raise ScoreVisionChallengeError(
+            "get_next_challenge_v3() requires a manifest_hash argument for now."
+        )
+
+    keypair = load_hotkey_keypair(
+        wallet_name=settings.BITTENSOR_WALLET_COLD,
+        hotkey_name=settings.BITTENSOR_WALLET_HOT,
+    )
+    params = build_validator_query_params(keypair)
+    params["manifest_hash"] = manifest_hash 
+
+    headers: dict[str, str] = {
+        "X-Manifest-Hash": manifest_hash,
+    }
+
+    session = await get_async_client()
+    try:
+        async with session.get(
+            f"{settings.SCOREVISION_API}/api/challenge/v3",
+            params=params,
+            headers=headers,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except ClientResponseError as e:
+                if e.status == 404:
+                    raise ScoreVisionChallengeError(
+                        "No active evaluation window (404 from /api/challenge/v3)."
+                    )
+                if e.status == 409:
+                    raise ScoreVisionChallengeError(
+                        "Rate limited by /api/challenge/v3 (409). Back off before retrying."
+                    )
+                if e.status == 410:
+                    raise ScoreVisionChallengeError(
+                        "Manifest expired or rejected (410 from /api/challenge/v3)."
+                    )
+                raise
+
+            challenge = await response.json() or None
+            if not challenge:
+                raise ScoreVisionChallengeError(
+                    "Empty challenge payload from /api/challenge/v3."
+                )
+
+            if "id" in challenge and "task_id" not in challenge:
+                challenge["task_id"] = challenge.pop("id")
+
+            if not (challenge.get("video_url") or challenge.get("asset_url")):
+                raise ScoreVisionChallengeError("Challenge missing video url.")
+
+            ct = (
+                parse_challenge_type(challenge.get("challenge_type"))
+                or ChallengeType.FOOTBALL
+            )
+            challenge["challenge_type"] = ct.value
+
+            resp_mh = challenge.get("manifest_hash")
+            if resp_mh is not None and resp_mh != manifest_hash:
+                raise ScoreVisionChallengeError(
+                    f"Manifest hash mismatch in /api/challenge/v3 response "
+                    f"(sent={manifest_hash}, got={resp_mh})."
+                )
+
+            if not challenge.get("element_id"):
+                raise ScoreVisionChallengeError(
+                    "Missing element_id in /api/challenge/v3 response."
+                )
+            if not challenge.get("window_id"):
+                raise ScoreVisionChallengeError(
+                    "Missing window_id in /api/challenge/v3 response."
+                )
+
+            logger.info(
+                "Fetched v3 challenge: task_id=%s element_id=%s window_id=%s",
+                challenge.get("task_id"),
+                challenge.get("element_id"),
+                challenge.get("window_id"),
+            )
+            return challenge
+    except ClientResponseError as e:
+        raise ScoreVisionChallengeError(f"HTTP error while fetching v3 challenge: {e}")
