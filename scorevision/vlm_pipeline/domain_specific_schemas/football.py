@@ -5,6 +5,7 @@ from pathlib import Path
 from numpy import ndarray
 from cv2 import imread
 
+
 class ShirtColor(Enum):
     WHITE = "white"
     BLACK = "black"
@@ -82,9 +83,7 @@ INDEX_KEYPOINT_CORNER_TOP_RIGHT = 24
 
 def football_pitch() -> ndarray:
     current_dir = Path(__file__).parent
-    return imread(
-        str(current_dir/"football_pitch_template.png")
-    )
+    return imread(str(current_dir / "football_pitch_template.png"))
 
 
 # =======================
