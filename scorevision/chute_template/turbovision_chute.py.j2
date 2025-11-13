@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
 from numpy import ndarray
 from huggingface_hub import snapshot_download
+import torch 
 
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
@@ -39,6 +40,24 @@ class TVPredictOutput(BaseModel):
 
 
 ##=========UTILITY FUNCTIONS=================
+def verify_cuda_version() -> str:
+    min_version = (12,8)
+    if not torch.cuda.is_available():
+        return "❌ CUDA is not available. Make sure you have a CUDA-capable GPU and correct drivers installed"
+    device_count = torch.cuda.device_count()
+    if device_count < 1:
+        return "❌ No CUDA devices detected"
+    cuda_version_str = torch.version.cuda 
+    if cuda_version_str is None:
+        return "❌ PyTorch was not compiled with CUDA support"
+    try:
+        cuda_version = tuple(map(int,cuda_version_str.split('.')))
+    except Exception as e:
+        return f"❌ Unable to parse CUDA version string: {e}"
+    if cuda_version < min_version:
+        return f"❌ CUDA version {cuda_version_str} is too old. Requires >= {min_version[0]}.{min_version[1]}"
+    return f"CUDA {cuda_version_str} detected_with {device_count} device(s)"
+
 def load_chute_config_from_hf_repo(config_path: Path) -> dict:
     try:
         if not config_path.exists():
@@ -160,6 +179,12 @@ chute = load_chute(
 @chute.on_startup()
 async def load_model(self) -> None:
     try:
+        self.cuda_status = verify_cuda_version()
+    except Exception as e:
+        self.cuda_status = f"❌ Failed to check cuda status: {e}"
+    print(self.cuda_status)
+
+    try:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
         print("�~\~E Huggingface Hub repo downloaded")         
 
@@ -180,6 +205,7 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": self.status,
         "model_loaded": str(self.miner),
+        "cuda": self.cuda_status
     }
 
 
