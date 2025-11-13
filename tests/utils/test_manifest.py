@@ -11,7 +11,7 @@ def test_sign_and_verify_happy_path():
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
 
-    man = Manifest(window_id=0, elements=[])
+    man = Manifest.empty()
     man.sign(private_key=private_key)
 
     assert isinstance(man.signature, str)
@@ -22,7 +22,7 @@ def test_sign_and_verify_happy_path():
 def test_verify_fails_for_unsigned_manifest():
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
-    man = Manifest(window_id=0, elements=[])
+    man = Manifest.empty()
 
     assert man.signature is None
     assert not man.verify(public_key=public_key)
@@ -32,7 +32,7 @@ def test_verify_fails_after_tamper():
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
 
-    man = Manifest(window_id=0, elements=[])
+    man = Manifest.empty()
     man.sign(private_key=private_key)
     man.window_id = 999
 

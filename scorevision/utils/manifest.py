@@ -62,10 +62,26 @@ class Tee:
 class Manifest:
     window_id: str
     elements: list[Element]
-    tee: Tee | None = None
-    version: str | None = None
-    expiry_block: int | None = None
+    tee: Tee
+    version: str
+    expiry_block: int 
     signature: str | None = None
+
+    @classmethod
+    def empty(cls) -> "Manifest":
+        return cls(
+            window_id="template",
+            elements=[
+               Element(
+                  id="test",
+                  clips=[],
+                  weights=[] 
+               )
+            ],
+            tee=Tee(),
+            version="1.0",
+            expiry_block=0,        
+        )
 
     def to_canonical_json(self) -> str:
         self.elements.sort(key=lambda element: element.id)
