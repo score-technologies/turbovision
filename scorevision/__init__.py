@@ -11,6 +11,7 @@ from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 from scorevision.cli.run_vlm_pipeline import run_vlm_pipeline_once_for_single_miner
+from scorevision.cli.manifest import manifest_cli
 
 logger = getLogger(__name__)
 
@@ -115,3 +116,6 @@ def test_vlm_pipeline(revision: str) -> None:
         click.echo(result)
     except Exception as e:
         click.echo(e)
+
+
+cli.add_command(manifest_cli)
