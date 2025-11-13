@@ -167,16 +167,18 @@ async def load_model(self) -> None:
             path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
         )
         self.miner = miner_class(hf_repo_path)
+        self.status = "healthy"
         print(f"✅ Miner loaded {self.miner}")
     except Exception as e:
-        print(f"❌ Failed to load miner from Huggingface repo: {e}")
+        self.status = f"❌ Failed to load miner from Huggingface repo: {e}"
         self.miner = None
+        print(self.status)
 
 
 @chute.cord(public_api_path="/health")
 async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
-        "status": "healthy",
+        "status": self.status,
         "model_loaded": str(self.miner),
     }
 
