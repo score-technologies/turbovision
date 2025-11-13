@@ -404,7 +404,8 @@ async def runner_loop():
                 except Exception as e:
                     logger.warning(
                         "[RunnerLoop] subtensor connect failed: %s → retrying in %.1fs",
-                        e, RECONNECT_DELAY_S
+                        e,
+                        RECONNECT_DELAY_S,
                     )
                     reset_subtensor()
                     st = None
