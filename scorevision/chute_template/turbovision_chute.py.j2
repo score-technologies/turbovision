@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from typing import Any, Generator
-from requests import get
 from tempfile import NamedTemporaryFile
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
@@ -9,6 +8,7 @@ import sys
 from inspect import signature
 from urllib.parse import quote
 
+from aiohttp import ClientSession
 from yaml import safe_load
 from pydantic import BaseModel
 from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
@@ -196,38 +196,40 @@ async def predict(self, data: TVPredictInput) -> dict:
         n_keypoints = metadata.get('n_keypoints',32)
         
         url = f"https://proxy.chutes.ai/misc/proxy?url={quote(data.url, safe='')}"
-        response = get(url)
-        response.raise_for_status()
-        print(f"✅ Challenge video downloaded. Saving video to temporary file.")
+        async with ClientSession() as session:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                content = await response.read()
+                print(f"✅ Challenge video downloaded. Saving video to temporary file.")
 
-        with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
-            f.write(response.content)
-            cap = VideoCapture(f.name)
-            if not cap.isOpened():
-                raise ValueError(f"Problem accessing downloaded video {f.name}")
+                with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
+                    f.write(content)
+                    cap = VideoCapture(f.name)
+                    if not cap.isOpened():
+                        raise ValueError(f"Problem accessing downloaded video {f.name}")
 
-            n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
-            print(
-                f"Processing video with {n_frames} frames in batches of {batch_size}"
-            )
+                    n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
+                    print(
+                        f"Processing video with {n_frames} frames in batches of {batch_size}"
+                    )
 
-            frame_results = []
-            for batch_number, images in enumerate(
-                get_video_frames_in_batches(video=cap, batch_size=batch_size)
-            ):
-                frame_number = batch_size * batch_number
-                print(f"Predicting Batch: {batch_number+1}")
-                batch_frame_results = self.miner.predict_batch(
-                    batch_images=images,
-                    offset=frame_number,
-                    n_keypoints=n_keypoints,
-                )
-                frame_results.extend(
-                    [frame_result.model_dump() for frame_result in batch_frame_results]
-                )
+                    frame_results = []
+                    for batch_number, images in enumerate(
+                        get_video_frames_in_batches(video=cap, batch_size=batch_size)
+                    ):
+                        frame_number = batch_size * batch_number
+                        print(f"Predicting Batch: {batch_number+1}")
+                        batch_frame_results = self.miner.predict_batch(
+                            batch_images=images,
+                            offset=frame_number,
+                            n_keypoints=n_keypoints,
+                        )
+                        frame_results.extend(
+                            [frame_result.model_dump() for frame_result in batch_frame_results]
+                        )
 
-            cap.release()
-            print(f"✅ Frame Predictions Completed")
+                    cap.release()
+                    print(f"✅ Frame Predictions Completed")
 
         result = TVPredictOutput(success=True, predictions={"frames": frame_results})
 
