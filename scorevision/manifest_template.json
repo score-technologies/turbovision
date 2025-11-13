@@ -1,0 +1,24 @@
+{
+  "elements": [
+    {
+      "baseline_theta": null,
+      "beta": null,
+      "clips": [],
+      "delta_floor": null,
+      "id": "test",
+      "latency_p95_ms": null,
+      "metrics": null,
+      "pgt_recipe_hash": null,
+      "preproc": null,
+      "salt": null,
+      "service_rate_fps": null,
+      "weights": []
+    }
+  ],
+  "expiry_block": 0,
+  "tee": {
+    "trusted_share_gamma": null
+  },
+  "version": "1.0",
+  "window_id": "template"
+}

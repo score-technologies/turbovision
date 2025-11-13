@@ -1,24 +1,22 @@
 from hashlib import sha256
-from dataclasses import dataclass, field, asdict
 from typing import Any
 from json import dumps
 from base64 import b64encode, b64decode
 
+from pydantic import BaseModel
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
 
 
-@dataclass
-class Preproc:
+class Preproc(BaseModel):
     fps: int | None = None
     resize_long: int | None = None
     norm: str | None = None
 
 
-@dataclass
-class Pillars:
+class Pillars(BaseModel):
     iou: float | None = None
     count: float | None = None
     palette: float | None = None
@@ -26,19 +24,16 @@ class Pillars:
     role: float | None = None
 
 
-@dataclass
-class Metrics:
+class Metrics(BaseModel):
     pillars: Pillars | None = None
 
 
-@dataclass
-class Salt:
-    offsets: list[int] | None = field(default_factory=list)
-    strides: list[int] | None = field(default_factory=list)
+class Salt(BaseModel):
+    offsets: list[int] | None = None
+    strides: list[int] | None = None
 
 
-@dataclass
-class Element:
+class Element(BaseModel):
     id: str
     clips: list[str]
     weights: list[float]
@@ -53,13 +48,11 @@ class Element:
     beta: float | None = None
 
 
-@dataclass
-class Tee:
+class Tee(BaseModel):
     trusted_share_gamma: float | None = None
 
 
-@dataclass
-class Manifest:
+class Manifest(BaseModel):
     window_id: str
     elements: list[Element]
     tee: Tee
@@ -84,9 +77,9 @@ class Manifest:
         )
 
     def to_canonical_json(self) -> str:
-        self.elements.sort(key=lambda element: element.id)
-        payload = asdict(self)
-        payload.pop("signature", None)
+        sorted_elements = sorted(self.elements, key=lambda e: e.id)
+        payload = self.model_dump(exclude={"signature"}, by_alias=True)
+        payload["elements"] = [e.model_dump() for e in sorted_elements]
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     def sign(self, private_key: Ed25519PrivateKey) -> None:

@@ -45,14 +45,14 @@ def test_manifest_hash_is_stable():
     TEE = Tee(trusted_share_gamma=0.2)
     EXPIRY_BLOCK = 123456
     ELEMENTS = [
-        Element(id=0, clips=["b", "a"], weights=[1.0, 0.0, 0.5]),
-        Element(id=1, clips=["e", "f"], weights=[0.9, 0.0, 0.5]),
-        Element(id=2, clips=["c", "d"], weights=[0.0, 0.1, 1.0]),
+        Element(id="0", clips=["b", "a"], weights=[1.0, 0.0, 0.5]),
+        Element(id="1", clips=["e", "f"], weights=[0.9, 0.0, 0.5]),
+        Element(id="2", clips=["c", "d"], weights=[0.0, 0.1, 1.0]),
     ]
     ELEMENTS_REVERSED = [
-        Element(id=1, clips=["e", "f"], weights=[0.9, 0.0, 0.5]),
-        Element(id=2, clips=["c", "d"], weights=[0.0, 0.1, 1.0]),
-        Element(id=0, clips=["b", "a"], weights=[1.0, 0.0, 0.5]),
+        Element(id="1", clips=["e", "f"], weights=[0.9, 0.0, 0.5]),
+        Element(id="2", clips=["c", "d"], weights=[0.0, 0.1, 1.0]),
+        Element(id="0", clips=["b", "a"], weights=[1.0, 0.0, 0.5]),
     ]
     man1 = Manifest(
         window_id=WINDOW_ID,
