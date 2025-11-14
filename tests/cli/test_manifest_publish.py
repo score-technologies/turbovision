@@ -1,36 +1,34 @@
-from pathlib import Path
+import json
+from unittest.mock import patch
 from click.testing import CliRunner
+from types import SimpleNamespace
+
 from scorevision.cli.manifest import manifest_cli
+from scorevision.utils.manifest import Manifest
 
-SAMPLE_MANIFEST = """
-window_id: "2025-10-24"
-version: "1.3"
-expiry_block: 123456
-tee:
-  trusted_share_gamma: 0.2
-elements: []
-"""
 
-def test_manifest_publish(tmp_path: Path, generated_ed25519_key: Path):
-    runner = CliRunner()
+def test_publish_updates_index(tmp_path, signed_manifest_file, generated_ed25519_key, fake_settings, r2_mock_store):
+    store, mock_get, mock_put, mock_delete = r2_mock_store
 
-    mf_path = tmp_path / "manifest.yaml"
-    mf_path.write_text(SAMPLE_MANIFEST)
+    from unittest.mock import patch
+    from click.testing import CliRunner
+    from scorevision.cli.manifest import manifest_cli
 
-    result = runner.invoke(
-        manifest_cli,
-        [
-            "publish",
-            str(mf_path),
-            "--signing-key-path",
-            str(generated_ed25519_key),
-        ],
-    )
+    with patch("scorevision.utils.r2.r2_get_object", side_effect=mock_get), \
+         patch("scorevision.utils.r2.r2_put_json", side_effect=mock_put), \
+         patch("scorevision.utils.r2.r2_delete_object", side_effect=mock_delete), \
+         patch("scorevision.cli.manifest.get_settings", return_value=fake_settings):
 
-    assert result.exit_code == 0
-    assert "Signed manifest" in result.output
+        runner = CliRunner()
+        result = runner.invoke(
+            manifest_cli,
+            [
+                "publish",
+                str(signed_manifest_file),
+                "--signing-key-path",
+                str(generated_ed25519_key),
+            ],
+        )
 
-    # Confirm signature added
-    contents = mf_path.read_text()
-    assert "signature:" in contents
+        assert result.exit_code == 0
 

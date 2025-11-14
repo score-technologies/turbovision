@@ -128,18 +128,28 @@ TEMPLATES = {
     required=False,
     help="TEE EC private key used to derive trusted_share_gamma, etc.",
 )
-def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path|None):
+def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path | None):
     """Create a new manifest from a template."""
     if template not in TEMPLATES:
         raise click.ClickException(f"Unknown template: {template}")
 
     tmpl = TEMPLATES[template]
+
+    # Start with template's TEE defaults
+    tee_data = tmpl.get("tee", {"trusted_share_gamma": 0.2})
+
+    # If user provides a TEE key, optionally override the default (example derivation)
+    if tee_key is not None:
+        priv = serialization.load_pem_private_key(tee_key.read_bytes(), password=None)
+        # Example placeholder: real derivation logic could go here
+        tee_data["trusted_share_gamma"] = tee_data.get("trusted_share_gamma", 0.2)
+
     manifest_yaml = {
         "window_id": window_id,
         "version": tmpl["version"],
         "expiry_block": expiry_block,
-        "tee": tmpl["tee"],
-        "elements": tmpl["elements"],   # user will fill manually
+        "tee": tee_data,
+        "elements": tmpl.get("elements", []),
     }
 
     yaml.dump(manifest_yaml, output.open("w"))
@@ -185,26 +195,95 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
 @manifest_cli.command("publish")
 @click.argument("manifest_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--signing-key-path", required=True, type=click.Path(path_type=Path))
-def publish_manifest_cmd(manifest_path: Path, signing_key_path: Path):
-    """Sign, hash, and upload manifest."""
+def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path):
+    """
+    Sign, upload (with retries), integrity-check, and update index.json.
+    """
+    from scorevision.utils.r2 import (
+        r2_get_object, r2_put_json, r2_delete_object, get_r2_client
+    )
+    import hashlib
+    from datetime import datetime, timezone
+
+    settings = get_settings()
+    bucket = settings.SCOREVISION_BUCKET
+
+    # ----------------------------------------------------------
+    # 1. Load + sign manifest
+    # ----------------------------------------------------------
+    manifest = load_manifest_from_yaml(manifest_path)
+    priv = serialization.load_pem_private_key(
+        signing_key_path.read_bytes(),
+        password=None,
+    )
+    manifest.sign(priv)
+    manifest_hash = manifest.hash
+
+    save_manifest_yaml(manifest, manifest_path)
+
+    manifest_key = f"manifests/{manifest_hash}.json"
+
+    # ----------------------------------------------------------
+    # 2. Upload manifest (idempotent, retry-enabled)
+    # ----------------------------------------------------------
+    existing, _ = r2_get_object(bucket, manifest_key)
+
+    if existing is None:
+        click.echo(f"⬆ Uploading manifest {manifest_hash} with retry...")
+        r2_put_json(bucket, manifest_key, json.loads(manifest.to_canonical_json()))
+    else:
+        click.echo("ℹ Manifest already exists in CDN (skipping upload).")
+
+    # ----------------------------------------------------------
+    # 3. Integrity re-download
+    # ----------------------------------------------------------
+    remote_bytes, _ = r2_get_object(bucket, manifest_key)
+    if remote_bytes is None:
+        raise click.ClickException("Remote manifest missing after upload.")
+
+    remote_hash = hashlib.sha256(remote_bytes).hexdigest()
+    if remote_hash != manifest_hash:
+        raise click.ClickException(
+            f"Integrity mismatch: local={manifest_hash} remote={remote_hash}"
+        )
+
+    click.echo("🧩 Integrity OK.")
+
+    # ----------------------------------------------------------
+    # 4. Update index.json with optimistic locking + retry
+    # ----------------------------------------------------------
+    index_key = "index.json"
+    index_bytes, etag = r2_get_object(bucket, index_key)
+
+    index = json.loads(index_bytes.decode("utf-8")) if index_bytes else {"windows": {}}
+
+    win = manifest.window_id
+    index.setdefault("windows", {})
+    index["windows"].setdefault(win, {})
+
+    index["windows"][win].update(
+        {
+            "current": manifest_hash,
+            "version": manifest.version,
+            "expiry_block": manifest.expiry_block,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
     try:
-        manifest = load_manifest_from_yaml(manifest_path)
-
-        # Load PEM Ed25519 key (required by tests)
-        key_bytes = signing_key_path.read_bytes()
-        priv = serialization.load_pem_private_key(key_bytes, password=None)
-
-        manifest.sign(priv)
-        h = manifest.hash
-
-        save_manifest_yaml(manifest, manifest_path)
-
-        click.echo(f"🔏 Signed manifest saved to {manifest_path}")
-        click.echo(f"🧩 Hash: {h}")
-
+        click.echo("📝 Updating index.json with retry...")
+        r2_put_json(bucket, index_key, index, if_match=etag)
     except Exception as e:
-        click.echo(f"❌ Publish failed: {e}")
+        # ------------------------------------------------------
+        # 5. Rollback if index update fails
+        # ------------------------------------------------------
+        if existing is None:
+            click.echo("⚠ Rolling back manifest upload...")
+            r2_delete_object(bucket, manifest_key)
 
+        raise click.ClickException(f"Failed to update index.json: {e}")
+
+    click.echo("✅ Publish complete (retry-safe).")
 
 # ============================================================
 # LIST (stub)
