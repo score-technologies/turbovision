@@ -1,5 +1,6 @@
 # tests/cli/test_manifest_flow_e2e.py
 
+import os
 import pytest
 from pathlib import Path
 from click.testing import CliRunner
@@ -18,6 +19,8 @@ def test_manifest_full_flow(tmp_path: Path, generated_ed25519_key: Path, fake_se
     store, mock_get, mock_put, mock_delete = r2_mock_store
     runner = CliRunner()
     manifest_path = tmp_path / "full.yaml"
+
+    os.environ["TEE_KEY_HEX"] = generated_ed25519_key.read_text().strip()
 
     # ---------------------------
     # 1. CREATE
@@ -54,8 +57,7 @@ def test_manifest_full_flow(tmp_path: Path, generated_ed25519_key: Path, fake_se
             [
                 "publish",
                 str(manifest_path),
-                "--signing-key-path",
-                str(generated_ed25519_key),
+                # remove --signing-key-path since TEE_KEY_HEX is set
             ],
         )
 
@@ -66,4 +68,9 @@ def test_manifest_full_flow(tmp_path: Path, generated_ed25519_key: Path, fake_se
     # ---------------------------
     res4 = runner.invoke(manifest_cli, ["validate", str(manifest_path)])
     assert res4.exit_code == 0, res4.output
+
+    # ---------------------------
+    # Cleanup
+    # ---------------------------
+    os.environ.pop("TEE_KEY_HEX", None)
 

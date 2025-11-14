@@ -1,10 +1,13 @@
 # tests/fixtures/manifest_fixtures.py
 
-import pytest
+import json
 from types import SimpleNamespace
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey
-)
+from pathlib import Path
+
+import pytest
+from nacl.signing import SigningKey
+
+from ruamel.yaml import YAML
 
 from scorevision.utils.manifest import (
     Manifest,
@@ -37,10 +40,9 @@ def fake_settings():
 
 @pytest.fixture
 def keypair():
-    """Generate an Ed25519 keypair for signing tests."""
-    private = Ed25519PrivateKey.generate()
-    return private, private.public_key()
-
+    """Generate a PyNaCl Ed25519 keypair for signing tests."""
+    sk = SigningKey.generate()
+    return sk, sk.verify_key
 
 # ------------------------------------------------------------
 # ELEMENT FIXTURES
@@ -74,9 +76,8 @@ def sample_elements():
         mk_el("2", ["c", "d"]),
     ]
 
-
 # ------------------------------------------------------------
-# MANIFEST FIXTURE
+# MANIFEST FIXTURES
 # ------------------------------------------------------------
 
 @pytest.fixture
@@ -89,14 +90,6 @@ def minimal_manifest(sample_elements):
         elements=sample_elements,
         tee=Tee(trusted_share_gamma=0.2),
     )
-
-
-import json
-import pytest
-
-from scorevision.utils.manifest import Manifest
-from scorevision.utils.manifest import Preproc, Metrics, Pillars, Element, Clip, Tee
-
 
 @pytest.fixture
 def dummy_manifest():
@@ -127,16 +120,17 @@ def dummy_manifest():
         tee=Tee(trusted_share_gamma=0.2),
     )
 
-
-import json
-from ruamel.yaml import YAML
+# ------------------------------------------------------------
+# SIGNED MANIFEST FILE FIXTURE
+# ------------------------------------------------------------
 
 @pytest.fixture
-def signed_manifest_file(tmp_path, dummy_manifest):
+def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
+    """Write a manifest to YAML (for publish tests)."""
     path = tmp_path / "manifest.yaml"
     raw = json.loads(dummy_manifest.to_canonical_json())
 
-    yaml = YAML(typ='unsafe', pure=True)
+    yaml = YAML(typ='safe', pure=True)
     with path.open("w") as f:
         yaml.dump(raw, f)
     

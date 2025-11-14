@@ -1,18 +1,20 @@
-import json
-from unittest.mock import patch
+# tests/cli/test_manifest_publish.py
+
+import os
 from click.testing import CliRunner
 from types import SimpleNamespace
 
+import pytest
 from scorevision.cli.manifest import manifest_cli
-from scorevision.utils.manifest import Manifest
 
 
-def test_publish_updates_index(tmp_path, signed_manifest_file, generated_ed25519_key, fake_settings, r2_mock_store):
+def test_publish_updates_index(tmp_path, signed_manifest_file, signing_key_hex, fake_settings, r2_mock_store):
     store, mock_get, mock_put, mock_delete = r2_mock_store
 
+    # Inject the key via environment variable instead of PEM path
+    os.environ["TEE_KEY_HEX"] = signing_key_hex
+
     from unittest.mock import patch
-    from click.testing import CliRunner
-    from scorevision.cli.manifest import manifest_cli
 
     with patch("scorevision.utils.r2.r2_get_object", side_effect=mock_get), \
          patch("scorevision.utils.r2.r2_put_json", side_effect=mock_put), \
@@ -25,10 +27,8 @@ def test_publish_updates_index(tmp_path, signed_manifest_file, generated_ed25519
             [
                 "publish",
                 str(signed_manifest_file),
-                "--signing-key-path",
-                str(generated_ed25519_key),
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
 

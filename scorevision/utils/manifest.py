@@ -19,12 +19,10 @@ from typing import List, Dict
 from json import dumps
 from base64 import b64encode, b64decode
 from enum import Enum
+from functools import cached_property
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
-
+from nacl.signing import SigningKey, VerifyKey
+from nacl.exceptions import BadSignatureError
 
 # ------------------------------------------------------------
 # ENUMS
@@ -198,9 +196,6 @@ class Manifest:
     tee: Tee
     signature: str | None = None
 
-    # ------------------------------------------------------------
-    # SERIALIZATION
-    # ------------------------------------------------------------
 
     def to_canonical_json(self) -> str:
         """
@@ -210,46 +205,40 @@ class Manifest:
         - Compact separators
         - Sorted keys
         """
-        self.elements.sort(key=lambda e: e.id)
         payload = asdict(self)
+        elements_sorted = sorted(self.elements, key=lambda e: e.id)    
+        payload["elements"] = [asdict(e) for e in elements_sorted]        
         payload.pop("signature", None)
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
-    # ------------------------------------------------------------
-    # SIGNING & VERIFICATION
-    # ------------------------------------------------------------
 
-    def sign(self, private_key: Ed25519PrivateKey) -> None:
+    def sign(self, signing_key:SigningKey) -> None:
         """
         Sign the canonical manifest using an Ed25519 private key.
 
         The signature covers only the canonical JSON payload (excluding
-        the signature field). Result is stored as base64-encoded bytes.
-        """
-        json_bytes = self.to_canonical_json().encode("utf-8")
-        signature = private_key.sign(json_bytes)
-        self.signature = b64encode(signature).decode("ascii")
+        the signature field). Result is stored as a hex-encoded string.
+        """ 
+        self.signature = signing_key.sign(self.to_canonical_json().encode("utf-8")).signature.hex()
 
-    def verify(self, public_key: Ed25519PublicKey) -> bool:
+    def verify(self, verify_key: VerifyKey) -> bool:
         """
         Verify the manifest's signature with the corresponding public key.
         """
         if not self.signature:
-            raise ValueError("Manifest is not signed")
-
+            raise ValueError("Manifest has no signature to verify.")
         try:
-            json_bytes = self.to_canonical_json().encode("utf-8")
-            signature_bytes = b64decode(self.signature)
-            public_key.verify(signature_bytes, json_bytes)
+            verify_key.verify(
+                self.to_canonical_json().encode("utf-8"),
+                bytes.fromhex(self.signature)
+            )
             return True
-        except Exception:
+        except BadSignatureError:
             return False
+        except Exception as e:
+            raise ValueError(f"Signature verification failed: {e}")
 
-    # ------------------------------------------------------------
-    # HASHING
-    # ------------------------------------------------------------
-
-    @property
+    @cached_property
     def hash(self) -> str:
         """
         Compute a stable SHA-256 hash of the manifest content
