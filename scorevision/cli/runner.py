@@ -48,6 +48,7 @@ from scorevision.utils.prometheus import (
 )
 from scorevision.utils.video_processing import FrameStore
 from scorevision.utils.manifest import get_current_manifest 
+from scorevision.utils.windows import get_current_window_id, is_window_active
 
 logger = getLogger(__name__)
 
@@ -213,7 +214,7 @@ def _enough_bboxes_per_frame(
     return ok_frames >= min_frames_required
 
 
-async def runner(slug: str | None = None) -> None:
+async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
@@ -250,14 +251,39 @@ async def runner(slug: str | None = None) -> None:
     try:
         if use_v3:
             try:
-                manifest = get_current_manifest(block_number=None)
+                manifest = get_current_manifest(block_number=block_number)
                 manifest_hash = manifest.manifest_hash
                 expected_window_id = manifest.window_id
+
+                blocks_to_expiry = None
+                if manifest.expiry_block is not None and block_number is not None:
+                    blocks_to_expiry = manifest.expiry_block - block_number
+
                 logger.info(
-                    "[Runner] Loaded Manifest: hash=%s window_id=%s",
+                    "[Runner] Loaded Manifest: hash=%s window_id=%s expiry_block=%s blocks_to_expiry=%s",
                     manifest_hash,
                     expected_window_id,
+                    getattr(manifest, "expiry_block", None),
+                    blocks_to_expiry,
                 )
+
+                if (
+                    block_number is not None
+                    and not is_window_active(
+                        expected_window_id,
+                        current_block=block_number,
+                        expiry_block=manifest.expiry_block,
+                    )
+                ):
+                    logger.warning(
+                        "[Runner] Window %s is not active at block %s (expiry_block=%s). Skipping run.",
+                        expected_window_id,
+                        block_number,
+                        manifest.expiry_block,
+                    )
+                    run_result = "window_inactive"
+                    return
+
             except Exception as e:
                 logger.error(
                     "[Runner] SCOREVISION_USE_CHALLENGE_V3=1 but failed to load Manifest: %s",
@@ -298,12 +324,23 @@ async def runner(slug: str | None = None) -> None:
                         expected_window_id,
                         chal_wid,
                     )
+
+                current_window_id = expected_window_id or chal_wid
             else:
                 challenge, payload, chal_api, frame_store = (
                     await get_challenge_from_scorevision_with_source(
                         video_cache=video_cache
                     )
                 )
+                if block_number is not None:
+                    current_window_id = get_current_window_id(block_number, tempo=300)
+                else:
+                    current_window_id = (chal_api.get("window_id") or None)
+
+            logger.info(
+                "[Runner] Using window_id=%s for this run",
+                current_window_id,
+            )
         except ScoreVisionChallengeError as ce:
             msg = str(ce)
             if "No active evaluation window" in msg:
@@ -392,6 +429,7 @@ async def runner(slug: str | None = None) -> None:
                         miner_run=miner_output,
                         evaluation=evaluation,
                         miner_hotkey_ss58=m.hotkey,
+                        window_id=current_window_id,
                     )
                 except Exception:
                     dt_emit = (loop.time() - emit_start) * 1000.0
@@ -551,7 +589,7 @@ async def runner_loop():
                     block,
                     last_trigger_block,
                 )
-                await runner()
+                await runner(block_number=block)
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()

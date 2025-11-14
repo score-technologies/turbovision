@@ -49,6 +49,7 @@ from scorevision.utils.prometheus import (
     VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS,
 )
 from scorevision.utils.settings import get_settings
+from scorevision.utils.windows import get_current_window_id
 
 logger = logging.getLogger("scorevision.validator")
 
@@ -179,6 +180,13 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
                 st = await get_subtensor()
             block = await st.get_current_block()
             VALIDATOR_BLOCK_HEIGHT.set(block)
+            current_window_id = get_current_window_id(block, tempo=tempo)
+            logger.info(
+                "[validator] current_window_id=%s (block=%d, tempo=%d)",
+                current_window_id,
+                block,
+                tempo,
+            )
 
             if block % tempo != 0 or block <= last_done:
                 try:
@@ -200,7 +208,11 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
             iter_start = iter_loop.time()
             loop_outcome = "unknown"
             try:
-                uids, weights = await get_weights(tail=tail, m_min=m_min)
+                uids, weights = await get_weights(
+                    tail=tail,
+                    m_min=m_min,
+                    window_id=current_window_id,
+                )
                 if not uids:
                     logger.warning("No eligible uids this round; skipping.")
                     CURRENT_WINNER.set(-1)
@@ -296,7 +308,7 @@ def _weighted_median(values: list[float], weights: list[float]) -> float:
     return pairs[-1][0]
 
 
-async def get_weights(tail: int = 36000, m_min: int = 25):
+async def get_weights(tail: int = 36000, m_min: int = 25, *, window_id: str | None = None):
     """
     Cross-validators robust aggregation with stake-weighted outlier filtering.
     Uses alpha stake (meta.S) as the canonical stake for validators, with a
@@ -328,6 +340,8 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     else:
         for hk in meta.hotkeys:
             stake_by_hk[hk] = 0.0
+            
+    target_window_id = window_id
 
     validator_indexes = await get_validator_indexes_from_chain(NETUID)
     if not validator_indexes:
@@ -340,6 +354,15 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         async for line in dataset_sv(tail):
             try:
                 payload = line.get("payload") or {}
+
+                shard_meta = payload.get("meta") or {}
+                shard_window_id = payload.get("window_id") or shard_meta.get("window_id")
+                if target_window_id and shard_window_id and shard_window_id != target_window_id:
+                    VALIDATOR_MINERS_SKIPPED_TOTAL.labels(
+                        reason="window_mismatch"
+                    ).inc()
+                    continue
+
                 miner = payload.get("miner") or {}
                 hk = (miner.get("hotkey") or "").strip()
                 if not hk or hk not in hk_to_uid:
@@ -377,6 +400,15 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     async for line in dataset_sv_multi(tail, validator_indexes):
         try:
             payload = line.get("payload") or {}
+
+            shard_meta = payload.get("meta") or {}
+            shard_window_id = payload.get("window_id") or shard_meta.get("window_id")
+            if target_window_id and shard_window_id and shard_window_id != target_window_id:
+                VALIDATOR_MINERS_SKIPPED_TOTAL.labels(
+                    reason="window_mismatch"
+                ).inc()
+                continue
+
             miner = payload.get("miner") or {}
             miner_hk = (miner.get("hotkey") or "").strip()
             if not miner_hk or miner_hk not in hk_to_uid:

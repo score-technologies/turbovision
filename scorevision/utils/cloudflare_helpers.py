@@ -282,6 +282,7 @@ async def emit_shard(
     miner_run: SVRunOutput,
     evaluation: SVEvaluation,
     miner_hotkey_ss58: str,
+    window_id: str | None = None,
 ) -> None:
 
     settings = get_settings()
@@ -325,6 +326,13 @@ async def emit_shard(
     meta_out = (challenge.meta or {}).copy()
     meta_out["block"] = current_block
 
+    shard_window_id = (
+        window_id
+        or meta_out.get("window_id")
+    )
+    if shard_window_id is not None:
+        meta_out["window_id"] = shard_window_id
+
     shard_payload = {
         "env": "SVEnv",
         "task_id": meta_out.get("task_id"),
@@ -348,6 +356,7 @@ async def emit_shard(
         },
         "ts": time(),
         "block": current_block,
+        "window_id": shard_window_id,
         "source": "api_v2_video",
     }
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
