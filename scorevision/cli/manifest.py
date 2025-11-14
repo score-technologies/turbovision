@@ -2,8 +2,9 @@ import json
 import click
 from pathlib import Path
 from base64 import b64decode
-from ruamel.yaml import YAML
 
+from ruamel.yaml import YAML
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -121,7 +122,13 @@ TEMPLATES = {
     type=click.Path(dir_okay=False, writable=True, path_type=Path),
     required=True,
 )
-def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output: Path):
+@click.option(
+    "--tee-key",
+    type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    required=False,
+    help="TEE EC private key used to derive trusted_share_gamma, etc.",
+)
+def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path|None):
     """Create a new manifest from a template."""
     if template not in TEMPLATES:
         raise click.ClickException(f"Unknown template: {template}")
@@ -183,7 +190,10 @@ def publish_manifest_cmd(manifest_path: Path, signing_key_path: Path):
     try:
         manifest = load_manifest_from_yaml(manifest_path)
 
-        priv = Ed25519PrivateKey.from_private_bytes(signing_key_path.read_bytes())
+        # Load PEM Ed25519 key (required by tests)
+        key_bytes = signing_key_path.read_bytes()
+        priv = serialization.load_pem_private_key(key_bytes, password=None)
+
         manifest.sign(priv)
         h = manifest.hash
 
@@ -191,8 +201,6 @@ def publish_manifest_cmd(manifest_path: Path, signing_key_path: Path):
 
         click.echo(f"🔏 Signed manifest saved to {manifest_path}")
         click.echo(f"🧩 Hash: {h}")
-
-        # TODO: upload_to_r2(manifest, h)
 
     except Exception as e:
         click.echo(f"❌ Publish failed: {e}")

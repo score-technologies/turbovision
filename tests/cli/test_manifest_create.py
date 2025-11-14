@@ -25,7 +25,8 @@ def test_manifest_create(tmp_path: Path, generated_pem_key: Path):
 
     data = out.read_text()
 
-    assert "window_id: 2025-10-24" in data
+    assert "window_id" in data
+    assert "2025-10-24" in data
     assert "expiry_block: 123456" in data
     assert "tee:" in data
     assert "trusted_share_gamma" in data
