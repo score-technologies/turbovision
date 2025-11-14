@@ -1,9 +1,9 @@
-import json
 from pathlib import Path
 from click.testing import CliRunner
 from scorevision.cli.manifest import manifest_cli
 
-def test_manifest_create(tmp_path: Path):
+
+def test_manifest_create(tmp_path: Path, generated_pem_key: Path):
     runner = CliRunner()
 
     out = tmp_path / "test.yaml"
@@ -15,6 +15,7 @@ def test_manifest_create(tmp_path: Path):
             "--template", "default-football",
             "--window-id", "2025-10-24",
             "--expiry-block", "123456",
+            "--tee-key", str(generated_pem_key),
             "--output", str(out),
         ],
     )
@@ -23,7 +24,9 @@ def test_manifest_create(tmp_path: Path):
     assert out.exists()
 
     data = out.read_text()
+
     assert "window_id: 2025-10-24" in data
     assert "expiry_block: 123456" in data
     assert "tee:" in data
     assert "trusted_share_gamma" in data
+

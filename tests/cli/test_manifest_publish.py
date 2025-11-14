@@ -11,12 +11,10 @@ tee:
 elements: []
 """
 
-def test_manifest_publish(tmp_path: Path):
+def test_manifest_publish(tmp_path: Path, generated_ed25519_key: Path):
     runner = CliRunner()
 
     mf_path = tmp_path / "manifest.yaml"
-    key_path = Path("tests/fixtures/private_key_ed25519.pem")
-
     mf_path.write_text(SAMPLE_MANIFEST)
 
     result = runner.invoke(
@@ -25,14 +23,14 @@ def test_manifest_publish(tmp_path: Path):
             "publish",
             str(mf_path),
             "--signing-key-path",
-            str(key_path),
+            str(generated_ed25519_key),
         ],
     )
 
     assert result.exit_code == 0
     assert "Signed manifest" in result.output
 
-    # Make sure signature added
+    # Confirm signature added
     contents = mf_path.read_text()
     assert "signature:" in contents
 
