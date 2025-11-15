@@ -176,11 +176,11 @@ class Manifest:
 
     def to_canonical_json(self) -> str:
         """
-        The canonical JSON representation (via `to_canonical_json`) is stable
-        and signature-independent—meaning the signature field is excluded
-        from hashing and signing so that content hashing is deterministic.
-
         Produce deterministic canonical JSON suitable for hashing and signing.
+        The canonical JSON representation is stable
+        and signature-independent
+        (i.e. the signature is excluded from hashing and signing)
+        so that content hashing is deterministic.
         - Sort Elements lexicographically by ID
         - Exclude signature
         - Compact separators
@@ -195,9 +195,6 @@ class Manifest:
     def sign(self, signing_key: SigningKey) -> None:
         """
         Sign the canonical manifest using an Ed25519 private key.
-
-        The signature covers only the canonical JSON payload (excluding
-        the signature field). Result is stored as a hex-encoded string.
         """
         self.signature = signing_key.sign(
             self.to_canonical_json().encode("utf-8")
@@ -222,8 +219,8 @@ class Manifest:
     @cached_property
     def hash(self) -> str:
         """
-        Compute a stable SHA-256 hash of the manifest content
-        (excluding the signature). This makes the Manifest
-        content-addressable and ensures deterministic hashing.
+        Deterministic hashing by
+        computing a stable SHA-256 hash of the manifest content
+        (This makes the Manifest content-addressable)
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
