@@ -1,12 +1,9 @@
 # tests/fixtures/manifest_fixtures.py
 
-import json
-from types import SimpleNamespace
+from json import loads
 from pathlib import Path
 
-import pytest
-from nacl.signing import SigningKey
-
+from pytest import fixture
 from ruamel.yaml import YAML
 
 from scorevision.utils.manifest import (
@@ -19,41 +16,8 @@ from scorevision.utils.manifest import (
     Clip,
 )
 
-# ------------------------------------------------------------
-# SETTINGS FIXTURE
-# ------------------------------------------------------------
 
-
-@pytest.fixture
-def fake_settings():
-    """A fake settings object with all R2/CDN credentials"""
-    return SimpleNamespace(
-        SCOREVISION_BUCKET="scorevision",
-        SCOREVISION_ENDPOINT="https://unused",
-        SCOREVISION_ACCESS_KEY="x",
-        SCOREVISION_SECRET_KEY="y",
-        NETWORK="testnet",
-    )
-
-
-# ------------------------------------------------------------
-# KEYPAIR FIXTURE
-# ------------------------------------------------------------
-
-
-@pytest.fixture
-def keypair():
-    """Generate a PyNaCl Ed25519 keypair for signing tests."""
-    sk = SigningKey.generate()
-    return sk, sk.verify_key
-
-
-# ------------------------------------------------------------
-# ELEMENT FIXTURES
-# ------------------------------------------------------------
-
-
-@pytest.fixture
+@fixture
 def sample_elements():
     """Provide 3 example Elements for manifest construction."""
 
@@ -82,12 +46,7 @@ def sample_elements():
     ]
 
 
-# ------------------------------------------------------------
-# MANIFEST FIXTURES
-# ------------------------------------------------------------
-
-
-@pytest.fixture
+@fixture
 def minimal_manifest(sample_elements):
     """A reusable manifest for tests."""
     return Manifest(
@@ -99,7 +58,7 @@ def minimal_manifest(sample_elements):
     )
 
 
-@pytest.fixture
+@fixture
 def dummy_manifest():
     """A minimal manifest for publish tests."""
     el = Element(
@@ -126,16 +85,11 @@ def dummy_manifest():
     )
 
 
-# ------------------------------------------------------------
-# SIGNED MANIFEST FILE FIXTURE
-# ------------------------------------------------------------
-
-
-@pytest.fixture
+@fixture
 def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
     """Write a manifest to YAML (for publish tests)."""
     path = tmp_path / "manifest.yaml"
-    raw = json.loads(dummy_manifest.to_canonical_json())
+    raw = loads(dummy_manifest.to_canonical_json())
 
     yaml = YAML(typ="safe", pure=True)
     with path.open("w") as f:
