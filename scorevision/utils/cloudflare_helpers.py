@@ -283,6 +283,11 @@ async def emit_shard(
     evaluation: SVEvaluation,
     miner_hotkey_ss58: str,
     window_id: str | None = None,
+    *,
+    model: str | None = None,
+    revision: str | None = None,
+    chute_id: str | None = None,
+    commitment_meta: dict | None = None,
 ) -> None:
 
     settings = get_settings()
@@ -333,16 +338,27 @@ async def emit_shard(
     if shard_window_id is not None:
         meta_out["window_id"] = shard_window_id
 
+    miner_model = model or getattr(miner_run, "model", None)
+    miner_revision = revision or getattr(miner_run, "revision", None)
+    miner_chute_slug = slug
+    miner_chute_id = chute_id
+
+    miner_info = {
+        "model": miner_model,
+        "revision": miner_revision,
+        "slug": miner_chute_slug,
+        "chute_id": miner_chute_id,
+        "hotkey": miner_hotkey_ss58,
+    }
+    if commitment_meta:
+        miner_info["commitment"] = commitment_meta
+
     shard_payload = {
         "env": "SVEnv",
         "task_id": meta_out.get("task_id"),
         "prompt": challenge.prompt,
         "meta": meta_out,
-        "miner": {
-            "model": getattr(miner_run, "model", None),
-            "slug": slug,
-            "hotkey": miner_hotkey_ss58,
-        },
+        "miner": miner_info,
         "run": {
             "success": getattr(miner_run, "success", None),
             "latency_ms": getattr(miner_run, "latency_ms", None),

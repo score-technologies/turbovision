@@ -5,7 +5,7 @@ import asyncio
 import signal
 import gc
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.challenges import (
@@ -49,6 +49,7 @@ from scorevision.utils.prometheus import (
 from scorevision.utils.video_processing import FrameStore
 from scorevision.utils.manifest import get_current_manifest 
 from scorevision.utils.windows import get_current_window_id, is_window_active
+from scorevision.utils.commitments import get_active_element_ids_by_hotkey
 
 logger = getLogger(__name__)
 
@@ -213,6 +214,28 @@ def _enough_bboxes_per_frame(
             ok_frames += 1
     return ok_frames >= min_frames_required
 
+def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
+
+    if not isinstance(chal_api, dict):
+        return None
+
+    eid = chal_api.get("element_id")
+    if isinstance(eid, str) and eid:
+        return eid
+
+    elem = chal_api.get("element") or {}
+    if isinstance(elem, dict):
+        eid = elem.get("element_id") or elem.get("id")
+        if isinstance(eid, str) and eid:
+            return eid
+
+    meta = chal_api.get("meta") or {}
+    if isinstance(meta, dict):
+        eid = meta.get("element_id") or meta.get("element")
+        if isinstance(eid, str) and eid:
+            return eid
+
+    return None
 
 async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
     settings = get_settings()
@@ -341,6 +364,33 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                 "[Runner] Using window_id=%s for this run",
                 current_window_id,
             )
+
+            element_id = None
+            try:
+                element_id = _extract_element_id_from_chal_api(chal_api)
+            except Exception as e:
+                logger.warning("[Runner] Failed to extract element_id from challenge: %s", e)
+
+            if not element_id:
+                logger.warning(
+                    "[Runner] Challenge missing element_id; refusing to run without manifest-bound element. "
+                    "Check challenge API / manifest wiring."
+                )
+                run_result = "no_element_id"
+                return
+
+            if not current_window_id:
+                logger.warning(
+                    "[Runner] No window_id associated with challenge; refusing to run."
+                )
+                run_result = "no_window_id"
+                return
+
+            logger.info(
+                "[Runner] Challenge bound to element_id=%s window_id=%s",
+                element_id,
+                current_window_id,
+            )
         except ScoreVisionChallengeError as ce:
             msg = str(ce)
             if "No active evaluation window" in msg:
@@ -367,6 +417,26 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
         try:
+            active_commitments = await get_active_element_ids_by_hotkey(current_window_id)
+        except Exception as e:
+            logger.warning(
+                "[Runner] Failed to load element commitments for window %s: %s",
+                current_window_id,
+                e,
+            )
+            active_commitments = {}
+
+        if not active_commitments:
+            logger.warning(
+                "[Runner] No active miner element commitments found for window %s. "
+                "Refusing to process this challenge. Miners must commit to elements via "
+                "`sv miner` (or the appropriate commit helper) before participating.",
+                current_window_id,
+            )
+            run_result = "no_element_commitments"
+            return
+
+        try:
             pgt_build_start = loop.time()
             challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                 chal_api=chal_api,
@@ -388,6 +458,23 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
+
+            hk = getattr(m, "hotkey", None)
+            miner_commitments_for_hk = active_commitments.get(hk or "", {}) if hk else {}
+            miner_proof = miner_commitments_for_hk.get(str(element_id))
+
+            if not miner_proof:
+                logger.info(
+                    "[Runner] Skipping miner uid=%s slug=%s: no active commitment "
+                    "for element_id=%s in window=%s",
+                    getattr(m, "uid", "?"),
+                    getattr(m, "slug", "?"),
+                    element_id,
+                    current_window_id,
+                )
+                RUNNER_MINER_CALLS_TOTAL.labels(outcome="skipped_no_commitment").inc()
+                continue
+
             miner_output: TVPredictInput | None = None
             emission_started = False
             miner_total_start = loop.time()
@@ -422,6 +509,18 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
 
                 emission_started = True
                 emit_start = loop.time()
+
+                commitment_meta = {
+                    "window_id": miner_proof.window_id,
+                    "element_ids": miner_proof.element_ids,
+                    "model": miner_proof.model,
+                    "revision": miner_proof.revision,
+                    "chute_slug": miner_proof.chute_slug,
+                    "chute_id": miner_proof.chute_id,
+                    "service_cap": miner_proof.service_cap,
+                    "commit_block": miner_proof.block,
+                }
+
                 try:
                     await emit_shard(
                         slug=m.slug,
@@ -430,6 +529,10 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                         evaluation=evaluation,
                         miner_hotkey_ss58=m.hotkey,
                         window_id=current_window_id,
+                        model=m.model,
+                        revision=m.revision,
+                        chute_id=m.chute_id,
+                        commitment_meta=commitment_meta,
                     )
                 except Exception:
                     dt_emit = (loop.time() - emit_start) * 1000.0
