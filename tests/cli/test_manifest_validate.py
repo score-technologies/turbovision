@@ -5,7 +5,7 @@ from click.testing import CliRunner
 from scorevision.cli.manifest import manifest_cli
 
 
-def test_manifest_validate_basic(tmp_path: Path):
+def test_manifest_validate_basic(tmp_path: Path) -> None:
     runner = CliRunner()
 
     path = tmp_path / "manifest.yaml"
