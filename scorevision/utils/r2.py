@@ -1,15 +1,29 @@
-import json
-import boto3
+from json import dumps
+
+from boto3 import client
 from botocore.config import Config
+from botocore.exceptions import ClientError, EndpointConnectionError
+from tenacity import (
+    retry,
+    wait_exponential,
+    stop_after_attempt,
+    retry_if_exception_type,
+)
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from scorevision.utils.settings import get_settings
-from scorevision.utils.retry import retry_network
+
+retry_network = retry(
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
+    stop=stop_after_attempt(5),
+    reraise=True,
+    retry=retry_if_exception_type((ClientError, EndpointConnectionError)),
+)
 
 
 def get_r2_client():
     settings = get_settings()
-    return boto3.client(
+    return client(
         "s3",
         endpoint_url=settings.SCOREVISION_ENDPOINT,
         aws_access_key_id=settings.SCOREVISION_ACCESS_KEY,
@@ -20,7 +34,7 @@ def get_r2_client():
 
 
 @retry_network
-def r2_get_object(bucket, key):
+def r2_get_object(bucket: str, key: str) -> tuple[bytes | None, str | None]:
     client = get_r2_client()
     try:
         res = client.get_object(Bucket=bucket, Key=key)
@@ -28,11 +42,17 @@ def r2_get_object(bucket, key):
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchKey":
             return None, None
-        raise
+        raise e
 
 
 @retry_network
-def r2_put_json(bucket, key, data, acl="public-read", if_match=None):
+def r2_put_json(
+    bucket: str,
+    key: str,
+    data: dict,
+    acl: str = "public-read",
+    if_match: str | None = None,
+) -> dict:
     client = get_r2_client()
 
     extra = {}
@@ -42,7 +62,7 @@ def r2_put_json(bucket, key, data, acl="public-read", if_match=None):
     return client.put_object(
         Bucket=bucket,
         Key=key,
-        Body=json.dumps(data).encode("utf-8"),
+        Body=dumps(data).encode("utf-8"),
         ContentType="application/json",
         ACL=acl,
         **extra,
@@ -50,7 +70,6 @@ def r2_put_json(bucket, key, data, acl="public-read", if_match=None):
 
 
 @retry_network
-def r2_delete_object(bucket, key):
+def r2_delete_object(bucket: str, key: str) -> dict:
     client = get_r2_client()
     return client.delete_object(Bucket=bucket, Key=key)
-

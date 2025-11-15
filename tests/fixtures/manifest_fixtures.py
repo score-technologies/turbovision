@@ -1,12 +1,9 @@
 # tests/fixtures/manifest_fixtures.py
 
-import json
-from types import SimpleNamespace
+from json import loads
 from pathlib import Path
 
-import pytest
-from nacl.signing import SigningKey
-
+from pytest import fixture
 from ruamel.yaml import YAML
 
 from scorevision.utils.manifest import (
@@ -19,46 +16,18 @@ from scorevision.utils.manifest import (
     Clip,
 )
 
-# ------------------------------------------------------------
-# SETTINGS FIXTURE
-# ------------------------------------------------------------
 
-@pytest.fixture
-def fake_settings():
-    """A fake settings object with all R2/CDN credentials"""
-    return SimpleNamespace(
-        SCOREVISION_BUCKET="scorevision",
-        SCOREVISION_ENDPOINT="https://unused",
-        SCOREVISION_ACCESS_KEY="x",
-        SCOREVISION_SECRET_KEY="y",
-        NETWORK="testnet",
-    )
-
-# ------------------------------------------------------------
-# KEYPAIR FIXTURE
-# ------------------------------------------------------------
-
-@pytest.fixture
-def keypair():
-    """Generate a PyNaCl Ed25519 keypair for signing tests."""
-    sk = SigningKey.generate()
-    return sk, sk.verify_key
-
-# ------------------------------------------------------------
-# ELEMENT FIXTURES
-# ------------------------------------------------------------
-
-@pytest.fixture
+@fixture
 def sample_elements():
     """Provide 3 example Elements for manifest construction."""
+
     def mk_el(id_, clips):
         return Element(
             id=id_,
             clips=[Clip(hash=c, weight=1.0) for c in clips],
             metrics=Metrics(
                 pillars=Pillars(
-                    iou=1.0, count=0.0, palette=0.5,
-                    smoothness=0.0, role=0.0
+                    iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0
                 )
             ),
             preproc=Preproc(fps=30, resize_long=720, norm="none"),
@@ -76,11 +45,8 @@ def sample_elements():
         mk_el("2", ["c", "d"]),
     ]
 
-# ------------------------------------------------------------
-# MANIFEST FIXTURES
-# ------------------------------------------------------------
 
-@pytest.fixture
+@fixture
 def minimal_manifest(sample_elements):
     """A reusable manifest for tests."""
     return Manifest(
@@ -91,17 +57,15 @@ def minimal_manifest(sample_elements):
         tee=Tee(trusted_share_gamma=0.2),
     )
 
-@pytest.fixture
+
+@fixture
 def dummy_manifest():
     """A minimal manifest for publish tests."""
     el = Element(
         id="TestElement",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
-            pillars=Pillars(
-                iou=1.0, count=0.0, palette=0.5,
-                smoothness=0.0, role=0.0
-            )
+            pillars=Pillars(iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0)
         ),
         preproc=Preproc(fps=30, resize_long=720, norm="none"),
         latency_p95_ms=100,
@@ -120,19 +84,15 @@ def dummy_manifest():
         tee=Tee(trusted_share_gamma=0.2),
     )
 
-# ------------------------------------------------------------
-# SIGNED MANIFEST FILE FIXTURE
-# ------------------------------------------------------------
 
-@pytest.fixture
+@fixture
 def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
     """Write a manifest to YAML (for publish tests)."""
     path = tmp_path / "manifest.yaml"
-    raw = json.loads(dummy_manifest.to_canonical_json())
+    raw = loads(dummy_manifest.to_canonical_json())
 
-    yaml = YAML(typ='safe', pure=True)
+    yaml = YAML(typ="safe", pure=True)
     with path.open("w") as f:
         yaml.dump(raw, f)
-    
-    return path
 
+    return path

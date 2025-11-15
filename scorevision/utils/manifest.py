@@ -5,31 +5,33 @@ This module defines the canonical schema for a Score Vision Manifest.
 A Manifest is a cryptographically signed, content-addressed rulebook
 for a single evaluation window. It specifies Elements, metrics, baselines,
 latency gates, service rates, and TEE-related trust parameters.
-
-The canonical JSON representation (via `to_canonical_json`) is stable
-and signature-independent—meaning the signature field is excluded
-from hashing and signing so that content hashing is deterministic.
 """
 
-from __future__ import annotations
-
+from pathlib import Path
 from hashlib import sha256
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict
 from json import dumps
 from base64 import b64encode, b64decode
 from enum import Enum
 from functools import cached_property
+from json import loads
 
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
+from ruamel.yaml import YAML
+
+
+yaml = YAML()
+yaml.default_flow_style = False
 
 # ------------------------------------------------------------
 # ENUMS
 # ------------------------------------------------------------
 
+
 class NormType(str, Enum):
-    """Preprocessing normalization modes."""
+    """Preprocessing normalisation modes."""
+
     RGB_01 = "rgb-01"
     RGB_255 = "rgb-255"
     NONE = "none"
@@ -38,8 +40,9 @@ class NormType(str, Enum):
 class PillarName(str, Enum):
     """
     Multi-pillar metrics used by Elements.
-    These match Appendix E naming conventions.
+    (See Appendix E for naming conventions).
     """
+
     IOU = "iou"
     COUNT = "count"
     PALETTE = "palette"
@@ -51,11 +54,13 @@ class PillarName(str, Enum):
 # DATA CLASSES
 # ------------------------------------------------------------
 
+
 @dataclass
 class Preproc:
     """
     Preprocessing parameters applied before evaluation.
     """
+
     fps: int
     resize_long: int
     norm: NormType
@@ -67,37 +72,12 @@ class Pillars:
     Multi-pillar scoring weights for an Element.
     Keys must match PillarName enums.
     """
+
     iou: float
     count: float
     palette: float
     smoothness: float
     role: float
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, float]) -> "Pillars":
-        """
-        Construct from a dict where keys may be long-form YAML names.
-        Example YAML keys:
-          iou_placement → iou
-          count_accuracy → count
-          palette_symmetry → palette
-          smoothness → smoothness
-          role_consistency → role
-        """
-        mapping = {
-            "iou_placement": "iou",
-            "iou": "iou",
-            "count_accuracy": "count",
-            "count": "count",
-            "palette_symmetry": "palette",
-            "palette": "palette",
-            "smoothness": "smoothness",
-            "role_consistency": "role",
-            "role": "role",
-        }
-
-        normalized = {mapping[k]: v for k, v in d.items()}
-        return cls(**normalized)
 
 
 @dataclass
@@ -105,6 +85,7 @@ class Metrics:
     """
     Metrics configuration used to score Element performance.
     """
+
     pillars: Pillars
 
 
@@ -114,8 +95,9 @@ class Salt:
     VRF-derived challenge salting parameters ensuring per-validator
     unpredictability. These are always present (default empty lists).
     """
-    offsets: List[int] = field(default_factory=list)
-    strides: List[int] = field(default_factory=list)
+
+    offsets: list[int] = field(default_factory=list)
+    strides: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -126,6 +108,7 @@ class Clip:
       - hash: "sha256:..."
         weight: 1.0
     """
+
     hash: str
     weight: float
 
@@ -147,8 +130,9 @@ class Element:
       delta_floor:       Minimum margin above baseline
       beta:              Difficulty weight
     """
+
     id: str
-    clips: List[Clip]
+    clips: list[Clip]
     metrics: Metrics
     preproc: Preproc
     latency_p95_ms: int
@@ -166,6 +150,7 @@ class Tee:
     Trusted Execution Environment parameters.
     Defines how much reward share comes from Trusted Track.
     """
+
     trusted_share_gamma: float
 
 
@@ -192,34 +177,75 @@ class Manifest:
     window_id: str
     version: str
     expiry_block: int
-    elements: List[Element]
+    elements: list[Element]
     tee: Tee
     signature: str | None = None
 
+    @classmethod
+    def load_yaml(cls, path: Path) -> "Manifest":
+        data = yaml.load(path.read_text())
+        elements = []
+        for e in data["elements"]:
+            pillars = Pillars(**e["metrics"]["pillars"])
+            metrics = Metrics(pillars=pillars)
+            clips = [Clip(hash=c["hash"], weight=c["weight"]) for c in e["clips"]]
+            preproc = Preproc(
+                fps=e["preproc"]["fps"],
+                resize_long=e["preproc"]["resize_long"],
+                norm=e["preproc"]["norm"],
+            )
+            element = Element(
+                id=e["id"],
+                clips=clips,
+                metrics=metrics,
+                preproc=preproc,
+                latency_p95_ms=e["latency_p95_ms"],
+                service_rate_fps=e["service_rate_fps"],
+                pgt_recipe_hash=e["pgt_recipe_hash"],
+                baseline_theta=e["baseline_theta"],
+                delta_floor=e["delta_floor"],
+                beta=e["beta"],
+                salt=Salt(
+                    offsets=e.get("salt", {}).get("offsets", []),
+                    strides=e.get("salt", {}).get("strides", []),
+                ),
+            )
+            elements.append(element)
+        tee = Tee(trusted_share_gamma=data["tee"]["trusted_share_gamma"])
+        return Manifest(
+            window_id=data["window_id"],
+            version=data["version"],
+            expiry_block=data["expiry_block"],
+            elements=elements,
+            tee=tee,
+            signature=data.get("signature"),
+        )
 
     def to_canonical_json(self) -> str:
         """
         Produce deterministic canonical JSON suitable for hashing and signing.
+        The canonical JSON representation is stable
+        and signature-independent
+        (i.e. the signature is excluded from hashing and signing)
+        so that content hashing is deterministic.
         - Sort Elements lexicographically by ID
         - Exclude signature
         - Compact separators
         - Sorted keys
         """
         payload = asdict(self)
-        elements_sorted = sorted(self.elements, key=lambda e: e.id)    
-        payload["elements"] = [asdict(e) for e in elements_sorted]        
+        elements_sorted = sorted(self.elements, key=lambda e: e.id)
+        payload["elements"] = [asdict(e) for e in elements_sorted]
         payload.pop("signature", None)
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
-
-    def sign(self, signing_key:SigningKey) -> None:
+    def sign(self, signing_key: SigningKey) -> None:
         """
         Sign the canonical manifest using an Ed25519 private key.
-
-        The signature covers only the canonical JSON payload (excluding
-        the signature field). Result is stored as a hex-encoded string.
-        """ 
-        self.signature = signing_key.sign(self.to_canonical_json().encode("utf-8")).signature.hex()
+        """
+        self.signature = signing_key.sign(
+            self.to_canonical_json().encode("utf-8")
+        ).signature.hex()
 
     def verify(self, verify_key: VerifyKey) -> bool:
         """
@@ -229,8 +255,7 @@ class Manifest:
             raise ValueError("Manifest has no signature to verify.")
         try:
             verify_key.verify(
-                self.to_canonical_json().encode("utf-8"),
-                bytes.fromhex(self.signature)
+                self.to_canonical_json().encode("utf-8"), bytes.fromhex(self.signature)
             )
             return True
         except BadSignatureError:
@@ -241,9 +266,14 @@ class Manifest:
     @cached_property
     def hash(self) -> str:
         """
-        Compute a stable SHA-256 hash of the manifest content
-        (excluding the signature). This makes the Manifest
-        content-addressable and ensures deterministic hashing.
+        Deterministic hashing by
+        computing a stable SHA-256 hash of the manifest content
+        (This makes the Manifest content-addressable)
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
 
+    def save_yaml(self, path: Path) -> None:
+        raw = loads(self.to_canonical_json())
+        if self.signature:
+            raw["signature"] = self.signature
+        yaml.dump(raw, path.open("w"))

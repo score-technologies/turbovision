@@ -58,4 +58,3 @@ def test_manifest_hash_is_stable(sample_elements):
     )
 
     assert man1.hash == man2.hash
-
