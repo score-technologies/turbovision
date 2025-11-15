@@ -11,6 +11,7 @@ tee:
 elements: []
 """
 
+
 def test_manifest_validate_basic(tmp_path: Path):
     runner = CliRunner()
 
@@ -20,4 +21,3 @@ def test_manifest_validate_basic(tmp_path: Path):
     result = runner.invoke(manifest_cli, ["validate", str(path)])
     assert result.exit_code == 0
     assert "schema looks valid" in result.output or "successful" in result.output
-

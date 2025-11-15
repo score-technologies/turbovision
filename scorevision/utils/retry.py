@@ -1,4 +1,9 @@
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import (
+    retry,
+    wait_exponential,
+    stop_after_attempt,
+    retry_if_exception_type,
+)
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 # Retry for these network failure modes
@@ -8,4 +13,3 @@ retry_network = retry(
     reraise=True,
     retry=retry_if_exception_type((ClientError, EndpointConnectionError)),
 )
-

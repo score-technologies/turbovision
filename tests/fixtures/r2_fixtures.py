@@ -1,6 +1,7 @@
 import pytest
 import json
 
+
 @pytest.fixture
 def r2_mock_store():
     """
@@ -18,7 +19,9 @@ def r2_mock_store():
     def mock_put(bucket, key, data, acl="public-read", if_match=None):
         # Use canonical JSON for integrity
         if isinstance(data, (dict, list)):
-            store[key] = json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            store[key] = json.dumps(data, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            )
         elif isinstance(data, bytes):
             store[key] = data
         else:
@@ -30,4 +33,3 @@ def r2_mock_store():
         return True
 
     return store, mock_get, mock_put, mock_delete
-

@@ -23,6 +23,7 @@ from scorevision.utils.manifest import (
 # SETTINGS FIXTURE
 # ------------------------------------------------------------
 
+
 @pytest.fixture
 def fake_settings():
     """A fake settings object with all R2/CDN credentials"""
@@ -34,9 +35,11 @@ def fake_settings():
         NETWORK="testnet",
     )
 
+
 # ------------------------------------------------------------
 # KEYPAIR FIXTURE
 # ------------------------------------------------------------
+
 
 @pytest.fixture
 def keypair():
@@ -44,21 +47,23 @@ def keypair():
     sk = SigningKey.generate()
     return sk, sk.verify_key
 
+
 # ------------------------------------------------------------
 # ELEMENT FIXTURES
 # ------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_elements():
     """Provide 3 example Elements for manifest construction."""
+
     def mk_el(id_, clips):
         return Element(
             id=id_,
             clips=[Clip(hash=c, weight=1.0) for c in clips],
             metrics=Metrics(
                 pillars=Pillars(
-                    iou=1.0, count=0.0, palette=0.5,
-                    smoothness=0.0, role=0.0
+                    iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0
                 )
             ),
             preproc=Preproc(fps=30, resize_long=720, norm="none"),
@@ -76,9 +81,11 @@ def sample_elements():
         mk_el("2", ["c", "d"]),
     ]
 
+
 # ------------------------------------------------------------
 # MANIFEST FIXTURES
 # ------------------------------------------------------------
+
 
 @pytest.fixture
 def minimal_manifest(sample_elements):
@@ -91,6 +98,7 @@ def minimal_manifest(sample_elements):
         tee=Tee(trusted_share_gamma=0.2),
     )
 
+
 @pytest.fixture
 def dummy_manifest():
     """A minimal manifest for publish tests."""
@@ -98,10 +106,7 @@ def dummy_manifest():
         id="TestElement",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
-            pillars=Pillars(
-                iou=1.0, count=0.0, palette=0.5,
-                smoothness=0.0, role=0.0
-            )
+            pillars=Pillars(iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0)
         ),
         preproc=Preproc(fps=30, resize_long=720, norm="none"),
         latency_p95_ms=100,
@@ -120,9 +125,11 @@ def dummy_manifest():
         tee=Tee(trusted_share_gamma=0.2),
     )
 
+
 # ------------------------------------------------------------
 # SIGNED MANIFEST FILE FIXTURE
 # ------------------------------------------------------------
+
 
 @pytest.fixture
 def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
@@ -130,9 +137,8 @@ def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
     path = tmp_path / "manifest.yaml"
     raw = json.loads(dummy_manifest.to_canonical_json())
 
-    yaml = YAML(typ='safe', pure=True)
+    yaml = YAML(typ="safe", pure=True)
     with path.open("w") as f:
         yaml.dump(raw, f)
-    
-    return path
 
+    return path

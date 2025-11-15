@@ -28,8 +28,10 @@ from nacl.exceptions import BadSignatureError
 # ENUMS
 # ------------------------------------------------------------
 
+
 class NormType(str, Enum):
     """Preprocessing normalization modes."""
+
     RGB_01 = "rgb-01"
     RGB_255 = "rgb-255"
     NONE = "none"
@@ -40,6 +42,7 @@ class PillarName(str, Enum):
     Multi-pillar metrics used by Elements.
     These match Appendix E naming conventions.
     """
+
     IOU = "iou"
     COUNT = "count"
     PALETTE = "palette"
@@ -51,11 +54,13 @@ class PillarName(str, Enum):
 # DATA CLASSES
 # ------------------------------------------------------------
 
+
 @dataclass
 class Preproc:
     """
     Preprocessing parameters applied before evaluation.
     """
+
     fps: int
     resize_long: int
     norm: NormType
@@ -67,6 +72,7 @@ class Pillars:
     Multi-pillar scoring weights for an Element.
     Keys must match PillarName enums.
     """
+
     iou: float
     count: float
     palette: float
@@ -105,6 +111,7 @@ class Metrics:
     """
     Metrics configuration used to score Element performance.
     """
+
     pillars: Pillars
 
 
@@ -114,6 +121,7 @@ class Salt:
     VRF-derived challenge salting parameters ensuring per-validator
     unpredictability. These are always present (default empty lists).
     """
+
     offsets: List[int] = field(default_factory=list)
     strides: List[int] = field(default_factory=list)
 
@@ -126,6 +134,7 @@ class Clip:
       - hash: "sha256:..."
         weight: 1.0
     """
+
     hash: str
     weight: float
 
@@ -147,6 +156,7 @@ class Element:
       delta_floor:       Minimum margin above baseline
       beta:              Difficulty weight
     """
+
     id: str
     clips: List[Clip]
     metrics: Metrics
@@ -166,6 +176,7 @@ class Tee:
     Trusted Execution Environment parameters.
     Defines how much reward share comes from Trusted Track.
     """
+
     trusted_share_gamma: float
 
 
@@ -196,7 +207,6 @@ class Manifest:
     tee: Tee
     signature: str | None = None
 
-
     def to_canonical_json(self) -> str:
         """
         Produce deterministic canonical JSON suitable for hashing and signing.
@@ -206,20 +216,21 @@ class Manifest:
         - Sorted keys
         """
         payload = asdict(self)
-        elements_sorted = sorted(self.elements, key=lambda e: e.id)    
-        payload["elements"] = [asdict(e) for e in elements_sorted]        
+        elements_sorted = sorted(self.elements, key=lambda e: e.id)
+        payload["elements"] = [asdict(e) for e in elements_sorted]
         payload.pop("signature", None)
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
-
-    def sign(self, signing_key:SigningKey) -> None:
+    def sign(self, signing_key: SigningKey) -> None:
         """
         Sign the canonical manifest using an Ed25519 private key.
 
         The signature covers only the canonical JSON payload (excluding
         the signature field). Result is stored as a hex-encoded string.
-        """ 
-        self.signature = signing_key.sign(self.to_canonical_json().encode("utf-8")).signature.hex()
+        """
+        self.signature = signing_key.sign(
+            self.to_canonical_json().encode("utf-8")
+        ).signature.hex()
 
     def verify(self, verify_key: VerifyKey) -> bool:
         """
@@ -229,8 +240,7 @@ class Manifest:
             raise ValueError("Manifest has no signature to verify.")
         try:
             verify_key.verify(
-                self.to_canonical_json().encode("utf-8"),
-                bytes.fromhex(self.signature)
+                self.to_canonical_json().encode("utf-8"), bytes.fromhex(self.signature)
             )
             return True
         except BadSignatureError:
@@ -246,4 +256,3 @@ class Manifest:
         content-addressable and ensures deterministic hashing.
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
-

@@ -28,6 +28,7 @@ yaml.default_flow_style = False
 # Utility: Load YAML manifest → Manifest object
 # ============================================================
 
+
 def load_manifest_from_yaml(path: Path) -> Manifest:
     data = yaml.load(path.read_text())
 
@@ -79,6 +80,7 @@ def load_manifest_from_yaml(path: Path) -> Manifest:
 # Utility: Dump Manifest → YAML
 # ============================================================
 
+
 def save_manifest_yaml(manifest: Manifest, path: Path):
     raw = json.loads(manifest.to_canonical_json())
     if manifest.signature:
@@ -89,6 +91,7 @@ def save_manifest_yaml(manifest: Manifest, path: Path):
 # ============================================================
 # Manifest CLI
 # ============================================================
+
 
 @click.group(name="manifest")
 def manifest_cli():
@@ -109,18 +112,27 @@ TEMPLATES = {
     }
 }
 
+
 @manifest_cli.command("create")
 @click.option("--template", required=True, type=str, help="Template name.")
 @click.option("--window-id", required=True, type=str, help="Window ID (YYYY-MM-DD).")
 @click.option("--expiry-block", required=True, type=int, help="Expiry block.")
-@click.option('--output', '-o', required=True, type=click.Path(dir_okay=False, writable=True, path_type=Path, exists=False), help="output path for generated yaml")
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(dir_okay=False, writable=True, path_type=Path, exists=False),
+    help="output path for generated yaml",
+)
 @click.option(
     "--tee-key",
     type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
     required=False,
     help="TEE Ed25519 private key (optional, can also use TEE_KEY_HEX env)",
 )
-def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path | None):
+def create_manifest_cmd(
+    template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path | None
+):
     """Create a new manifest from a template."""
     if template not in TEMPLATES:
         raise click.ClickException(f"Unknown template: {template}")
@@ -156,9 +168,12 @@ def create_manifest_cmd(template: str, window_id: str, expiry_block: int, output
 # VALIDATE
 # ============================================================
 
+
 @manifest_cli.command("validate")
 @click.argument("manifest_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--public-key", type=str, required=False, help="Ed25519 public key (hex or base64).")
+@click.option(
+    "--public-key", type=str, required=False, help="Ed25519 public key (hex or base64)."
+)
 def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
     """Validate schema, pillars, baseline, and optionally signature."""
     try:
@@ -178,7 +193,9 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
 
             verify_key = VerifyKey(pub_bytes)
             try:
-                verify_key.verify(manifest.to_canonical_json().encode(), b64decode(manifest.signature))
+                verify_key.verify(
+                    manifest.to_canonical_json().encode(), b64decode(manifest.signature)
+                )
                 click.echo("🔐 Signature OK.")
             except BadSignatureError:
                 click.echo("❌ Signature invalid.")
@@ -194,9 +211,14 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
 # PUBLISH
 # ============================================================
 
+
 @manifest_cli.command("publish")
 @click.argument("manifest_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--signing-key-path", type=click.Path(path_type=Path), help="Ed25519 key as raw hex (optional, fallback to TEE_KEY_HEX)")
+@click.option(
+    "--signing-key-path",
+    type=click.Path(path_type=Path),
+    help="Ed25519 key as raw hex (optional, fallback to TEE_KEY_HEX)",
+)
 def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None):
     """
     Sign, upload (with retries), integrity-check, and update index.json.
@@ -215,7 +237,9 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
         key_hex = os.environ["TEE_KEY_HEX"]
 
     if not key_hex:
-        raise click.UsageError("Either --signing-key-path or TEE_KEY_HEX env must be provided.")
+        raise click.UsageError(
+            "Either --signing-key-path or TEE_KEY_HEX env must be provided."
+        )
 
     signing_key = SigningKey(bytes.fromhex(key_hex))
 
@@ -248,7 +272,9 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
         raise click.ClickException("Remote manifest missing after upload.")
     remote_hash = hashlib.sha256(remote_bytes).hexdigest()
     if remote_hash != manifest_hash:
-        raise click.ClickException(f"Integrity mismatch: local={manifest_hash} remote={remote_hash}")
+        raise click.ClickException(
+            f"Integrity mismatch: local={manifest_hash} remote={remote_hash}"
+        )
     click.echo("🧩 Integrity OK.")
 
     # Update index.json
@@ -277,9 +303,11 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
 
     click.echo("✅ Publish complete.")
 
+
 # ============================================================
 # LIST (stub)
 # ============================================================
+
 
 @manifest_cli.command("list")
 def list_manifests_cmd():
@@ -291,6 +319,7 @@ def list_manifests_cmd():
 # ============================================================
 # CURRENT (stub)
 # ============================================================
+
 
 @manifest_cli.command("current")
 @click.option("--block", type=int, default=None)
@@ -307,10 +336,10 @@ def current_manifest_cmd(block: int):
 # ROLLBACK (stub)
 # ============================================================
 
+
 @manifest_cli.command("rollback")
 @click.option("--to-hash", required=True, type=str)
 def rollback_manifest_cmd(to_hash: str):
     """Rollback CDN manifest pointer to a previous hash."""
     click.echo(f"⚠ Rollback requested to manifest hash {to_hash}")
     # TODO: update CDN index.json pointer
-
