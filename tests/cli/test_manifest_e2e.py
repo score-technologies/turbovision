@@ -72,4 +72,3 @@ def test_manifest_full_flow(
     # ---------------------------
     res4 = runner.invoke(manifest_cli, ["validate", str(manifest_path)])
     assert res4.exit_code == 0, res4.output
-
