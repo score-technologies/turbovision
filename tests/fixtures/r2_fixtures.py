@@ -1,8 +1,9 @@
-import pytest
-import json
+from json import dumps
+
+from pytest import fixture
 
 
-@pytest.fixture
+@fixture
 def r2_mock_store():
     """
     Provides a mock in-memory R2 store with helpers:
@@ -19,7 +20,7 @@ def r2_mock_store():
     def mock_put(bucket, key, data, acl="public-read", if_match=None):
         # Use canonical JSON for integrity
         if isinstance(data, (dict, list)):
-            store[key] = json.dumps(data, separators=(",", ":"), sort_keys=True).encode(
+            store[key] = dumps(data, separators=(",", ":"), sort_keys=True).encode(
                 "utf-8"
             )
         elif isinstance(data, bytes):
