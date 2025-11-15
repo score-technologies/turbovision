@@ -2,27 +2,29 @@ from os import environ
 from json import loads
 from pathlib import Path
 from base64 import b64decode
+from datetime import datetime, timezone
+from hashlib import sha256
 
 import click
 from nacl.signing import SigningKey
 
-from scorevision.utils.manifest import (
-    Manifest,
-    Element,
-    Metrics,
-    Pillars,
-    Preproc,
-    Tee,
-    Salt,
-    Clip,
-)
+from scorevision.utils.manifest import Manifest
 from scorevision.utils.settings import get_settings
 from scorevision.utils.manifest import yaml
-
+from scorevision.utils.r2 import r2_get_object, r2_put_json, r2_delete_object
 
 # ============================================================
-# Utility: Dump Manifest → YAML
+# TEMPLATES
 # ============================================================
+
+TEMPLATES = {
+    "default-football": {
+        "version": "1.3",
+        "tee": {"trusted_share_gamma": 0.2},
+        "expiry_block": None,
+        "elements": [],
+    }
+}
 
 
 # ============================================================
@@ -34,20 +36,6 @@ from scorevision.utils.manifest import yaml
 def manifest_cli():
     """Manage ScoreVision manifests."""
     pass
-
-
-# ============================================================
-# CREATE
-# ============================================================
-
-TEMPLATES = {
-    "default-football": {
-        "version": "1.3",
-        "tee": {"trusted_share_gamma": 0.2},
-        "expiry_block": None,
-        "elements": [],
-    }
-}
 
 
 @manifest_cli.command("create")
@@ -101,11 +89,6 @@ def create_manifest_cmd(
     click.echo(f"✅ Manifest scaffold generated at {output}")
 
 
-# ============================================================
-# VALIDATE
-# ============================================================
-
-
 @manifest_cli.command("validate")
 @click.argument("manifest_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -142,11 +125,6 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
         click.echo("✅ Schema validation successful.")
     except Exception as e:
         click.echo(f"❌ Validation failed: {e}")
-
-
-# ============================================================
-# PUBLISH
-# ============================================================
 
 
 @manifest_cli.command("publish")
@@ -191,10 +169,6 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     # ----------------------------------------------------------
     # Upload to R2/CDN
     # ----------------------------------------------------------
-    from scorevision.utils.r2 import r2_get_object, r2_put_json, r2_delete_object
-    import hashlib
-    from datetime import datetime, timezone
-
     manifest_key = f"manifests/{manifest_hash}.json"
     existing, _ = r2_get_object(bucket, manifest_key)
 
@@ -207,7 +181,7 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     remote_bytes, _ = r2_get_object(bucket, manifest_key)
     if remote_bytes is None:
         raise click.ClickException("Remote manifest missing after upload.")
-    remote_hash = hashlib.sha256(remote_bytes).hexdigest()
+    remote_hash = sha256(remote_bytes).hexdigest()
     if remote_hash != manifest_hash:
         raise click.ClickException(
             f"Integrity mismatch: local={manifest_hash} remote={remote_hash}"
@@ -242,7 +216,7 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
 
 
 # ============================================================
-# LIST (stub)
+# TODO
 # ============================================================
 
 
@@ -251,11 +225,6 @@ def list_manifests_cmd():
     """List published manifests from CDN/R2 index."""
     click.echo("📄 Listing manifests not yet implemented.")
     # TODO: load index.json from R2 and print entries
-
-
-# ============================================================
-# CURRENT (stub)
-# ============================================================
 
 
 @manifest_cli.command("current")
@@ -267,11 +236,6 @@ def current_manifest_cmd(block: int):
         f"ℹ Would fetch active manifest from CDN index for block={block or 'latest'} "
         f"(network={settings.NETWORK})."
     )
-
-
-# ============================================================
-# ROLLBACK (stub)
-# ============================================================
 
 
 @manifest_cli.command("rollback")
