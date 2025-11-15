@@ -54,9 +54,9 @@ def test_manifest_full_flow(
     # 3. PUBLISH (sign + upload)
     # ---------------------------
     with (
-        patch("scorevision.utils.r2.r2_get_object", side_effect=mock_get),
-        patch("scorevision.utils.r2.r2_put_json", side_effect=mock_put),
-        patch("scorevision.utils.r2.r2_delete_object", side_effect=mock_delete),
+        patch("scorevision.cli.manifest.r2_get_object", side_effect=mock_get),
+        patch("scorevision.cli.manifest.r2_put_json", side_effect=mock_put),
+        patch("scorevision.cli.manifest.r2_delete_object", side_effect=mock_delete),
         patch("scorevision.cli.manifest.get_settings", return_value=fake_settings),
     ):
 
