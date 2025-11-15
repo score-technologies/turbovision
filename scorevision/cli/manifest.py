@@ -35,7 +35,7 @@ def load_manifest_from_yaml(path: Path) -> Manifest:
     # Normalize element structure (YAML → Python dataclasses)
     elements = []
     for e in data["elements"]:
-        pillars = Pillars.from_dict(e["metrics"]["pillars"])
+        pillars = Pillars(**e["metrics"]["pillars"])
         metrics = Metrics(pillars=pillars)
 
         clips = [Clip(hash=c["hash"], weight=c["weight"]) for c in e["clips"]]

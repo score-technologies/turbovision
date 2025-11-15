@@ -5,17 +5,10 @@ This module defines the canonical schema for a Score Vision Manifest.
 A Manifest is a cryptographically signed, content-addressed rulebook
 for a single evaluation window. It specifies Elements, metrics, baselines,
 latency gates, service rates, and TEE-related trust parameters.
-
-The canonical JSON representation (via `to_canonical_json`) is stable
-and signature-independent—meaning the signature field is excluded
-from hashing and signing so that content hashing is deterministic.
 """
-
-from __future__ import annotations
 
 from hashlib import sha256
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict
 from json import dumps
 from base64 import b64encode, b64decode
 from enum import Enum
@@ -30,7 +23,7 @@ from nacl.exceptions import BadSignatureError
 
 
 class NormType(str, Enum):
-    """Preprocessing normalization modes."""
+    """Preprocessing normalisation modes."""
 
     RGB_01 = "rgb-01"
     RGB_255 = "rgb-255"
@@ -40,7 +33,7 @@ class NormType(str, Enum):
 class PillarName(str, Enum):
     """
     Multi-pillar metrics used by Elements.
-    These match Appendix E naming conventions.
+    (See Appendix E for naming conventions).
     """
 
     IOU = "iou"
@@ -79,32 +72,6 @@ class Pillars:
     smoothness: float
     role: float
 
-    @classmethod
-    def from_dict(cls, d: Dict[str, float]) -> "Pillars":
-        """
-        Construct from a dict where keys may be long-form YAML names.
-        Example YAML keys:
-          iou_placement → iou
-          count_accuracy → count
-          palette_symmetry → palette
-          smoothness → smoothness
-          role_consistency → role
-        """
-        mapping = {
-            "iou_placement": "iou",
-            "iou": "iou",
-            "count_accuracy": "count",
-            "count": "count",
-            "palette_symmetry": "palette",
-            "palette": "palette",
-            "smoothness": "smoothness",
-            "role_consistency": "role",
-            "role": "role",
-        }
-
-        normalized = {mapping[k]: v for k, v in d.items()}
-        return cls(**normalized)
-
 
 @dataclass
 class Metrics:
@@ -122,8 +89,8 @@ class Salt:
     unpredictability. These are always present (default empty lists).
     """
 
-    offsets: List[int] = field(default_factory=list)
-    strides: List[int] = field(default_factory=list)
+    offsets: list[int] = field(default_factory=list)
+    strides: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -158,7 +125,7 @@ class Element:
     """
 
     id: str
-    clips: List[Clip]
+    clips: list[Clip]
     metrics: Metrics
     preproc: Preproc
     latency_p95_ms: int
@@ -203,12 +170,16 @@ class Manifest:
     window_id: str
     version: str
     expiry_block: int
-    elements: List[Element]
+    elements: list[Element]
     tee: Tee
     signature: str | None = None
 
     def to_canonical_json(self) -> str:
         """
+        The canonical JSON representation (via `to_canonical_json`) is stable
+        and signature-independent—meaning the signature field is excluded
+        from hashing and signing so that content hashing is deterministic.
+
         Produce deterministic canonical JSON suitable for hashing and signing.
         - Sort Elements lexicographically by ID
         - Exclude signature
