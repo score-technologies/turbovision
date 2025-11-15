@@ -22,4 +22,6 @@ elements: []
 
     result = runner.invoke(manifest_cli, ["validate", str(path)])
     assert result.exit_code == 0
-    assert "schema looks valid" in result.output or "successful" in result.output
+    assert "Schema is valid" in result.output
+    assert "Manifest is unsigned" in result.output
+    assert "Validation complete" in result.output

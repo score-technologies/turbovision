@@ -95,36 +95,57 @@ def create_manifest_cmd(
     "--public-key", type=str, required=False, help="Ed25519 public key (hex or base64)."
 )
 def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
-    """Validate schema, pillars, baseline, and optionally signature."""
+    """Validate manifest schema and optionally its Ed25519 signature."""
     try:
+        # Load the manifest
         manifest = Manifest.load_yaml(manifest_path)
-        _ = manifest.hash  # ensure canonical JSON is valid
 
-        if manifest.signature and public_key:
-            # Determine whether key is a file, hex string, or base64
-            pub_bytes = None
-            if Path(public_key).exists():
-                pub_bytes = Path(public_key).read_bytes()
+        # Basic schema/hash validation (throws if YAML/JSON is invalid)
+        _ = manifest.hash
+        click.echo("✅ Schema is valid and canonical hash computed.")
+
+        # If signature is present, verify it
+        if manifest.signature:
+            if not public_key:
+                click.echo(
+                    "ℹ Manifest is signed, but no public key was provided to verify it."
+                )
             else:
                 try:
-                    pub_bytes = bytes.fromhex(public_key)
-                except ValueError:
-                    pub_bytes = b64decode(public_key)
+                    # Determine whether key is a file, hex string, or base64
+                    pub_bytes: bytes
+                    if Path(public_key).exists():
+                        pub_bytes = Path(public_key).read_bytes()
+                    else:
+                        try:
+                            pub_bytes = bytes.fromhex(public_key)
+                        except ValueError:
+                            pub_bytes = b64decode(public_key)
 
-            verify_key = VerifyKey(pub_bytes)
-            try:
-                verify_key.verify(
-                    manifest.to_canonical_json().encode(), b64decode(manifest.signature)
-                )
-                click.echo("🔐 Signature OK.")
-            except BadSignatureError:
-                click.echo("❌ Signature invalid.")
-        elif manifest.signature:
-            click.echo("ℹ Manifest signed but no public key provided.")
+                    from nacl.signing import VerifyKey
 
-        click.echo("✅ Schema validation successful.")
+                    verify_key = VerifyKey(pub_bytes)
+
+                    if manifest.verify(verify_key):
+                        click.echo("🔐 Signature OK.")
+                    else:
+                        click.echo("❌ Signature invalid.", err=True)
+                        raise click.ClickException(
+                            "Manifest signature verification failed."
+                        )
+
+                except Exception as e:
+                    click.echo(f"❌ Signature verification error: {e}", err=True)
+                    raise click.ClickException("Failed to verify manifest signature.")
+
+        else:
+            click.echo("ℹ Manifest is unsigned.")
+
+        click.echo("✅ Validation complete.")
+
     except Exception as e:
-        click.echo(f"❌ Validation failed: {e}")
+        click.echo(f"❌ Validation failed: {e}", err=True)
+        raise click.ClickException("Manifest validation failed.")
 
 
 @manifest_cli.command("publish")
@@ -215,16 +236,31 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     click.echo("✅ Publish complete.")
 
 
-# ============================================================
-# TODO
-# ============================================================
-
-
 @manifest_cli.command("list")
 def list_manifests_cmd():
     """List published manifests from CDN/R2 index."""
-    click.echo("📄 Listing manifests not yet implemented.")
-    # TODO: load index.json from R2 and print entries
+    settings = get_settings()
+    bucket = settings.SCOREVISION_BUCKET
+    index_key = "index.json"
+
+    index_bytes, _ = r2_get_object(bucket, index_key)
+    if not index_bytes:
+        click.echo("ℹ No manifests published yet.")
+        return
+
+    index = loads(index_bytes.decode("utf-8"))
+    windows = index.get("windows", {})
+    if not windows:
+        click.echo("ℹ No manifests found in index.")
+        return
+
+    click.echo("📄 Published manifests:")
+    for win, info in sorted(windows.items()):
+        click.echo(f"  - Window: {win}")
+        click.echo(f"    Current Hash: {info.get('current')}")
+        click.echo(f"    Version: {info.get('version')}")
+        click.echo(f"    Expiry Block: {info.get('expiry_block')}")
+        click.echo(f"    Updated At: {info.get('updated_at')}")
 
 
 @manifest_cli.command("current")
@@ -232,15 +268,29 @@ def list_manifests_cmd():
 def current_manifest_cmd(block: int):
     """Show active manifest for a given block."""
     settings = get_settings()
-    click.echo(
-        f"ℹ Would fetch active manifest from CDN index for block={block or 'latest'} "
-        f"(network={settings.NETWORK})."
-    )
+    bucket = settings.SCOREVISION_BUCKET
+    index_bytes, _ = r2_get_object(bucket, "index.json")
+    if not index_bytes:
+        click.echo("❌ No manifests published.")
+        return
 
+    index = loads(index_bytes.decode("utf-8"))
+    windows = index.get("windows", {})
 
-@manifest_cli.command("rollback")
-@click.option("--to-hash", required=True, type=str)
-def rollback_manifest_cmd(to_hash: str):
-    """Rollback CDN manifest pointer to a previous hash."""
-    click.echo(f"⚠ Rollback requested to manifest hash {to_hash}")
-    # TODO: update CDN index.json pointer
+    if not windows:
+        click.echo("❌ No windows in index.")
+        return
+
+    if block is None:
+        # Show latest
+        latest_win = max(windows.keys())
+        info = windows[latest_win]
+        click.echo(f"ℹ Latest manifest: Window={latest_win}, Hash={info['current']}")
+    else:
+        for win, info in windows.items():
+            if info.get("expiry_block") is not None and info["expiry_block"] >= block:
+                click.echo(
+                    f"ℹ Active manifest for block {block}: Window={win}, Hash={info['current']}"
+                )
+                return
+        click.echo(f"ℹ No active manifest found for block {block}")
