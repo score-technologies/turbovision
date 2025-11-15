@@ -1,10 +1,9 @@
-import os
-import json
-import click
+from os import environ
+from json import loads
 from pathlib import Path
 from base64 import b64decode
 
-from ruamel.yaml import YAML
+import click
 from nacl.signing import SigningKey
 
 from scorevision.utils.manifest import (
@@ -18,74 +17,12 @@ from scorevision.utils.manifest import (
     Clip,
 )
 from scorevision.utils.settings import get_settings
-
-
-yaml = YAML()
-yaml.default_flow_style = False
-
-
-# ============================================================
-# Utility: Load YAML manifest → Manifest object
-# ============================================================
-
-
-def load_manifest_from_yaml(path: Path) -> Manifest:
-    data = yaml.load(path.read_text())
-
-    # Normalize element structure (YAML → Python dataclasses)
-    elements = []
-    for e in data["elements"]:
-        pillars = Pillars(**e["metrics"]["pillars"])
-        metrics = Metrics(pillars=pillars)
-
-        clips = [Clip(hash=c["hash"], weight=c["weight"]) for c in e["clips"]]
-
-        preproc = Preproc(
-            fps=e["preproc"]["fps"],
-            resize_long=e["preproc"]["resize_long"],
-            norm=e["preproc"]["norm"],
-        )
-
-        element = Element(
-            id=e["id"],
-            clips=clips,
-            metrics=metrics,
-            preproc=preproc,
-            latency_p95_ms=e["latency_p95_ms"],
-            service_rate_fps=e["service_rate_fps"],
-            pgt_recipe_hash=e["pgt_recipe_hash"],
-            baseline_theta=e["baseline_theta"],
-            delta_floor=e["delta_floor"],
-            beta=e["beta"],
-            salt=Salt(
-                offsets=e.get("salt", {}).get("offsets", []),
-                strides=e.get("salt", {}).get("strides", []),
-            ),
-        )
-        elements.append(element)
-
-    tee = Tee(trusted_share_gamma=data["tee"]["trusted_share_gamma"])
-
-    return Manifest(
-        window_id=data["window_id"],
-        version=data["version"],
-        expiry_block=data["expiry_block"],
-        elements=elements,
-        tee=tee,
-        signature=data.get("signature"),
-    )
+from scorevision.utils.manifest import yaml
 
 
 # ============================================================
 # Utility: Dump Manifest → YAML
 # ============================================================
-
-
-def save_manifest_yaml(manifest: Manifest, path: Path):
-    raw = json.loads(manifest.to_canonical_json())
-    if manifest.signature:
-        raw["signature"] = manifest.signature
-    yaml.dump(raw, path.open("w"))
 
 
 # ============================================================
@@ -144,8 +81,8 @@ def create_manifest_cmd(
     key_hex = None
     if tee_key:
         key_hex = tee_key.read_text().strip()
-    elif os.environ.get("TEE_KEY_HEX"):
-        key_hex = os.environ["TEE_KEY_HEX"]
+    elif environ.get("TEE_KEY_HEX"):
+        key_hex = environ["TEE_KEY_HEX"]
 
     if key_hex:
         signing_key = SigningKey(bytes.fromhex(key_hex))
@@ -177,7 +114,7 @@ def create_manifest_cmd(
 def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
     """Validate schema, pillars, baseline, and optionally signature."""
     try:
-        manifest = load_manifest_from_yaml(manifest_path)
+        manifest = Manifest.load_yaml(manifest_path)
         _ = manifest.hash  # ensure canonical JSON is valid
 
         if manifest.signature and public_key:
@@ -233,8 +170,8 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     key_hex = None
     if signing_key_path:
         key_hex = signing_key_path.read_text().strip()
-    elif os.environ.get("TEE_KEY_HEX"):
-        key_hex = os.environ["TEE_KEY_HEX"]
+    elif environ.get("TEE_KEY_HEX"):
+        key_hex = environ["TEE_KEY_HEX"]
 
     if not key_hex:
         raise click.UsageError(
@@ -246,10 +183,10 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     # ----------------------------------------------------------
     # Load + sign manifest
     # ----------------------------------------------------------
-    manifest = load_manifest_from_yaml(manifest_path)
+    manifest = Manifest.load_yaml(manifest_path)
     manifest.sign(signing_key)
     manifest_hash = manifest.hash
-    save_manifest_yaml(manifest, manifest_path)
+    manifest.save_yaml(manifest_path)
 
     # ----------------------------------------------------------
     # Upload to R2/CDN
@@ -263,7 +200,7 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
 
     if existing is None:
         click.echo(f"⬆ Uploading manifest {manifest_hash}...")
-        r2_put_json(bucket, manifest_key, json.loads(manifest.to_canonical_json()))
+        r2_put_json(bucket, manifest_key, loads(manifest.to_canonical_json()))
     else:
         click.echo("ℹ Manifest already exists in CDN (skipping upload).")
 
@@ -280,7 +217,7 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     # Update index.json
     index_key = "index.json"
     index_bytes, etag = r2_get_object(bucket, index_key)
-    index = json.loads(index_bytes.decode("utf-8")) if index_bytes else {"windows": {}}
+    index = loads(index_bytes.decode("utf-8")) if index_bytes else {"windows": {}}
     win = manifest.window_id
     index.setdefault("windows", {}).setdefault(win, {})
     index["windows"][win].update(

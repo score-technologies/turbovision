@@ -7,15 +7,22 @@ for a single evaluation window. It specifies Elements, metrics, baselines,
 latency gates, service rates, and TEE-related trust parameters.
 """
 
+from pathlib import Path
 from hashlib import sha256
 from dataclasses import dataclass, field, asdict
 from json import dumps
 from base64 import b64encode, b64decode
 from enum import Enum
 from functools import cached_property
+from json import loads
 
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
+from ruamel.yaml import YAML
+
+
+yaml = YAML()
+yaml.default_flow_style = False
 
 # ------------------------------------------------------------
 # ENUMS
@@ -174,6 +181,46 @@ class Manifest:
     tee: Tee
     signature: str | None = None
 
+    @classmethod
+    def load_yaml(cls, path: Path) -> "Manifest":
+        data = yaml.load(path.read_text())
+        elements = []
+        for e in data["elements"]:
+            pillars = Pillars(**e["metrics"]["pillars"])
+            metrics = Metrics(pillars=pillars)
+            clips = [Clip(hash=c["hash"], weight=c["weight"]) for c in e["clips"]]
+            preproc = Preproc(
+                fps=e["preproc"]["fps"],
+                resize_long=e["preproc"]["resize_long"],
+                norm=e["preproc"]["norm"],
+            )
+            element = Element(
+                id=e["id"],
+                clips=clips,
+                metrics=metrics,
+                preproc=preproc,
+                latency_p95_ms=e["latency_p95_ms"],
+                service_rate_fps=e["service_rate_fps"],
+                pgt_recipe_hash=e["pgt_recipe_hash"],
+                baseline_theta=e["baseline_theta"],
+                delta_floor=e["delta_floor"],
+                beta=e["beta"],
+                salt=Salt(
+                    offsets=e.get("salt", {}).get("offsets", []),
+                    strides=e.get("salt", {}).get("strides", []),
+                ),
+            )
+            elements.append(element)
+        tee = Tee(trusted_share_gamma=data["tee"]["trusted_share_gamma"])
+        return Manifest(
+            window_id=data["window_id"],
+            version=data["version"],
+            expiry_block=data["expiry_block"],
+            elements=elements,
+            tee=tee,
+            signature=data.get("signature"),
+        )
+
     def to_canonical_json(self) -> str:
         """
         Produce deterministic canonical JSON suitable for hashing and signing.
@@ -224,3 +271,9 @@ class Manifest:
         (This makes the Manifest content-addressable)
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
+
+    def save_yaml(self, path: Path) -> None:
+        raw = loads(self.to_canonical_json())
+        if self.signature:
+            raw["signature"] = self.signature
+        yaml.dump(raw, path.open("w"))
