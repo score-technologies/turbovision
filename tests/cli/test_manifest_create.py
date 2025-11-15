@@ -1,7 +1,6 @@
-# tests/cli/test_manifest_create.py
-
 from os import environ
 from pathlib import Path
+
 from click.testing import CliRunner
 
 from scorevision.cli.manifest import manifest_cli
