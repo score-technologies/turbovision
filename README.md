@@ -9,7 +9,7 @@ Turbo Vision is Score's decentralized intelligence layer for live video and imag
 - A decentralized network accelerates learning. Validators stress-test outputs on fresh datasets while miners ship new models, letting Score improve accuracy and smoothness with every challenge.
 - Early focus on elite football helps us stress-test the system against one of the most complex environments, setting the benchmark for other sports and industries.
 
-## Participate
+## Participate 
 
 - Validators keep the network honest by scoring submitted models on live data. Read the step-by-step playbook in [VALIDATOR.md](VALIDATOR.md).
 - Miners contribute models that understand the game and respond to validator challenges. Follow the build-and-deploy loop in [MINER.md](MINER.md).
