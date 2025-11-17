@@ -277,3 +277,8 @@ class Manifest:
         if self.signature:
             raw["signature"] = self.signature
         yaml.dump(raw, path.open("w"))
+
+
+if __name__ == "__main__":
+    man = Manifest.load_yaml(path=Path("scorevision/example.yml"))
+    print(man)
