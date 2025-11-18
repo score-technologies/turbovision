@@ -30,11 +30,11 @@ logger = getLogger(__name__)
 
 
 async def run_vlm_pipeline_once_for_single_miner(
-    hf_revision: str | None,
+    hf_revision: str | None, path_manifest: Path
 ) -> SVEvaluation:
     """Run a single miner on the VLM pipeline off-chain
     NOTE: This flow should match the flow in the runner"""
-    manifest = Manifest.load_yaml(path=Path("example_manifest.yml"))
+    manifest = Manifest.load_yaml(path=path_manifest)
     logger.info(f"Manifest loaded: {manifest}")
     challenge_data = {
         "task_id": "0",

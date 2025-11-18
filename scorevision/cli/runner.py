@@ -212,7 +212,7 @@ def _enough_bboxes_per_frame(
     return ok_frames >= min_frames_required
 
 
-async def runner(slug: str | None = None) -> None:
+async def runner(path_manifest: Path, slug: str | None = None) -> None:
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
@@ -375,7 +375,7 @@ async def runner(slug: str | None = None) -> None:
         gc.collect()
 
 
-async def runner_loop():
+async def runner_loop(path_manifest: Path):
     """Runs `runner()` every 300 blocks, with robust triggering."""
     settings = get_settings()
     TEMPO = 300
@@ -477,7 +477,7 @@ async def runner_loop():
                     block,
                     last_trigger_block,
                 )
-                await runner()
+                await runner(path_manifest=path_manifest)
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()
