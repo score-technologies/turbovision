@@ -3,4 +3,7 @@ pytest_plugins = [
     "tests.fixtures.manifest_fixtures",
     "tests.fixtures.r2_fixtures",
     "tests.fixtures.settings_fixtures",
+    "tests.fixtures.miner_fixtures",
+    "tests.fixtures.challenge_fixtures",
+    "tests.fixtures.pgt_fixtures",
 ]
