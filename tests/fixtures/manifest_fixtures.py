@@ -65,7 +65,7 @@ def minimal_manifest(sample_elements):
 @fixture
 def dummy_manifest():
     """A minimal manifest for publish tests."""
-    el = Element(
+    el1 = Element(
         id="PlayerDetect_v1",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
@@ -84,12 +84,28 @@ def dummy_manifest():
         delta_floor=0.05,
         beta=1.0,
     )
+    el2 = Element(
+        id="PitchCalib_v1",
+        clips=[Clip(hash="sha256:abc", weight=1.0)],
+        metrics=Metrics(
+            pillars={
+                PillarName.IOU: 1.0,
+            }
+        ),
+        preproc=Preproc(fps=30, resize_long=720, norm="none"),
+        latency_p95_ms=100,
+        service_rate_fps=30,
+        pgt_recipe_hash="sha256:deadbeef",
+        baseline_theta=0.3,
+        delta_floor=0.05,
+        beta=1.0,
+    )
 
     return Manifest(
         window_id="2025-10-27",
         version="1.3",
         expiry_block=123456,
-        elements=[el],
+        elements=[el1, el2],
         tee=Tee(trusted_share_gamma=0.2),
     )
 

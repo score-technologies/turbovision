@@ -133,27 +133,33 @@ def post_vlm_ranking(
     if challenge_type is None:
         challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
+    predicted_frames = (
+        ((miner_run.predictions or {}).get("frames") or [])
+        if miner_run.predictions
+        else []
+    )
+    frame_count = len(predicted_frames)
+
+    breakdown_dict = {}
+
     if (
         miner_run.success
-        and miner_run.predictions
-        and len(miner_run.predictions) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        and frame_count >= settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER
+        and frame_count <= settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
     ):
-        total, breakdown_dict = get_element_scores(
+        breakdown_dict = get_element_scores(
             manifest=manifest,
             pseudo_gt_annotations=pseudo_gt_annotations,
             miner_run=miner_run,
             frame_store=frame_store,
             challenge_type=challenge_type,
         )
-
     else:
-        final_score, breakdown_dict = 0.0, {}
         logger.info(
-            f"Miner success={miner_run.success} frames={len(miner_run.predictions)} "
+            f"Miner success={miner_run.success} frames={frame_count} "
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
         )
-
     details = {
         "breakdown": breakdown_dict,
         # "group_scores": {
@@ -169,6 +175,7 @@ def post_vlm_ranking(
     }
     logger.info(details)
 
+    final_score = breakdown_dict.get("mean_weighted", 0.0)
     return SVEvaluation(
         acc_breakdown=breakdown_dict,
         latency_ms=miner_run.latency_ms,
@@ -184,7 +191,7 @@ def get_element_scores(
     miner_run: SVRunOutput,
     frame_store: FrameStore,
     challenge_type: ChallengeType,
-) -> tuple[float, dict]:
+) -> dict:
     settings = get_settings()
     METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
         ElementPrefix.PLAYER_DETECTION: {
@@ -242,15 +249,15 @@ def get_element_scores(
     element_score_values = list(element_scores.values())
     total_raw = sum(score["total_raw"] for score in element_score_values)
     total_weighted = sum(score["total_weighted"] for score in element_score_values)
+    n_elements = len(manifest.elements)
+    logger.info(f"Dividing score equally among {n_elements} Elements")
+    weighted_mean = total_weighted / n_elements if n_elements else 0.0
     element_scores.update(
         dict(
             total_raw=total_raw,
             total_weighted=total_weighted,
+            mean_weighted=weighted_mean,
         )
     )
     logger.info(element_scores)
-    n_elements = len(manifest.elements)
-    logger.info(f"Dividing score equally among {n_elements} Elements")
-    weighted_mean = total_weighted / n_elements if n_elements else 0.0
-    logger.info(f"Weighted Mean: {weighted_mean}")
-    return weighted_mean, element_scores
+    return element_scores
