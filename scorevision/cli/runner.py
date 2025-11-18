@@ -28,6 +28,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
+from scorevision.utils.manifest import Manifest
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
@@ -236,6 +237,9 @@ async def runner(slug: str | None = None) -> None:
     frame_store: FrameStore | None = None
     run_result = "success"
     try:
+        manifest = Manifest.load_yaml(path=Path("example_manifest.yml"))
+        logger.info(f"Manifest loaded: {manifest}")
+
         miners = await get_miners_from_registry(NETUID)
         if not miners:
             logger.warning("No eligible miners found on-chain.")
@@ -294,6 +298,7 @@ async def runner(slug: str | None = None) -> None:
                         challenge=challenge,
                         pseudo_gt_annotations=pseudo_gt_annotations,
                         frame_store=frame_store,
+                        manifest=manifest,
                     )
                 except Exception:
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()

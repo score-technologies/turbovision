@@ -19,6 +19,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_object_labels,
     compare_object_placement,
 )
+from scorevision.utils.manifest import Manifest
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
@@ -123,6 +124,7 @@ def post_vlm_ranking(
     challenge: SVChallenge,
     pseudo_gt_annotations: list[PseudoGroundTruth],
     frame_store: FrameStore,
+    manifest: Manifest,
 ) -> SVEvaluation:
     score_breakdown = TotalScore()
     settings = get_settings()
