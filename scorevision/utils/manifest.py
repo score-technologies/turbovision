@@ -85,6 +85,13 @@ class Metrics(BaseModel):
 
     pillars: dict[PillarName, float]
 
+    @model_validator(mode="after")
+    def validate_pillar_weights(self):
+        """Ensure the Weights for all pillars sum to 1.0"""
+        if sum(self.pillars.values()) != 1.0:
+            raise ValueError(f"Weights must sum to 1.0: {self.pillars.values()}")
+        return self
+
 
 class Salt(BaseModel):
     """

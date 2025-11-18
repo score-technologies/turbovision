@@ -27,9 +27,9 @@ def sample_elements():
             clips=[Clip(hash=c, weight=1.0) for c in clips],
             metrics=Metrics(
                 pillars={
-                    PillarName.IOU: 1.0,
+                    PillarName.IOU: 0.3,
                     PillarName.COUNT: 0.0,
-                    PillarName.PALETTE: 0.5,
+                    PillarName.PALETTE: 0.7,
                     PillarName.SMOOTHNESS: 0.0,
                     PillarName.ROLE: 0.0,
                 }
@@ -70,9 +70,9 @@ def dummy_manifest():
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
             pillars={
-                PillarName.IOU: 1.0,
+                PillarName.IOU: 0.3,
                 PillarName.COUNT: 0.0,
-                PillarName.PALETTE: 0.5,
+                PillarName.PALETTE: 0.7,
                 PillarName.SMOOTHNESS: 0.0,
                 PillarName.ROLE: 0.0,
             }

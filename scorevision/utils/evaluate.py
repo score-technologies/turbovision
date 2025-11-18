@@ -8,7 +8,7 @@ from scorevision.utils.data_models import (
     SVChallenge,
     SVRunOutput,
     SVEvaluation,
-    TotalScore,
+    # TotalScore,
 )
 from scorevision.chute_template.schemas import TVPredictInput
 
@@ -19,7 +19,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_object_labels,
     compare_object_placement,
 )
-from scorevision.utils.manifest import Manifest, ElementPrefix
+from scorevision.utils.manifest import Manifest, ElementPrefix, PillarName
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
@@ -126,7 +126,6 @@ def post_vlm_ranking(
     frame_store: FrameStore,
     manifest: Manifest,
 ) -> SVEvaluation:
-    score_breakdown = TotalScore()
     settings = get_settings()
     miner_annotations = parse_miner_prediction(miner_run=miner_run)
     logger.info(payload.meta)
@@ -140,55 +139,22 @@ def post_vlm_ranking(
         and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
     ):
-        results = {}
-        for element in manifest.elements:
-            print(element.category)
-            for pillar, weight in element.metrics.items():
-                pass  # TODO
+        breakdown_score = get_element_scores(
+            manifest=manifest,
+            pseudo_gt_annotations=pseudo_gt_annotations,
+            miner_annotations=miner_annotations,
+            frame_store=frame_store,
+        )
 
-        score_breakdown.keypoints.floor_markings_alignment = evaluate_keypoints(
-            frames=frame_store,
-            miner_predictions=miner_annotations,
-            challenge_type=challenge_type,
-        )
-        score_breakdown.objects.bbox_placement = compare_object_placement(
-            pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-        )
-        score_breakdown.objects.categorisation = compare_object_labels(
-            pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-        )
-        score_breakdown.objects.team = compare_team_labels(
-            pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-        )
-        score_breakdown.objects.enumeration = compare_object_counts(
-            pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-        )
-        score_breakdown.objects.tracking_stability = bbox_smoothness_per_type(
-            video_bboxes=[
-                miner_annotations[frame_num]["bboxes"]
-                for frame_num in sorted(miner_annotations.keys())
-            ],
-            image_height=settings.SCOREVISION_IMAGE_HEIGHT,
-            image_width=settings.SCOREVISION_IMAGE_WIDTH,
-        )
-        score_breakdown.latency.inference = 1 / 2 ** (miner_run.latency_ms / 1000)
     else:
+        breakdown_score = None
         logger.info(
             f"Miner success={miner_run.success} frames={len(miner_annotations)} "
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
         )
 
-    breakdown_dict = score_breakdown.to_dict()
-    objects_dict = breakdown_dict.get("objects", {}) or {}
-    keypoints_dict = breakdown_dict.get("keypoints", {}) or {}
-
-    def _mean_defined(values) -> float:
-        nums = [v for v in values if isinstance(v, (int, float))]
-        return (sum(nums) / len(nums)) if nums else 0.0
-
-    objects_score = _mean_defined(objects_dict.values())
-    keypoints_score = _mean_defined(keypoints_dict.values())
-    final_score = 0.5 * objects_score + 0.5 * keypoints_score
+    final_score = 0.0 if breakdown_score is None else breakdown_score.score
+    breakdown_dict = breakdown_score.to_dict()
 
     details = {
         "breakdown": breakdown_dict,
@@ -212,3 +178,89 @@ def post_vlm_ranking(
         score=final_score,
         details=details,
     )
+
+
+from dataclasses import dataclass, asdict
+
+
+@dataclass
+class ElementScores:
+    # TODO
+    pass
+
+    def to_dict(self) -> dict[str, float]:
+        # TODO
+        pass
+
+    @property
+    def score(self) -> float:
+        # TODO: calculate score based on manifest weights
+        return 0.0
+
+
+def get_element_scores(
+    manifest: Manifest,
+    pseudo_gt_annotations: list[PseudoGroundTruth],
+    miner_annotations: dict[int, dict],
+    frame_store: FrameStore,
+) -> ElementScores:
+    METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
+        ElementPrefix.PLAYER_DETECTION: {
+            PillarName.IOU: lambda: compare_object_placement(
+                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
+            ),
+            PillarName.COUNT: lambda: compare_object_counts(
+                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
+            ),
+            PillarName.SMOOTHNESS: lambda: bbox_smoothness_per_type(
+                video_bboxes=[
+                    miner_annotations[frame_num]["bboxes"]
+                    for frame_num in sorted(miner_annotations.keys())
+                ],
+                image_height=settings.SCOREVISION_IMAGE_HEIGHT,
+                image_width=settings.SCOREVISION_IMAGE_WIDTH,
+            ),
+            PillarName.ROLE: lambda: compare_object_labels(
+                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
+            )
+            + compare_team_labels(
+                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
+            ),
+        },
+        ElementPrefix.BALL_DETECTION: {},
+        ElementPrefix.PITCH_CALIBRATION: {
+            PillarName.IOU: lambda: evaluate_keypoints(
+                frames=frame_store,
+                miner_predictions=miner_annotations,
+                challenge_type=challenge_type,
+            )
+        },
+    }
+
+    element_scores = {}
+    for element in manifest.elements:
+        pillar_scores = {}
+        for pillar, weight in element.metrics.items():
+            metric = METRICS[element.category].get(pillar)
+            if metric is None:
+                raise NotImplemented(
+                    f"No {pillar} metric defined for {element.category}"
+                )
+            score = metric()
+            pillar_scores[score]
+        element_scores[element.category] = pillar_scores
+
+        score_breakdown.latency.inference = 1 / 2 ** (miner_run.latency_ms / 1000)
+
+    # objects_dict = breakdown_dict.get("objects", {}) or {}
+    # keypoints_dict = breakdown_dict.get("keypoints", {}) or {}
+
+    # def _mean_defined(values) -> float:
+    #     nums = [v for v in values if isinstance(v, (int, float))]
+    #     return (sum(nums) / len(nums)) if nums else 0.0
+
+    # objects_score = _mean_defined(objects_dict.values())
+    # keypoints_score = _mean_defined(keypoints_dict.values())
+    # final_score = 0.5 * objects_score + 0.5 * keypoints_score
+
+    # #TODO: raise NotImplemented for pillars with no scores
