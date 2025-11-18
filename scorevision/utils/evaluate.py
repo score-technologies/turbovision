@@ -127,7 +127,6 @@ def post_vlm_ranking(
     manifest: Manifest,
 ) -> SVEvaluation:
     settings = get_settings()
-    miner_annotations = parse_miner_prediction(miner_run=miner_run)
     logger.info(payload.meta)
 
     challenge_type = challenge.challenge_type
@@ -136,13 +135,14 @@ def post_vlm_ranking(
 
     if (
         miner_run.success
-        and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        and miner_run.predictions
+        and len(miner_run.predictions) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
     ):
         total, breakdown_dict = get_element_scores(
             manifest=manifest,
             pseudo_gt_annotations=pseudo_gt_annotations,
-            miner_annotations=miner_annotations,
+            miner_run=miner_run,
             frame_store=frame_store,
         )
 
@@ -180,7 +180,7 @@ def post_vlm_ranking(
 def get_element_scores(
     manifest: Manifest,
     pseudo_gt_annotations: list[PseudoGroundTruth],
-    miner_annotations: dict[int, dict],
+    miner_run: SVRunOutput,
     frame_store: FrameStore,
 ) -> tuple[float, dict]:
     METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
@@ -216,6 +216,7 @@ def get_element_scores(
         },
     }
 
+    miner_annotations = parse_miner_prediction(miner_run=miner_run)
     element_scores = {}
     for element in manifest.elements:
         pillar_scores = {}

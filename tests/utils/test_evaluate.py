@@ -1,4 +1,4 @@
-from scorevision.utils.evaluate import post_vlm_ranking
+from scorevision.utils.evaluate import post_vlm_ranking, get_element_scores
 
 
 def test_post_vlm_ranking(
@@ -23,3 +23,19 @@ def test_post_vlm_ranking(
     assert any(evaluation.details)
     assert evaluation.latency_ms == 0.0
     assert evaluation.acc > 0.0
+
+
+def test_get_element_scores(
+    dummy_manifest,
+    dummy_pseudo_gt_annotations,
+    fake_frame_store,
+    fake_miner_predictions,
+) -> None:
+    score, breakdown = get_element_scores(
+        manifest=dummy_manifest,
+        pseudo_gt_annotations=dummy_pseudo_gt_annotations,
+        miner_run=fake_miner_predictions,
+        frame_store=fake_frame_store,
+    )
+    assert True
+    # TODO
