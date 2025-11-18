@@ -1,4 +1,7 @@
 from scorevision.utils.evaluate import post_vlm_ranking, get_element_scores
+from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
+    ChallengeType,
+)
 
 
 def test_post_vlm_ranking(
@@ -36,6 +39,8 @@ def test_get_element_scores(
         pseudo_gt_annotations=dummy_pseudo_gt_annotations,
         miner_run=fake_miner_predictions,
         frame_store=fake_frame_store,
+        challenge_type=ChallengeType.FOOTBALL,
     )
-    assert True
-    # TODO
+    assert score > 0.0
+    assert isinstance(breakdown, dict)
+    assert any(breakdown)

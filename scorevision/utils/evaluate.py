@@ -144,12 +144,13 @@ def post_vlm_ranking(
             pseudo_gt_annotations=pseudo_gt_annotations,
             miner_run=miner_run,
             frame_store=frame_store,
+            challenge_type=challenge_type,
         )
 
     else:
         final_score, breakdown_dict = 0.0, {}
         logger.info(
-            f"Miner success={miner_run.success} frames={len(miner_annotations)} "
+            f"Miner success={miner_run.success} frames={len(miner_run.predictions)} "
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
         )
 
@@ -182,7 +183,9 @@ def get_element_scores(
     pseudo_gt_annotations: list[PseudoGroundTruth],
     miner_run: SVRunOutput,
     frame_store: FrameStore,
+    challenge_type: ChallengeType,
 ) -> tuple[float, dict]:
+    settings = get_settings()
     METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
         ElementPrefix.PLAYER_DETECTION: {
             PillarName.IOU: lambda: compare_object_placement(
@@ -215,16 +218,15 @@ def get_element_scores(
             )
         },
     }
-
     miner_annotations = parse_miner_prediction(miner_run=miner_run)
     element_scores = {}
     for element in manifest.elements:
         pillar_scores = {}
-        for pillar, weight in element.metrics.items():
+        for pillar, weight in element.metrics.pillars.items():
             metric = METRICS[element.category].get(pillar)
             if metric is None:
-                raise NotImplemented(
-                    f"No {pillar} metric defined for {element.category}"
+                raise NotImplementedError(
+                    f"Could not compute score for pillar {pillar} in {element.category}: No metric is currently defined"
                 )
             score = metric()
             pillar_scores[pillar] = dict(raw=score, weighted=score * weight)

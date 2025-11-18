@@ -66,15 +66,14 @@ def minimal_manifest(sample_elements):
 def dummy_manifest():
     """A minimal manifest for publish tests."""
     el = Element(
-        id="PitchCalib_v1",
+        id="PlayerDetect_v1",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
             pillars={
                 PillarName.IOU: 0.3,
-                PillarName.COUNT: 0.0,
-                PillarName.PALETTE: 0.7,
-                PillarName.SMOOTHNESS: 0.0,
-                PillarName.ROLE: 0.0,
+                PillarName.COUNT: 0.1,
+                PillarName.SMOOTHNESS: 0.3,
+                PillarName.ROLE: 0.3,
             }
         ),
         preproc=Preproc(fps=30, resize_long=720, norm="none"),
