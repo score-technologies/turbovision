@@ -404,13 +404,13 @@ async def _first_commit_block_by_miner(
             meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
             commits = await st.get_all_revealed_commitments(netuid)
 
-            first_block_by_hk: dict[str, int] = {}
+            last_block_by_hk: dict[str, int] = {}
             for hk in meta.hotkeys:
                 arr = commits.get(hk)
                 if not arr:
                     continue
 
-                first_block = None
+                last_block = None
                 for tup in arr:
                     try:
                         blk, data = tup
@@ -425,14 +425,18 @@ async def _first_commit_block_by_miner(
                     if isinstance(obj, dict) and obj.get("role") == "validator":
                         continue
 
-                    if isinstance(blk, int):
-                        if first_block is None or blk < first_block:
-                            first_block = blk
+                    try:
+                        blk_int = int(blk)
+                    except Exception:
+                        continue
 
-                if first_block is not None:
-                    first_block_by_hk[hk] = int(first_block)
+                    if last_block is None or blk_int > last_block:
+                        last_block = blk_int
 
-            return first_block_by_hk
+                if last_block is not None:
+                    last_block_by_hk[hk] = last_block
+
+            return last_block_by_hk
 
         except Exception as e:
             attempt += 1
