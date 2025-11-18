@@ -44,9 +44,9 @@ def sample_elements():
         )
 
     return [
-        mk_el("0", ["b", "a"]),
-        mk_el("1", ["e", "f"]),
-        mk_el("2", ["c", "d"]),
+        mk_el("PlayerDetect_v1@1.0", ["b", "a"]),
+        mk_el("BallDetect_v1@1.01", ["e", "f"]),
+        mk_el("PitchCalib_v1@1.0", ["c", "d"]),
     ]
 
 
@@ -66,7 +66,7 @@ def minimal_manifest(sample_elements):
 def dummy_manifest():
     """A minimal manifest for publish tests."""
     el = Element(
-        id="TestElement",
+        id="PitchCalib_v1",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
             pillars={

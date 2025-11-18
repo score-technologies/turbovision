@@ -19,7 +19,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_object_labels,
     compare_object_placement,
 )
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Manifest, ElementPrefix
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
@@ -140,6 +140,12 @@ def post_vlm_ranking(
         and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
     ):
+        results = {}
+        for element in manifest.elements:
+            print(element.category)
+            for pillar, weight in element.metrics.items():
+                pass  # TODO
+
         score_breakdown.keypoints.floor_markings_alignment = evaluate_keypoints(
             frames=frame_store,
             miner_predictions=miner_annotations,

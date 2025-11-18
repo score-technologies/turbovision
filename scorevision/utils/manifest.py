@@ -18,7 +18,7 @@ from json import loads
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
 from ruamel.yaml import YAML
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 yaml = YAML()
@@ -48,6 +48,19 @@ class PillarName(str, Enum):
     PALETTE = "palette"
     SMOOTHNESS = "smoothness"
     ROLE = "role"
+
+
+class ElementPrefix(str, Enum):
+    """Prefix to Element Names
+    e.g.
+    - PlayerDetect_v1: Object detection and tracking at. Outputs include bounding boxes, tracking IDs, team assignments, and role classifications.
+    - BallDetect_v1: Small object tracking. Handles fast-moving objects with motion blur and frequent occlusions.
+    - PitchCalib_v1: Geometric calibration. Outputs keypoint locations and homography matrices for image-to-field coordinate transformation.
+    """
+
+    PLAYER_DETECTION = "PlayerDetect"
+    BALL_DETECTION = "BallDetect"
+    PITCH_CALIBRATION = "PitchCalib"
 
 
 # ------------------------------------------------------------
@@ -123,6 +136,18 @@ class Element(BaseModel):
     delta_floor: float
     beta: float
     salt: Salt = Field(default_factory=Salt)
+
+    @property
+    def category(self) -> ElementPrefix:
+        for element_prefix in ElementPrefix:
+            if self.id.startswith(element_prefix):
+                return element_prefix
+        raise ValueError(f"Unrecognised element {self.id}")
+
+    @model_validator(mode="after")
+    def validate_id(self):
+        self.category
+        return self
 
 
 class Tee(BaseModel):
