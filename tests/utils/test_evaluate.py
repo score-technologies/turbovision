@@ -7,6 +7,7 @@ def test_post_vlm_ranking(
     fake_miner_predictions,
     fake_payload,
     fake_challenge,
+    fake_frame_store,
 ) -> None:
     evaluation = post_vlm_ranking(
         payload=fake_payload,

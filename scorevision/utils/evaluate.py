@@ -155,10 +155,10 @@ def post_vlm_ranking(
 
     details = {
         "breakdown": breakdown_dict,
-        "group_scores": {
-            "objects": objects_score,
-            "keypoints": keypoints_score,
-        },
+        # "group_scores": {
+        #    "objects": objects_score,
+        #    "keypoints": keypoints_score,
+        # },
         "challenge": {
             "id_hash": challenge.challenge_id,
             "api_task_id": challenge.api_task_id,

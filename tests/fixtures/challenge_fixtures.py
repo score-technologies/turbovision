@@ -1,10 +1,17 @@
 from pytest import fixture
+from pathlib import Path
 
 from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.data_models import SVChallenge
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
+from scorevision.utils.video_processing import FrameStore
+
+
+@fixture
+def fake_frame_store() -> FrameStore:
+    return FrameStore(Path("tests/test_data/example_football.mp4"))
 
 
 @fixture
