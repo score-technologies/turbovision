@@ -9,7 +9,6 @@ latency gates, service rates, and TEE-related trust parameters.
 
 from pathlib import Path
 from hashlib import sha256
-from dataclasses import dataclass, field, asdict
 from json import dumps
 from base64 import b64encode, b64decode
 from enum import Enum
@@ -19,6 +18,7 @@ from json import loads
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
 from ruamel.yaml import YAML
+from pydantic import BaseModel, Field
 
 
 yaml = YAML()
@@ -55,8 +55,7 @@ class PillarName(str, Enum):
 # ------------------------------------------------------------
 
 
-@dataclass
-class Preproc:
+class Preproc(BaseModel):
     """
     Preprocessing parameters applied before evaluation.
     """
@@ -66,42 +65,25 @@ class Preproc:
     norm: NormType
 
 
-@dataclass
-class Pillars:
-    """
-    Multi-pillar scoring weights for an Element.
-    Keys must match PillarName enums.
-    """
-
-    iou: float
-    count: float
-    palette: float
-    smoothness: float
-    role: float
-
-
-@dataclass
-class Metrics:
+class Metrics(BaseModel):
     """
     Metrics configuration used to score Element performance.
     """
 
-    pillars: Pillars
+    pillars: dict[PillarName, float]
 
 
-@dataclass
-class Salt:
+class Salt(BaseModel):
     """
     VRF-derived challenge salting parameters ensuring per-validator
     unpredictability. These are always present (default empty lists).
     """
 
-    offsets: list[int] = field(default_factory=list)
-    strides: list[int] = field(default_factory=list)
+    offsets: list[int] = Field(default_factory=list)
+    strides: list[int] = Field(default_factory=list)
 
 
-@dataclass
-class Clip:
+class Clip(BaseModel):
     """
     Clip definition used in YAML configs.
     Structured as:
@@ -113,8 +95,7 @@ class Clip:
     weight: float
 
 
-@dataclass
-class Element:
+class Element(BaseModel):
     """
     Atomic capability definition (e.g., PlayerDetect, BallDetect).
 
@@ -141,11 +122,10 @@ class Element:
     baseline_theta: float
     delta_floor: float
     beta: float
-    salt: Salt = field(default_factory=Salt)
+    salt: Salt = Field(default_factory=Salt)
 
 
-@dataclass
-class Tee:
+class Tee(BaseModel):
     """
     Trusted Execution Environment parameters.
     Defines how much reward share comes from Trusted Track.
@@ -154,8 +134,7 @@ class Tee:
     trusted_share_gamma: float
 
 
-@dataclass
-class Manifest:
+class Manifest(BaseModel):
     """
     Canonical Manifest representing one evaluation window.
 
@@ -175,7 +154,7 @@ class Manifest:
     """
 
     window_id: str
-    version: str
+    version: float
     expiry_block: int
     elements: list[Element]
     tee: Tee
@@ -184,42 +163,7 @@ class Manifest:
     @classmethod
     def load_yaml(cls, path: Path) -> "Manifest":
         data = yaml.load(path.read_text())
-        elements = []
-        for e in data["elements"]:
-            pillars = Pillars(**e["metrics"]["pillars"])
-            metrics = Metrics(pillars=pillars)
-            clips = [Clip(hash=c["hash"], weight=c["weight"]) for c in e["clips"]]
-            preproc = Preproc(
-                fps=e["preproc"]["fps"],
-                resize_long=e["preproc"]["resize_long"],
-                norm=e["preproc"]["norm"],
-            )
-            element = Element(
-                id=e["id"],
-                clips=clips,
-                metrics=metrics,
-                preproc=preproc,
-                latency_p95_ms=e["latency_p95_ms"],
-                service_rate_fps=e["service_rate_fps"],
-                pgt_recipe_hash=e["pgt_recipe_hash"],
-                baseline_theta=e["baseline_theta"],
-                delta_floor=e["delta_floor"],
-                beta=e["beta"],
-                salt=Salt(
-                    offsets=e.get("salt", {}).get("offsets", []),
-                    strides=e.get("salt", {}).get("strides", []),
-                ),
-            )
-            elements.append(element)
-        tee = Tee(trusted_share_gamma=data["tee"]["trusted_share_gamma"])
-        return Manifest(
-            window_id=data["window_id"],
-            version=data["version"],
-            expiry_block=data["expiry_block"],
-            elements=elements,
-            tee=tee,
-            signature=data.get("signature"),
-        )
+        return Manifest(**data)
 
     def to_canonical_json(self) -> str:
         """
@@ -233,9 +177,9 @@ class Manifest:
         - Compact separators
         - Sorted keys
         """
-        payload = asdict(self)
+        payload = self.model_dump(mode="json")
         elements_sorted = sorted(self.elements, key=lambda e: e.id)
-        payload["elements"] = [asdict(e) for e in elements_sorted]
+        payload["elements"] = [e.model_dump(mode="json") for e in elements_sorted]
         payload.pop("signature", None)
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 

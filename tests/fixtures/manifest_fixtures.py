@@ -11,9 +11,9 @@ from scorevision.utils.manifest import (
     Tee,
     Element,
     Metrics,
-    Pillars,
     Preproc,
     Clip,
+    PillarName,
 )
 
 
@@ -26,9 +26,13 @@ def sample_elements():
             id=id_,
             clips=[Clip(hash=c, weight=1.0) for c in clips],
             metrics=Metrics(
-                pillars=Pillars(
-                    iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0
-                )
+                pillars={
+                    PillarName.IOU: 1.0,
+                    PillarName.COUNT: 0.0,
+                    PillarName.PALETTE: 0.5,
+                    PillarName.SMOOTHNESS: 0.0,
+                    PillarName.ROLE: 0.0,
+                }
             ),
             preproc=Preproc(fps=30, resize_long=720, norm="none"),
             latency_p95_ms=100,
@@ -65,7 +69,13 @@ def dummy_manifest():
         id="TestElement",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
-            pillars=Pillars(iou=1.0, count=0.0, palette=0.5, smoothness=0.0, role=0.0)
+            pillars={
+                PillarName.IOU: 1.0,
+                PillarName.COUNT: 0.0,
+                PillarName.PALETTE: 0.5,
+                PillarName.SMOOTHNESS: 0.0,
+                PillarName.ROLE: 0.0,
+            }
         ),
         preproc=Preproc(fps=30, resize_long=720, norm="none"),
         latency_p95_ms=100,
