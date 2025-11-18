@@ -17,4 +17,9 @@ def test_post_vlm_ranking(
         frame_store=fake_frame_store,
         manifest=dummy_manifest,
     )
-    assert True  # TODO
+    assert isinstance(evaluation.acc_breakdown, dict)
+    assert isinstance(evaluation.details, dict)
+    assert any(evaluation.acc_breakdown)
+    assert any(evaluation.details)
+    assert evaluation.latency_ms == 0.0
+    assert evaluation.acc > 0.0
