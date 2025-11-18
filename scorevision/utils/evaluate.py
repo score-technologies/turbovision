@@ -139,7 +139,7 @@ def post_vlm_ranking(
         and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
     ):
-        breakdown_score = get_element_scores(
+        total, breakdown_dict = get_element_scores(
             manifest=manifest,
             pseudo_gt_annotations=pseudo_gt_annotations,
             miner_annotations=miner_annotations,
@@ -147,14 +147,11 @@ def post_vlm_ranking(
         )
 
     else:
-        breakdown_score = None
+        final_score, breakdown_dict = 0.0, {}
         logger.info(
             f"Miner success={miner_run.success} frames={len(miner_annotations)} "
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
         )
-
-    final_score = 0.0 if breakdown_score is None else breakdown_score.score
-    breakdown_dict = breakdown_score.to_dict()
 
     details = {
         "breakdown": breakdown_dict,
@@ -180,30 +177,12 @@ def post_vlm_ranking(
     )
 
 
-from dataclasses import dataclass, asdict
-
-
-@dataclass
-class ElementScores:
-    # TODO
-    pass
-
-    def to_dict(self) -> dict[str, float]:
-        # TODO
-        pass
-
-    @property
-    def score(self) -> float:
-        # TODO: calculate score based on manifest weights
-        return 0.0
-
-
 def get_element_scores(
     manifest: Manifest,
     pseudo_gt_annotations: list[PseudoGroundTruth],
     miner_annotations: dict[int, dict],
     frame_store: FrameStore,
-) -> ElementScores:
+) -> tuple[float, dict]:
     METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
         ElementPrefix.PLAYER_DETECTION: {
             PillarName.IOU: lambda: compare_object_placement(
@@ -247,20 +226,27 @@ def get_element_scores(
                     f"No {pillar} metric defined for {element.category}"
                 )
             score = metric()
-            pillar_scores[score]
+            pillar_scores[pillar] = dict(raw=score, weighted=score * weight)
+        pillar_scores.update(
+            dict(
+                total_raw=sum(score for score["raw"] in pillar_scores),
+                total_weighted=sum(score for score["weighted"] in pillar_scores),
+            )
+        )
         element_scores[element.category] = pillar_scores
-
-        score_breakdown.latency.inference = 1 / 2 ** (miner_run.latency_ms / 1000)
-
-    # objects_dict = breakdown_dict.get("objects", {}) or {}
-    # keypoints_dict = breakdown_dict.get("keypoints", {}) or {}
-
-    # def _mean_defined(values) -> float:
-    #     nums = [v for v in values if isinstance(v, (int, float))]
-    #     return (sum(nums) / len(nums)) if nums else 0.0
-
-    # objects_score = _mean_defined(objects_dict.values())
-    # keypoints_score = _mean_defined(keypoints_dict.values())
-    # final_score = 0.5 * objects_score + 0.5 * keypoints_score
-
-    # #TODO: raise NotImplemented for pillars with no scores
+    total_raw = sum(score for score["total_raw"] in element_scores)
+    total_weighted = sum(score for score["total_weighted"] in element_scores)
+    element_scores.update(
+        dict(
+            total_raw=total_raw,
+            total_weighted=total_weighted,
+        )
+    )
+    logger.info(element_scores)
+    n_elements = len(manifest.elements)
+    logger.info(f"Dividing score equally among {n_elements} Elements")
+    weighted_mean = sum(
+        score["total_weighted"] / n_elements for score in element_scores
+    )
+    logger.info(f"Weighted Mean: {weighted_mean}")
+    return weighted_mean, element_scores
