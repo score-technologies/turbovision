@@ -61,7 +61,7 @@ def fake_frame_results(fake_bboxes, fake_keypoints) -> list[dict]:
 
 
 @fixture
-def fake_miner_results(fake_frame_results) -> SVRunOutput:
+def fake_miner_predictions(fake_frame_results) -> SVRunOutput:
     return SVRunOutput(
         success=True,
         latency_ms=0.0,

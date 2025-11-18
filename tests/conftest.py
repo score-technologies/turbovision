@@ -5,4 +5,5 @@ pytest_plugins = [
     "tests.fixtures.settings_fixtures",
     "tests.fixtures.miner_fixtures",
     "tests.fixtures.challenge_fixtures",
+    "tests.fixtures.pgt_fixtures",
 ]
