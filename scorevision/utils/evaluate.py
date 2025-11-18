@@ -229,16 +229,19 @@ def get_element_scores(
                     f"Could not compute score for pillar {pillar} in {element.category}: No metric is currently defined"
                 )
             score = metric()
-            pillar_scores[pillar] = dict(raw=score, weighted=score * weight)
+            pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
         pillar_scores.update(
             dict(
-                total_raw=sum(score for score["raw"] in pillar_scores),
-                total_weighted=sum(score for score["weighted"] in pillar_scores),
+                total_raw=sum(score["score"] for score in pillar_scores.values()),
+                total_weighted=sum(
+                    score["weighted_score"] for score in pillar_scores.values()
+                ),
             )
         )
         element_scores[element.category] = pillar_scores
-    total_raw = sum(score for score["total_raw"] in element_scores)
-    total_weighted = sum(score for score["total_weighted"] in element_scores)
+    element_score_values = list(element_scores.values())
+    total_raw = sum(score["total_raw"] for score in element_score_values)
+    total_weighted = sum(score["total_weighted"] for score in element_score_values)
     element_scores.update(
         dict(
             total_raw=total_raw,
@@ -248,8 +251,6 @@ def get_element_scores(
     logger.info(element_scores)
     n_elements = len(manifest.elements)
     logger.info(f"Dividing score equally among {n_elements} Elements")
-    weighted_mean = sum(
-        score["total_weighted"] / n_elements for score in element_scores
-    )
+    weighted_mean = total_weighted / n_elements if n_elements else 0.0
     logger.info(f"Weighted Mean: {weighted_mean}")
     return weighted_mean, element_scores
