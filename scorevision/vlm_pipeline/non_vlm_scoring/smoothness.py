@@ -7,6 +7,8 @@ from scorevision.vlm_pipeline.utils.response_models import BoundingBox
 from scorevision.vlm_pipeline.image_annotation.pairwise import bboxes_to_mask
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.utils.settings import get_settings
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.utils.manifest import ElementPrefix, PillarName
 
 logger = getLogger(__name__)
 
@@ -107,10 +109,9 @@ def bbox_smoothness(
     return smoothness
 
 
+@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS)
 def bbox_smoothness_per_type(
-    video_bboxes: list[list[BoundingBox]],
-    image_height: int,
-    image_width: int,
+    video_bboxes: list[list[BoundingBox]], image_height: int, image_width: int, **kwargs
 ) -> float:
     """
     Computes smoothness for each object type separately using bbox_smoothness(),
