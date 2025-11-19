@@ -200,7 +200,7 @@ def get_element_scores(
             metric_fn = METRIC_REGISTRY.get((element.category, pillar))
             if metric_fn is None:
                 raise NotImplementedError(
-                    f"Could not compute score for pillar {pillar} in {element.category}: No metric is currently defined"
+                    f"Could not compute score for pillar {pillar} in element of type {element.category}: A metric has yet to be defined and/or registered with @register_metric"
                 )
             score = metric_fn(
                 pseudo_gt=pseudo_gt_annotations,
