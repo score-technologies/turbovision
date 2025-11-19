@@ -8,17 +8,10 @@ from scorevision.utils.data_models import (
     SVChallenge,
     SVRunOutput,
     SVEvaluation,
-    # TotalScore,
 )
 from scorevision.chute_template.schemas import TVPredictInput
 
 from scorevision.vlm_pipeline.non_vlm_scoring.keypoints import evaluate_keypoints
-from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
-    compare_object_counts,
-    compare_team_labels,
-    compare_object_labels,
-    compare_object_placement,
-)
 from scorevision.utils.manifest import Manifest, ElementPrefix, PillarName
 
 from scorevision.utils.settings import get_settings
@@ -41,6 +34,12 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
+from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
+
+# NOTE: The following imports are required to load METRIC_REGISTRY
+import scorevision.vlm_pipeline.non_vlm_scoring.keypoints
+import scorevision.vlm_pipeline.non_vlm_scoring.objects
+import scorevision.vlm_pipeline.non_vlm_scoring.smoothness
 
 logger = getLogger(__name__)
 
@@ -193,49 +192,28 @@ def get_element_scores(
     challenge_type: ChallengeType,
 ) -> dict:
     settings = get_settings()
-    METRICS: dict[ElementPrefix, dict[PillarName, callable]] = {
-        ElementPrefix.PLAYER_DETECTION: {
-            PillarName.IOU: lambda: compare_object_placement(
-                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-            ),
-            PillarName.COUNT: lambda: compare_object_counts(
-                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-            ),
-            PillarName.SMOOTHNESS: lambda: bbox_smoothness_per_type(
+    miner_annotations = parse_miner_prediction(miner_run=miner_run)
+    element_scores = {}
+    for element in manifest.elements:
+        pillar_scores = {}
+        for pillar, weight in element.metrics.pillars.items():
+            metric_fn = METRIC_REGISTRY.get((element.category, pillar))
+            if metric_fn is None:
+                raise NotImplementedError(
+                    f"Could not compute score for pillar {pillar} in element of type {element.category}: A metric has yet to be defined and/or registered with @register_metric"
+                )
+            score = metric_fn(
+                pseudo_gt=pseudo_gt_annotations,
+                miner_predictions=miner_annotations,
                 video_bboxes=[
                     miner_annotations[frame_num]["bboxes"]
                     for frame_num in sorted(miner_annotations.keys())
                 ],
                 image_height=settings.SCOREVISION_IMAGE_HEIGHT,
                 image_width=settings.SCOREVISION_IMAGE_WIDTH,
-            ),
-            PillarName.ROLE: lambda: compare_object_labels(
-                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-            )
-            + compare_team_labels(
-                pseudo_gt=pseudo_gt_annotations, miner_predictions=miner_annotations
-            ),
-        },
-        ElementPrefix.BALL_DETECTION: {},
-        ElementPrefix.PITCH_CALIBRATION: {
-            PillarName.IOU: lambda: evaluate_keypoints(
                 frames=frame_store,
-                miner_predictions=miner_annotations,
                 challenge_type=challenge_type,
             )
-        },
-    }
-    miner_annotations = parse_miner_prediction(miner_run=miner_run)
-    element_scores = {}
-    for element in manifest.elements:
-        pillar_scores = {}
-        for pillar, weight in element.metrics.pillars.items():
-            metric = METRICS[element.category].get(pillar)
-            if metric is None:
-                raise NotImplementedError(
-                    f"Could not compute score for pillar {pillar} in {element.category}: No metric is currently defined"
-                )
-            score = metric()
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
         pillar_scores.update(
             dict(

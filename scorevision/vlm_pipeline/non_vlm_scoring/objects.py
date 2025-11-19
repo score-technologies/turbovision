@@ -16,6 +16,8 @@ from scorevision.vlm_pipeline.utils.response_models import (
     ShirtColor,
 )
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.utils.manifest import ElementPrefix, PillarName
 
 AUC_IOU_THRESHOLDS = (0.3, 0.5)
 ENUM_IOU_THRESHOLD = 0.3
@@ -177,9 +179,9 @@ def _team_auc_f1(
     return max(f1_m1, f1_m2)
 
 
+@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.IOU)
 def compare_object_placement(
-    pseudo_gt: List[PseudoGroundTruth],
-    miner_predictions: dict[int, dict],
+    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
     """
     Placement (label-agnostic AUC-F1).
@@ -261,9 +263,22 @@ def compare_team_labels(
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
 
 
+@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.ROLE)
+def compare_object_and_team_labels(
+    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
+) -> float:
+    score1 = compare_object_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    )
+    score2 = compare_team_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    )
+    return (score1 + score2) / 2
+
+
+@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.COUNT)
 def compare_object_counts(
-    pseudo_gt: List[PseudoGroundTruth],
-    miner_predictions: dict[int, dict],
+    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
     """
     Enumeration (F1 at IoU τ=0.3, label-agnostic).

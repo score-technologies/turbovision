@@ -37,6 +37,8 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     INDEX_KEYPOINT_CORNER_TOP_RIGHT,
 )
 from scorevision.utils.data_models import SVChallenge
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.utils.manifest import ElementPrefix, PillarName
 
 logger = getLogger(__name__)
 
@@ -225,10 +227,12 @@ def evaluate_keypoints_for_frame(
     return 0.0
 
 
+@register_metric(ElementPrefix.PITCH_CALIBRATION, PillarName.IOU)
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],
     frames: Any,
     challenge_type: SVChallenge,
+    **kwargs,
 ) -> float:
     # TODO: use challenge_type to switch the template and keypoints
     template_image = challenge_template()

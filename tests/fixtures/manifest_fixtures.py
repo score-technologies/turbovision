@@ -121,3 +121,51 @@ def signed_manifest_file(tmp_path: Path, dummy_manifest: Manifest):
         yaml.dump(raw, f)
 
     return path
+
+
+@fixture
+def manifest_with_pillar_that_has_no_metric_registered():
+    return Manifest(
+        window_id="2025-10-27",
+        version="1.3",
+        expiry_block=123456,
+        tee=Tee(trusted_share_gamma=0.2),
+        elements=[
+            Element(
+                id="PitchCalib_v1",
+                metrics=Metrics(pillars={PillarName.COUNT: 1.0}),
+                clips=[Clip(hash="sha256:abc", weight=1.0)],
+                preproc=Preproc(fps=30, resize_long=720, norm="none"),
+                latency_p95_ms=100,
+                service_rate_fps=30,
+                pgt_recipe_hash="sha256:deadbeef",
+                baseline_theta=0.3,
+                delta_floor=0.05,
+                beta=1.0,
+            )
+        ],
+    )
+
+
+@fixture
+def manifest_with_pillar_weight_of_zero():
+    return Manifest(
+        window_id="2025-10-27",
+        version="1.3",
+        expiry_block=123456,
+        tee=Tee(trusted_share_gamma=0.2),
+        elements=[
+            Element(
+                id="PlayerDetect_v1",
+                metrics=Metrics(pillars={PillarName.IOU: 1.0, PillarName.COUNT: 0.0}),
+                clips=[Clip(hash="sha256:abc", weight=1.0)],
+                preproc=Preproc(fps=30, resize_long=720, norm="none"),
+                latency_p95_ms=100,
+                service_rate_fps=30,
+                pgt_recipe_hash="sha256:deadbeef",
+                baseline_theta=0.3,
+                delta_floor=0.05,
+                beta=1.0,
+            )
+        ],
+    )

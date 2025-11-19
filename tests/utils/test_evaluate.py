@@ -2,6 +2,9 @@ from scorevision.utils.evaluate import post_vlm_ranking, get_element_scores
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
+from scorevision.utils.manifest import ElementPrefix, PillarName
+
+from pytest import raises
 
 
 def test_post_vlm_ranking(
@@ -42,3 +45,47 @@ def test_get_element_scores(
     assert isinstance(breakdown, dict)
     assert "mean_weighted" in breakdown
     assert breakdown["mean_weighted"] > 0.0
+
+
+def test_get_element_scores_one_pillar_with_zero_weight(
+    manifest_with_pillar_weight_of_zero,
+    dummy_pseudo_gt_annotations,
+    fake_frame_store,
+    fake_miner_predictions,
+):
+    breakdown = get_element_scores(
+        manifest=manifest_with_pillar_weight_of_zero,
+        pseudo_gt_annotations=dummy_pseudo_gt_annotations,
+        miner_run=fake_miner_predictions,
+        frame_store=fake_frame_store,
+        challenge_type=ChallengeType.FOOTBALL,
+    )
+    assert (
+        breakdown[ElementPrefix.PLAYER_DETECTION.value][PillarName.COUNT.value][
+            "weighted_score"
+        ]
+        == 0.0
+    )  # the element pillar with a weight of 0.0 should produce a 0.0 weighted score
+    assert (
+        breakdown[ElementPrefix.PLAYER_DETECTION.value][PillarName.IOU.value][
+            "weighted_score"
+        ]
+        > 0.0
+    )  # the element pillar with a non-zero weight
+    assert breakdown["mean_weighted"] > 0.0
+
+
+def test_get_element_scores_on_pillar_without_metric_raises_error(
+    manifest_with_pillar_that_has_no_metric_registered,
+    dummy_pseudo_gt_annotations,
+    fake_frame_store,
+    fake_miner_predictions,
+):
+    with raises(NotImplementedError) as exc_info:
+        get_element_scores(
+            manifest=manifest_with_pillar_that_has_no_metric_registered,
+            pseudo_gt_annotations=dummy_pseudo_gt_annotations,
+            miner_run=fake_miner_predictions,
+            frame_store=fake_frame_store,
+            challenge_type=ChallengeType.FOOTBALL,
+        )

@@ -22,7 +22,7 @@ NodeSelector:
     - mi300x
 
 Chute:
-  timeout_seconds: 300
+  shutdown_after_seconds: 300
   concurrency: 4
   max_instances: 5
   scaling_threshold: 0.5
