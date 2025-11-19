@@ -29,6 +29,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
+from scorevision.utils.manifest import Manifest
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
@@ -214,7 +215,11 @@ def _enough_bboxes_per_frame(
     return ok_frames >= min_frames_required
 
 
+<<<<<<< HEAD
 async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
+=======
+async def runner(path_manifest: Path, slug: str | None = None) -> None:
+>>>>>>> api-v3-update
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
@@ -251,7 +256,12 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
     try:
         if use_v3:
             try:
+<<<<<<< HEAD
                 manifest = get_current_manifest(block_number=block_number)
+=======
+#                manifest = get_current_manifest(block_number=None)
+                manifest = Manifest.load_yaml(path=Path("example_manifest.yml"))
+>>>>>>> api-v3-update
                 manifest_hash = manifest.manifest_hash
                 expected_window_id = manifest.window_id
 
@@ -291,6 +301,7 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                 )
                 run_result = "manifest_error"
                 return
+
 
         miners = await get_miners_from_registry(NETUID)
         if not miners:
@@ -410,6 +421,7 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                         challenge=challenge,
                         pseudo_gt_annotations=pseudo_gt_annotations,
                         frame_store=frame_store,
+                        manifest=manifest,
                     )
                 except Exception:
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
@@ -487,7 +499,7 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
         gc.collect()
 
 
-async def runner_loop():
+async def runner_loop(path_manifest: Path):
     """Runs `runner()` every 300 blocks, with robust triggering."""
     settings = get_settings()
     TEMPO = 300
@@ -589,7 +601,11 @@ async def runner_loop():
                     block,
                     last_trigger_block,
                 )
+<<<<<<< HEAD
                 await runner(block_number=block)
+=======
+                await runner(path_manifest=path_manifest)
+>>>>>>> api-v3-update
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()
