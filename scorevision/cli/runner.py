@@ -237,7 +237,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
     frame_store: FrameStore | None = None
     run_result = "success"
     try:
-        manifest = Manifest.load_yaml(path=Path("example_manifest.yml"))
+        manifest = Manifest.load_yaml(path=path_manifest)
         logger.info(f"Manifest loaded: {manifest}")
 
         miners = await get_miners_from_registry(NETUID)

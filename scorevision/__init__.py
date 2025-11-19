@@ -39,8 +39,8 @@ def runner_cmd():
     """Launches runner every TEMPO blocks."""
     _start_metrics()
     mark_service_ready("runner")
-    current_dir = Path(__file__).parent
-    path_manifest = current_dir / "example_manifest.yml"
+    root_dir = Path(__file__).parent.parent
+    path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
     asyncio.run(runner_loop(path_manifest=path_manifest))
 
 
@@ -116,8 +116,8 @@ def test_vlm_pipeline(revision: str, path_manifest: Path) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:
         if path_manifest is None:
-            current_dir = Path(__file__).parent
-            path_manifest = current_dir / "example_manifest.yml"
+            root_dir = Path(__file__).parent.parent
+            path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
             click.echo(f"No manifest path specified. using default: {path_manifest}")
         result = run(
             run_vlm_pipeline_once_for_single_miner(

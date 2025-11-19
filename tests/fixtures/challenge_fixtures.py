@@ -11,7 +11,7 @@ from scorevision.utils.video_processing import FrameStore
 
 @fixture
 def fake_frame_store() -> FrameStore:
-    return FrameStore(Path("tests/test_data/example_football.mp4"))
+    return FrameStore(Path("tests/test_data/videos/example_football.mp4"))
 
 
 @fixture
