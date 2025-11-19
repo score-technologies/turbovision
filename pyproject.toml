@@ -33,7 +33,10 @@ dependencies = [
   "petname",
   "ultralytics",
   "pytest",
-  "cryptography"
+  "ruamel.yaml",
+  "boto3",
+  "tenacity",
+  "pynacl"
 ]
  
 [project.scripts]

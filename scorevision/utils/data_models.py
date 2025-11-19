@@ -64,12 +64,12 @@ class LatencyScore(Evaluation):
     )
 
 
-@dataclass
-class TotalScore(Evaluation):
-    action: ActionScore = field(default_factory=ActionScore)
-    keypoints: KeypointsScore = field(default_factory=KeypointsScore)
-    objects: ObjectsScore = field(default_factory=ObjectsScore)
-    latency: LatencyScore = field(default_factory=LatencyScore)
+# @dataclass
+# class TotalScore(Evaluation):
+#    action: ActionScore = field(default_factory=ActionScore)
+#    keypoints: KeypointsScore = field(default_factory=KeypointsScore)
+#    objects: ObjectsScore = field(default_factory=ObjectsScore)
+#    latency: LatencyScore = field(default_factory=LatencyScore)
 
 
 @dataclass

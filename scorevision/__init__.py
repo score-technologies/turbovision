@@ -11,6 +11,7 @@ from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 from scorevision.cli.run_vlm_pipeline import run_vlm_pipeline_once_for_single_miner
+from scorevision.cli.manifest import manifest_cli
 
 logger = getLogger(__name__)
 
@@ -38,7 +39,9 @@ def runner_cmd():
     """Launches runner every TEMPO blocks."""
     _start_metrics()
     mark_service_ready("runner")
-    asyncio.run(runner_loop())
+    current_dir = Path(__file__).parent
+    path_manifest = current_dir / "example_manifest.yml"
+    asyncio.run(runner_loop(path_manifest=path_manifest))
 
 
 @cli.command("push")
@@ -108,10 +111,22 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
 
 @cli.command("run-once")
 @click.option("--revision", type=str, default=None)
-def test_vlm_pipeline(revision: str) -> None:
+@click.option("--path-manifest", type=Path, default=None)
+def test_vlm_pipeline(revision: str, path_manifest: Path) -> None:
     """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
     try:
-        result = run(run_vlm_pipeline_once_for_single_miner(hf_revision=revision))
+        if path_manifest is None:
+            current_dir = Path(__file__).parent
+            path_manifest = current_dir / "example_manifest.yml"
+            click.echo(f"No manifest path specified. using default: {path_manifest}")
+        result = run(
+            run_vlm_pipeline_once_for_single_miner(
+                path_manifest=path_manifest, hf_revision=revision
+            )
+        )
         click.echo(result)
     except Exception as e:
         click.echo(e)
+
+
+cli.add_command(manifest_cli)
