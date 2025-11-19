@@ -1,8 +1,10 @@
 from logging import getLogger
 from time import monotonic
+from pathlib import Path
 
 from huggingface_hub import HfApi
 
+from scorevision.utils.manifest import Manifest
 from scorevision.utils.challenges import prepare_challenge_payload
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
@@ -28,10 +30,12 @@ logger = getLogger(__name__)
 
 
 async def run_vlm_pipeline_once_for_single_miner(
-    hf_revision: str | None,
+    hf_revision: str | None, path_manifest: Path
 ) -> SVEvaluation:
     """Run a single miner on the VLM pipeline off-chain
     NOTE: This flow should match the flow in the runner"""
+    manifest = Manifest.load_yaml(path=path_manifest)
+    logger.info(f"Manifest loaded: {manifest}")
     challenge_data = {
         "task_id": "0",
         "video_url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4",
@@ -92,6 +96,7 @@ async def run_vlm_pipeline_once_for_single_miner(
         challenge=challenge,
         pseudo_gt_annotations=pseudo_gt_annotations,
         frame_store=frame_store,
+        manifest=manifest,
     )
     frame_store.unlink()
     logger.info(f"Evaluation: {evaluation}")
