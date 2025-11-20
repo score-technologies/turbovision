@@ -34,20 +34,17 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
-<<<<<<< HEAD
 from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
 
 # NOTE: The following imports are required to load METRIC_REGISTRY
 import scorevision.vlm_pipeline.non_vlm_scoring.keypoints
 import scorevision.vlm_pipeline.non_vlm_scoring.objects
 import scorevision.vlm_pipeline.non_vlm_scoring.smoothness
-=======
 from scorevision.utils.rtf import (
     calculate_rtf,
     check_rtf_gate,
     get_service_rate_fps_for_element,
 )
->>>>>>> PH5-RTF
 
 logger = getLogger(__name__)
 
