@@ -93,6 +93,10 @@ class SVRunOutput:
     predictions: dict[str, list[SVFrameResult]] | None
     error: str | None
     model: str | None = None
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    latency_p99_ms: float | None = None
+    latency_max_ms: float | None = None
 
 
 @dataclass
@@ -112,3 +116,6 @@ class SVEvaluation:
     latency_ms: float
     score: float
     details: dict[str, Any]
+    latency_p95_ms: float | None = None
+    latency_pass: bool | None = None
+    rtf: float | None = None

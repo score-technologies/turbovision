@@ -29,7 +29,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Manifest, get_current_manifest
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
@@ -48,13 +48,11 @@ from scorevision.utils.prometheus import (
     RUNNER_MINER_LAST_DURATION_SECONDS,
 )
 from scorevision.utils.video_processing import FrameStore
-from scorevision.utils.manifest import get_current_manifest 
 from scorevision.utils.windows import get_current_window_id, is_window_active
 from scorevision.utils.commitments import get_active_element_ids_by_hotkey
 
 logger = getLogger(__name__)
 
-# Global shutdown event for graceful shutdown
 shutdown_event = asyncio.Event()
 
 
@@ -70,7 +68,6 @@ async def _build_pgt_with_retries(
     max_quality_retries: int = 5,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, list]:
-    """ """
     created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
@@ -215,8 +212,8 @@ def _enough_bboxes_per_frame(
             ok_frames += 1
     return ok_frames >= min_frames_required
 
-def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
 
+def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     if not isinstance(chal_api, dict):
         return None
 
@@ -238,22 +235,15 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
 
     return None
 
-<<<<<<< HEAD
+
 async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
-=======
-async def runner(path_manifest: Path, slug: str | None = None) -> None:
->>>>>>> api-v3-update
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
     last_pgt_duration = 0.0
     NETUID = settings.SCOREVISION_NETUID
     MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
-    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in (
-        "0",
-        "false",
-        "False",
-    )
+    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in ("0", "false", "False")
     WARMUP_CONC = int(os.getenv("SV_WARMUP_CONCURRENCY", "8"))
     WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
@@ -267,24 +257,15 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
     frame_store: FrameStore | None = None
     run_result = "success"
 
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
-        "0",
-        "false",
-        "False",
-    )
-    manifest = None
+    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in ("0", "false", "False")
+    manifest: Manifest | None = None
     manifest_hash: str | None = None
     expected_window_id: str | None = None
 
     try:
         if use_v3:
             try:
-<<<<<<< HEAD
                 manifest = get_current_manifest(block_number=block_number)
-=======
-#                manifest = get_current_manifest(block_number=None)
-                manifest = Manifest.load_yaml(path=Path("example_manifest.yml"))
->>>>>>> api-v3-update
                 manifest_hash = manifest.manifest_hash
                 expected_window_id = manifest.window_id
 
@@ -324,7 +305,6 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                 )
                 run_result = "manifest_error"
                 return
-
 
         miners = await get_miners_from_registry(NETUID)
         if not miners:
@@ -369,12 +349,9 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                 if block_number is not None:
                     current_window_id = get_current_window_id(block_number, tempo=300)
                 else:
-                    current_window_id = (chal_api.get("window_id") or None)
+                    current_window_id = chal_api.get("window_id") or None
 
-            logger.info(
-                "[Runner] Using window_id=%s for this run",
-                current_window_id,
-            )
+            logger.info("[Runner] Using window_id=%s for this run", current_window_id)
 
             element_id = None
             try:
@@ -486,11 +463,10 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                 RUNNER_MINER_CALLS_TOTAL.labels(outcome="skipped_no_commitment").inc()
                 continue
 
-            miner_output: TVPredictInput | None = None
+            miner_output = None
             emission_started = False
             miner_total_start = loop.time()
             try:
-                loop = asyncio.get_running_loop()
                 start = loop.time()
                 miner_output = await call_miner_model_on_chutes(
                     slug=m.slug,
@@ -509,15 +485,11 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                         pseudo_gt_annotations=pseudo_gt_annotations,
                         frame_store=frame_store,
                         manifest=manifest,
+                        element_id=element_id,
                     )
                 except Exception:
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
                     raise
-                logger.info(f"Evaluation: {evaluation}")
-                if getattr(evaluation, "score", None) is not None:
-                    RUNNER_EVALUATION_SCORE.labels(miner=miner_label).set(
-                        getattr(evaluation, "score", 0.0)
-                    )
 
                 emission_started = True
                 emit_start = loop.time()
@@ -548,9 +520,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                     )
                 except Exception:
                     dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.exception(
-                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
-                    )
+                    logger.exception("[emit] FAILED for %s in %.1fms", miner_label, dt_emit)
                     raise
                 else:
                     dt_emit = (loop.time() - emit_start) * 1000.0
@@ -572,9 +542,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                 continue
             finally:
                 duration = loop.time() - miner_total_start
-                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
-                    duration
-                )
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(duration)
     except Exception as e:
         logger.error(e)
         run_result = "error"
@@ -602,8 +570,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
         gc.collect()
 
 
-async def runner_loop(path_manifest: Path):
-    """Runs `runner()` every 300 blocks, with robust triggering."""
+async def runner_loop(path_manifest: Path | None = None):
     settings = get_settings()
     TEMPO = 300
     STALL_SECS_FALLBACK = 5400
@@ -704,11 +671,7 @@ async def runner_loop(path_manifest: Path):
                     block,
                     last_trigger_block,
                 )
-<<<<<<< HEAD
                 await runner(block_number=block)
-=======
-                await runner(path_manifest=path_manifest)
->>>>>>> api-v3-update
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()

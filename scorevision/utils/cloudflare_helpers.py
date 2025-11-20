@@ -352,6 +352,20 @@ async def emit_shard(
     }
     if commitment_meta:
         miner_info["commitment"] = commitment_meta
+        
+    eval_dict = {
+        "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
+        "acc": getattr(evaluation, "acc", None),
+        "score": getattr(evaluation, "score", None),
+    }
+
+    p95_latency_ms = getattr(evaluation, "latency_p95_ms", None)
+    if p95_latency_ms is None:
+        p95_latency_ms = getattr(evaluation, "latency_ms", None)
+
+    eval_dict["p95_latency_ms"] = p95_latency_ms
+    eval_dict["latency_pass"] = getattr(evaluation, "latency_pass", None)
+    eval_dict["rtf"] = getattr(evaluation, "rtf", None)
 
     shard_payload = {
         "env": "SVEnv",
@@ -365,11 +379,7 @@ async def emit_shard(
             "error": getattr(miner_run, "error", None),
             "responses_key": resp_key,
         },
-        "evaluation": {
-            "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
-            "acc": getattr(evaluation, "acc", None),
-            "score": getattr(evaluation, "score", None),
-        },
+        "evaluation": eval_dict,
         "ts": time(),
         "block": current_block,
         "window_id": shard_window_id,
