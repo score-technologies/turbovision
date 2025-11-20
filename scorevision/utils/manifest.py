@@ -313,15 +313,6 @@ class Manifest(BaseModel):
             raw["signature"] = self.signature
         yaml.dump(raw, path.open("w"))
 
-def load_manifest_from_file(path: str | Path) -> Manifest:
-    """Load a Manifest from a JSON file on disk."""
-    p = Path(path)
-    if not p.is_file():
-        raise FileNotFoundError(f"Manifest file not found at: {p}")
-    with p.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    return Manifest.from_dict(data)
-
 
 def get_current_manifest(block_number: int | None = None) -> Manifest:
     """
@@ -337,7 +328,7 @@ def get_current_manifest(block_number: int | None = None) -> Manifest:
             "No manifest path configured. Set SCOREVISION_MANIFEST_PATH or SV_MANIFEST_PATH."
         )
 
-    manifest = load_manifest_from_file(path)
+    manifest = Manifest.load_yaml(path=Path(path))
 
     if (
         block_number is not None
@@ -349,4 +340,3 @@ def get_current_manifest(block_number: int | None = None) -> Manifest:
         )
 
     return manifest
-

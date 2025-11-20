@@ -298,7 +298,11 @@ def commitments_list(window_opt: Optional[str], source: str, as_json: bool) -> N
                     str(r.get("chute_id", "")),
                     str(r.get("service_cap", "")),
                     str(r.get("block", "")),
-                    f"{r.get('ts', ''):.0f}" if isinstance(r.get("ts", None), (int, float)) else str(r.get("ts", "")),
+                    (
+                        f"{r.get('ts', ''):.0f}"
+                        if isinstance(r.get("ts", None), (int, float))
+                        else str(r.get("ts", ""))
+                    ),
                     str(payload.get("action", "")),
                 ]
             )
