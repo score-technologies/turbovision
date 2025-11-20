@@ -251,7 +251,6 @@ class Manifest(BaseModel):
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
 
-<<<<<<< HEAD
     @property
     def manifest_hash(self) -> str:
         """Alias used by the protocol text."""
@@ -344,10 +343,8 @@ def get_current_manifest(block_number: int | None = None) -> Manifest:
         )
 
     return manifest
-=======
     def save_yaml(self, path: Path) -> None:
         raw = loads(self.to_canonical_json())
         if self.signature:
             raw["signature"] = self.signature
         yaml.dump(raw, path.open("w"))
->>>>>>> toward-manako
