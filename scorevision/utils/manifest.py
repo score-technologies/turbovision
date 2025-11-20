@@ -307,6 +307,12 @@ class Manifest(BaseModel):
             signature=data.get("signature"),
         )
 
+    def save_yaml(self, path: Path) -> None:
+        raw = loads(self.to_canonical_json())
+        if self.signature:
+            raw["signature"] = self.signature
+        yaml.dump(raw, path.open("w"))
+
 def load_manifest_from_file(path: str | Path) -> Manifest:
     """Load a Manifest from a JSON file on disk."""
     p = Path(path)
@@ -343,8 +349,4 @@ def get_current_manifest(block_number: int | None = None) -> Manifest:
         )
 
     return manifest
-    def save_yaml(self, path: Path) -> None:
-        raw = loads(self.to_canonical_json())
-        if self.signature:
-            raw["signature"] = self.signature
-        yaml.dump(raw, path.open("w"))
+
