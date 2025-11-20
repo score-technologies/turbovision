@@ -11,6 +11,7 @@ from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 from scorevision.cli.run_vlm_pipeline import run_vlm_pipeline_once_for_single_miner
+from scorevision.cli.miner import miner as miner_cli
 from scorevision.cli.manifest import manifest_cli
 
 logger = getLogger(__name__)
@@ -32,6 +33,9 @@ def cli(verbosity: int):
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logger.debug(f"Score Vision started (version={settings.SCOREVISION_VERSION})")
+
+
+cli.add_command(miner_cli)
 
 
 @cli.command("runner")
@@ -126,6 +130,7 @@ def test_vlm_pipeline(revision: str, path_manifest: Path) -> None:
         )
         click.echo(result)
     except Exception as e:
+        click.echo(e)
         click.echo(e)
 
 

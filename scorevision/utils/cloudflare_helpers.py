@@ -282,6 +282,12 @@ async def emit_shard(
     miner_run: SVRunOutput,
     evaluation: SVEvaluation,
     miner_hotkey_ss58: str,
+    window_id: str | None = None,
+    *,
+    model: str | None = None,
+    revision: str | None = None,
+    chute_id: str | None = None,
+    commitment_meta: dict | None = None,
 ) -> None:
 
     settings = get_settings()
@@ -325,29 +331,58 @@ async def emit_shard(
     meta_out = (challenge.meta or {}).copy()
     meta_out["block"] = current_block
 
+    shard_window_id = (
+        window_id
+        or meta_out.get("window_id")
+    )
+    if shard_window_id is not None:
+        meta_out["window_id"] = shard_window_id
+
+    miner_model = model or getattr(miner_run, "model", None)
+    miner_revision = revision or getattr(miner_run, "revision", None)
+    miner_chute_slug = slug
+    miner_chute_id = chute_id
+
+    miner_info = {
+        "model": miner_model,
+        "revision": miner_revision,
+        "slug": miner_chute_slug,
+        "chute_id": miner_chute_id,
+        "hotkey": miner_hotkey_ss58,
+    }
+    if commitment_meta:
+        miner_info["commitment"] = commitment_meta
+        
+    eval_dict = {
+        "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
+        "acc": getattr(evaluation, "acc", None),
+        "score": getattr(evaluation, "score", None),
+    }
+
+    p95_latency_ms = getattr(evaluation, "latency_p95_ms", None)
+    if p95_latency_ms is None:
+        p95_latency_ms = getattr(evaluation, "latency_ms", None)
+
+    eval_dict["p95_latency_ms"] = p95_latency_ms
+    eval_dict["latency_pass"] = getattr(evaluation, "latency_pass", None)
+    eval_dict["rtf"] = getattr(evaluation, "rtf", None)
+
     shard_payload = {
         "env": "SVEnv",
         "task_id": meta_out.get("task_id"),
         "prompt": challenge.prompt,
         "meta": meta_out,
-        "miner": {
-            "model": getattr(miner_run, "model", None),
-            "slug": slug,
-            "hotkey": miner_hotkey_ss58,
-        },
+        "miner": miner_info,
         "run": {
             "success": getattr(miner_run, "success", None),
             "latency_ms": getattr(miner_run, "latency_ms", None),
             "error": getattr(miner_run, "error", None),
             "responses_key": resp_key,
         },
-        "evaluation": {
-            "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
-            "acc": getattr(evaluation, "acc", None),
-            "score": getattr(evaluation, "score", None),
-        },
+        "evaluation": eval_dict,
         "ts": time(),
         "block": current_block,
+        "window_id": shard_window_id,
         "source": "api_v2_video",
     }
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}

@@ -5,7 +5,7 @@ import asyncio
 import signal
 import gc
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.challenges import (
@@ -13,6 +13,7 @@ from scorevision.utils.challenges import (
     get_challenge_from_scorevision_with_source,
     prepare_challenge_payload,
     build_svchallenge_from_parts,
+    ScoreVisionChallengeError,
 )
 from scorevision.utils.data_models import SVChallenge
 from scorevision.chute_template.schemas import TVPredictInput
@@ -28,7 +29,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Manifest, get_current_manifest
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
@@ -47,10 +48,11 @@ from scorevision.utils.prometheus import (
     RUNNER_MINER_LAST_DURATION_SECONDS,
 )
 from scorevision.utils.video_processing import FrameStore
+from scorevision.utils.windows import get_current_window_id, is_window_active
+from scorevision.utils.commitments import get_active_element_ids_by_hotkey
 
 logger = getLogger(__name__)
 
-# Global shutdown event for graceful shutdown
 shutdown_event = asyncio.Event()
 
 
@@ -66,7 +68,6 @@ async def _build_pgt_with_retries(
     max_quality_retries: int = 5,
     video_cache: dict[str, Any] | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, list]:
-    """ """
     created_local_cache = video_cache is None
     if video_cache is None:
         video_cache = {}
@@ -212,18 +213,37 @@ def _enough_bboxes_per_frame(
     return ok_frames >= min_frames_required
 
 
-async def runner(path_manifest: Path, slug: str | None = None) -> None:
+def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
+    if not isinstance(chal_api, dict):
+        return None
+
+    eid = chal_api.get("element_id")
+    if isinstance(eid, str) and eid:
+        return eid
+
+    elem = chal_api.get("element") or {}
+    if isinstance(elem, dict):
+        eid = elem.get("element_id") or elem.get("id")
+        if isinstance(eid, str) and eid:
+            return eid
+
+    meta = chal_api.get("meta") or {}
+    if isinstance(meta, dict):
+        eid = meta.get("element_id") or meta.get("element")
+        if isinstance(eid, str) and eid:
+            return eid
+
+    return None
+
+
+async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
     last_pgt_duration = 0.0
     NETUID = settings.SCOREVISION_NETUID
     MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
-    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in (
-        "0",
-        "false",
-        "False",
-    )
+    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in ("0", "false", "False")
     WARMUP_CONC = int(os.getenv("SV_WARMUP_CONCURRENCY", "8"))
     WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
@@ -236,9 +256,56 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
     video_cache: dict[str, Any] = {}
     frame_store: FrameStore | None = None
     run_result = "success"
+
+    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in ("0", "false", "False")
+    manifest: Manifest | None = None
+    manifest_hash: str | None = None
+    expected_window_id: str | None = None
+
     try:
-        manifest = Manifest.load_yaml(path=path_manifest)
-        logger.info(f"Manifest loaded: {manifest}")
+        if use_v3:
+            try:
+#                manifest = get_current_manifest(block_number=block_number)
+                manifest = Manifest.load_yaml(path=path_manifest)
+                manifest_hash = manifest.manifest_hash
+                expected_window_id = manifest.window_id
+
+                blocks_to_expiry = None
+                if manifest.expiry_block is not None and block_number is not None:
+                    blocks_to_expiry = manifest.expiry_block - block_number
+
+                logger.info(
+                    "[Runner] Loaded Manifest: hash=%s window_id=%s expiry_block=%s blocks_to_expiry=%s",
+                    manifest_hash,
+                    expected_window_id,
+                    getattr(manifest, "expiry_block", None),
+                    blocks_to_expiry,
+                )
+
+                if (
+                    block_number is not None
+                    and not is_window_active(
+                        expected_window_id,
+                        current_block=block_number,
+                        expiry_block=manifest.expiry_block,
+                    )
+                ):
+                    logger.warning(
+                        "[Runner] Window %s is not active at block %s (expiry_block=%s). Skipping run.",
+                        expected_window_id,
+                        block_number,
+                        manifest.expiry_block,
+                    )
+                    run_result = "window_inactive"
+                    return
+
+            except Exception as e:
+                logger.error(
+                    "[Runner] SCOREVISION_USE_CHALLENGE_V3=1 but failed to load Manifest: %s",
+                    e,
+                )
+                run_result = "manifest_error"
+                return
 
         miners = await get_miners_from_registry(NETUID)
         if not miners:
@@ -247,12 +314,116 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
             run_result = "no_miners"
             return
 
-        challenge, payload, chal_api, frame_store = (
-            await get_challenge_from_scorevision_with_source(video_cache=video_cache)
-        )
+        try:
+            if use_v3:
+                challenge, payload, chal_api, frame_store = (
+                    await get_challenge_from_scorevision_with_source(
+                        video_cache=video_cache,
+                        manifest_hash=manifest_hash,
+                    )
+                )
+
+                chal_mh = chal_api.get("manifest_hash")
+                chal_wid = chal_api.get("window_id")
+
+                if manifest_hash and chal_mh and chal_mh != manifest_hash:
+                    logger.warning(
+                        "[Runner] Manifest hash mismatch between local Manifest (%s) and challenge (%s).",
+                        manifest_hash,
+                        chal_mh,
+                    )
+
+                if expected_window_id and chal_wid and chal_wid != expected_window_id:
+                    logger.warning(
+                        "[Runner] Window ID mismatch between local Manifest (%s) and challenge (%s).",
+                        expected_window_id,
+                        chal_wid,
+                    )
+
+                current_window_id = expected_window_id or chal_wid
+            else:
+                challenge, payload, chal_api, frame_store = (
+                    await get_challenge_from_scorevision_with_source(
+                        video_cache=video_cache
+                    )
+                )
+                if block_number is not None:
+                    current_window_id = get_current_window_id(block_number, tempo=300)
+                else:
+                    current_window_id = chal_api.get("window_id") or None
+
+            logger.info("[Runner] Using window_id=%s for this run", current_window_id)
+
+            element_id = None
+            try:
+                element_id = _extract_element_id_from_chal_api(chal_api)
+            except Exception as e:
+                logger.warning("[Runner] Failed to extract element_id from challenge: %s", e)
+
+            if not element_id:
+                logger.warning(
+                    "[Runner] Challenge missing element_id; refusing to run without manifest-bound element. "
+                    "Check challenge API / manifest wiring."
+                )
+                run_result = "no_element_id"
+                return
+
+            if not current_window_id:
+                logger.warning(
+                    "[Runner] No window_id associated with challenge; refusing to run."
+                )
+                run_result = "no_window_id"
+                return
+
+            logger.info(
+                "[Runner] Challenge bound to element_id=%s window_id=%s",
+                element_id,
+                current_window_id,
+            )
+        except ScoreVisionChallengeError as ce:
+            msg = str(ce)
+            if "No active evaluation window" in msg:
+                logger.warning(
+                    "[Runner] No active evaluation window (404) from challenge API v3. Skipping run."
+                )
+                run_result = "no_window"
+            elif "Rate limited by /api/challenge/v3" in msg:
+                logger.warning(
+                    "[Runner] Rate limited by challenge API v3 (409). Backing off this run."
+                )
+                run_result = "rate_limited"
+            elif "Manifest expired or rejected" in msg:
+                logger.warning(
+                    "[Runner] Manifest expired or rejected (410). Operator action required."
+                )
+                run_result = "manifest_expired"
+            else:
+                logger.error("[Runner] Challenge API error: %s", msg)
+                run_result = "challenge_error"
+            return
 
         miner_list = list(miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
+
+        try:
+            active_commitments = await get_active_element_ids_by_hotkey(current_window_id)
+        except Exception as e:
+            logger.warning(
+                "[Runner] Failed to load element commitments for window %s: %s",
+                current_window_id,
+                e,
+            )
+            active_commitments = {}
+
+        if not active_commitments:
+            logger.warning(
+                "[Runner] No active miner element commitments found for window %s. "
+                "Refusing to process this challenge. Miners must commit to elements via "
+                "`sv miner` (or the appropriate commit helper) before participating.",
+                current_window_id,
+            )
+            run_result = "no_element_commitments"
+            return
 
         try:
             pgt_build_start = loop.time()
@@ -276,11 +447,27 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
-            miner_output: TVPredictInput | None = None
+
+            hk = getattr(m, "hotkey", None)
+            miner_commitments_for_hk = active_commitments.get(hk or "", {}) if hk else {}
+            miner_proof = miner_commitments_for_hk.get(str(element_id))
+
+            if not miner_proof:
+                logger.info(
+                    "[Runner] Skipping miner uid=%s slug=%s: no active commitment "
+                    "for element_id=%s in window=%s",
+                    getattr(m, "uid", "?"),
+                    getattr(m, "slug", "?"),
+                    element_id,
+                    current_window_id,
+                )
+                RUNNER_MINER_CALLS_TOTAL.labels(outcome="skipped_no_commitment").inc()
+                continue
+
+            miner_output = None
             emission_started = False
             miner_total_start = loop.time()
             try:
-                loop = asyncio.get_running_loop()
                 start = loop.time()
                 miner_output = await call_miner_model_on_chutes(
                     slug=m.slug,
@@ -299,18 +486,26 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                         pseudo_gt_annotations=pseudo_gt_annotations,
                         frame_store=frame_store,
                         manifest=manifest,
+                        element_id=element_id,
                     )
                 except Exception:
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
                     raise
-                logger.info(f"Evaluation: {evaluation}")
-                if getattr(evaluation, "score", None) is not None:
-                    RUNNER_EVALUATION_SCORE.labels(miner=miner_label).set(
-                        getattr(evaluation, "score", 0.0)
-                    )
 
                 emission_started = True
                 emit_start = loop.time()
+
+                commitment_meta = {
+                    "window_id": miner_proof.window_id,
+                    "element_ids": miner_proof.element_ids,
+                    "model": miner_proof.model,
+                    "revision": miner_proof.revision,
+                    "chute_slug": miner_proof.chute_slug,
+                    "chute_id": miner_proof.chute_id,
+                    "service_cap": miner_proof.service_cap,
+                    "commit_block": miner_proof.block,
+                }
+
                 try:
                     await emit_shard(
                         slug=m.slug,
@@ -318,12 +513,15 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                         miner_run=miner_output,
                         evaluation=evaluation,
                         miner_hotkey_ss58=m.hotkey,
+                        window_id=current_window_id,
+                        model=m.model,
+                        revision=m.revision,
+                        chute_id=m.chute_id,
+                        commitment_meta=commitment_meta,
                     )
                 except Exception:
                     dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.exception(
-                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
-                    )
+                    logger.exception("[emit] FAILED for %s in %.1fms", miner_label, dt_emit)
                     raise
                 else:
                     dt_emit = (loop.time() - emit_start) * 1000.0
@@ -345,9 +543,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
                 continue
             finally:
                 duration = loop.time() - miner_total_start
-                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
-                    duration
-                )
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(duration)
     except Exception as e:
         logger.error(e)
         run_result = "error"
@@ -375,8 +571,7 @@ async def runner(path_manifest: Path, slug: str | None = None) -> None:
         gc.collect()
 
 
-async def runner_loop(path_manifest: Path):
-    """Runs `runner()` every 300 blocks, with robust triggering."""
+async def runner_loop(path_manifest: Path | None = None):
     settings = get_settings()
     TEMPO = 300
     STALL_SECS_FALLBACK = 5400
@@ -477,7 +672,7 @@ async def runner_loop(path_manifest: Path):
                     block,
                     last_trigger_block,
                 )
-                await runner(path_manifest=path_manifest)
+                await runner(block_number=block)
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()

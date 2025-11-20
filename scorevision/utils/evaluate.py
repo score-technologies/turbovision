@@ -34,12 +34,20 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
+<<<<<<< HEAD
 from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
 
 # NOTE: The following imports are required to load METRIC_REGISTRY
 import scorevision.vlm_pipeline.non_vlm_scoring.keypoints
 import scorevision.vlm_pipeline.non_vlm_scoring.objects
 import scorevision.vlm_pipeline.non_vlm_scoring.smoothness
+=======
+from scorevision.utils.rtf import (
+    calculate_rtf,
+    check_rtf_gate,
+    get_service_rate_fps_for_element,
+)
+>>>>>>> PH5-RTF
 
 logger = getLogger(__name__)
 
@@ -124,6 +132,7 @@ def post_vlm_ranking(
     pseudo_gt_annotations: list[PseudoGroundTruth],
     frame_store: FrameStore,
     manifest: Manifest,
+    element_id: str | None = None,
 ) -> SVEvaluation:
     settings = get_settings()
     logger.info(payload.meta)
@@ -175,12 +184,81 @@ def post_vlm_ranking(
     logger.info(details)
 
     final_score = breakdown_dict.get("mean_weighted", 0.0)
+
+    p95_latency_ms = getattr(miner_run, "latency_p95_ms", None) or miner_run.latency_ms
+
+    service_rate_fps = get_service_rate_fps_for_element(
+        manifest=manifest,
+        element_id=element_id,
+    )
+
+    latency_pass = True
+    rtf_value = None
+
+    if service_rate_fps is None:
+        logger.warning(
+            "[RTF] service_rate_fps unavailable for element '%s'; "
+            "skipping latency gate (config issue).",
+            element_id,
+        )
+    else:
+        try:
+            rtf_value = calculate_rtf(
+                p95_latency_ms=float(p95_latency_ms),
+                service_rate_fps=float(service_rate_fps),
+            )
+            latency_pass = check_rtf_gate(rtf_value)
+            logger.info(
+                "[RTF] element_id=%s service_rate_fps=%.3f p95_ms=%.1f "
+                "rtf=%.3f latency_pass=%s",
+                element_id,
+                float(service_rate_fps),
+                float(p95_latency_ms),
+                float(rtf_value),
+                latency_pass,
+            )
+        except Exception as e:
+            logger.warning(
+                "[RTF] Error computing RTF for element '%s': %s. "
+                "Skipping latency gate.",
+                element_id,
+                e,
+            )
+            latency_pass = True
+            rtf_value = None
+
+        if not latency_pass:
+            logger.info(
+                "[RTF] Failing latency gate (rtf=%.3f > 1.0) → forcing score=0.",
+                rtf_value,
+            )
+            final_score = 0.0
+
+    details.setdefault("latency", {})
+    details["latency"].update(
+        {
+            "latency_ms": miner_run.latency_ms,
+            "latency_p50_ms": getattr(miner_run, "latency_p50_ms", None),
+            "latency_p95_ms": p95_latency_ms,
+            "latency_p99_ms": getattr(miner_run, "latency_p99_ms", None),
+            "latency_max_ms": getattr(miner_run, "latency_max_ms", None),
+            "service_rate_fps": service_rate_fps,
+            "rtf": rtf_value,
+            "latency_pass": latency_pass,
+        }
+    )
+
+    acc_value = final_score
+
     return SVEvaluation(
         acc_breakdown=breakdown_dict,
         latency_ms=miner_run.latency_ms,
-        acc=final_score,
+        acc=acc_value,
         score=final_score,
         details=details,
+        latency_p95_ms=p95_latency_ms,
+        latency_pass=latency_pass,
+        rtf=rtf_value,
     )
 
 

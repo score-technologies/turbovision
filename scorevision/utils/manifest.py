@@ -11,6 +11,9 @@ from pathlib import Path
 from hashlib import sha256
 from json import dumps
 from base64 import b64encode, b64decode
+import json
+import os
+from pathlib import Path
 from enum import Enum
 from functools import cached_property
 from json import loads
@@ -248,8 +251,103 @@ class Manifest(BaseModel):
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
 
+<<<<<<< HEAD
+    @property
+    def manifest_hash(self) -> str:
+        """Alias used by the protocol text."""
+        return self.hash
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Manifest":
+        """Rebuild a Manifest (and nested dataclasses) from a plain dict (e.g. JSON)."""
+        elements: list[Element] = []
+        for e in data.get("elements", []):
+            preproc = None
+            if e.get("preproc"):
+                preproc = Preproc(**e["preproc"])
+
+            metrics = None
+            if e.get("metrics"):
+                pillars = None
+                m = e["metrics"]
+                if m.get("pillars"):
+                    pillars = Pillars(**m["pillars"])
+                metrics = Metrics(pillars=pillars)
+
+            salt = None
+            if e.get("salt"):
+                salt = Salt(**e["salt"])
+
+            elements.append(
+                Element(
+                    id=e["id"],
+                    clips=e.get("clips", []),
+                    weights=e.get("weights", []),
+                    preproc=preproc,
+                    metrics=metrics,
+                    latency_p95_ms=e.get("latency_p95_ms"),
+                    service_rate_fps=e.get("service_rate_fps"),
+                    salt=salt,
+                    pgt_recipe_hash=e.get("pgt_recipe_hash"),
+                    baseline_theta=e.get("baseline_theta"),
+                    delta_floor=e.get("delta_floor"),
+                    beta=e.get("beta"),
+                )
+            )
+
+        tee = None
+        if data.get("tee"):
+            tee = Tee(**data["tee"])
+
+        return cls(
+            window_id=data["window_id"],
+            elements=elements,
+            tee=tee,
+            version=data.get("version"),
+            expiry_block=data.get("expiry_block"),
+            signature=data.get("signature"),
+        )
+
+def load_manifest_from_file(path: str | Path) -> Manifest:
+    """Load a Manifest from a JSON file on disk."""
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"Manifest file not found at: {p}")
+    with p.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return Manifest.from_dict(data)
+
+
+def get_current_manifest(block_number: int | None = None) -> Manifest:
+    """
+    Return the current active Manifest.
+
+    Phase 2 version:
+    - reads JSON path from env SCOREVISION_MANIFEST_PATH or SV_MANIFEST_PATH
+    - optionally checks expiry_block against block_number if provided
+    """
+    path = os.getenv("SCOREVISION_MANIFEST_PATH") or os.getenv("SV_MANIFEST_PATH")
+    if not path:
+        raise RuntimeError(
+            "No manifest path configured. Set SCOREVISION_MANIFEST_PATH or SV_MANIFEST_PATH."
+        )
+
+    manifest = load_manifest_from_file(path)
+
+    if (
+        block_number is not None
+        and manifest.expiry_block is not None
+        and block_number > manifest.expiry_block
+    ):
+        raise RuntimeError(
+            f"Manifest expired at block {manifest.expiry_block}, current block={block_number}."
+        )
+
+    return manifest
+=======
     def save_yaml(self, path: Path) -> None:
         raw = loads(self.to_canonical_json())
         if self.signature:
             raw["signature"] = self.signature
         yaml.dump(raw, path.open("w"))
+>>>>>>> toward-manako

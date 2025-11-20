@@ -35,14 +35,25 @@ async def call_miner_model_on_chutes(
             predictions=None,
             error="Chute integrity check failed",
             model=None,
+            latency_p50_ms=0.0,
+            latency_p95_ms=0.0,
+            latency_p99_ms=0.0,
+            latency_max_ms=0.0,
         )
+
     res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
+    lat_ms = res.latency_seconds * 1000.0
+
     return SVRunOutput(
         success=res.success,
-        latency_ms=res.latency_seconds * 1000.0,
+        latency_ms=lat_ms,
         predictions=res.predictions if res.success else None,
         error=res.error,
         model=res.model,
+        latency_p50_ms=lat_ms,
+        latency_p95_ms=lat_ms,
+        latency_p99_ms=lat_ms,
+        latency_max_ms=lat_ms,
     )
 
 
