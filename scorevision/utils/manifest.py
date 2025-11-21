@@ -3,8 +3,14 @@ Manifest data structures and signing utilities.
 
 This module defines the canonical schema for a Score Vision Manifest.
 A Manifest is a cryptographically signed, content-addressed rulebook
-for a single evaluation window. It specifies Elements, metrics, baselines,
-latency gates, service rates, and TEE-related trust parameters.
+for a single evaluation window. It specifies Elements, multi-pillar metrics,
+performance baselines (baseline_theta), difficulty weights (beta),
+minimum performance margins (delta_floor), latency gates, service rates,
+and TEE-related trust parameters.
+
+- baseline_theta (θₑ): Minimum Element-specific performance required to earn rewards.
+- delta_floor: Minimum margin above baseline before applying difficulty weighting.
+- beta (βₑ): Difficulty multiplier scaling rewards based on Element complexity.
 """
 
 from pathlib import Path
@@ -123,16 +129,17 @@ class Element(BaseModel):
     Atomic capability definition (e.g., PlayerDetect, BallDetect).
 
     Fields:
-      id:                Unique versioned name (e.g., "PlayerDetect_v1@1.0")
-      clips:             List of Clip objects
-      preproc:           Preprocessing config
-      metrics:           Metric pillar weights
-      latency_p95_ms:    Hard p95 latency gate
-      service_rate_fps:  Target real-time service rate
-      pgt_recipe_hash:   Immutable PGT recipe hash
-      baseline_theta:    Score threshold for emissions
-      delta_floor:       Minimum margin above baseline
-      beta:              Difficulty weight
+    id:                Unique versioned name (e.g., "PlayerDetect_v1@1.0")
+    clips:             List of Clip objects
+    preproc:           Preprocessing config (fps, resize, normalization)
+    metrics:           Metric pillar weights (sum to 1.0)
+    latency_p95_ms:    Hard p95 latency gate in milliseconds
+    service_rate_fps:  Target real-time service rate (fps)
+    pgt_recipe_hash:   Immutable hash of the Pseudo-Ground Truth recipe
+    baseline_theta:    θₑ — Minimum Element-specific performance required to earn rewards
+    delta_floor:       Minimum margin above baseline (Qₑ floor) before applying difficulty weighting
+    beta:              βₑ — Difficulty multiplier to scale rewards for harder Elements
+    salt:              Per-validator VRF salting offsets and strides for unpredictability
     """
 
     id: str
@@ -142,12 +149,38 @@ class Element(BaseModel):
     latency_p95_ms: int
     service_rate_fps: int
     pgt_recipe_hash: str
-    baseline_theta: float
-    delta_floor: float = Field(
-        ge=0, description="Minimum margin above baseline (must be non-negative)"
+    baseline_theta: float = Field(
+        ge=0.0, description="Score threshold for emissions (min 0.0)"
     )
-    beta: float
+    delta_floor: float = Field(
+        ge=0.0,
+        description=(
+            "Minimum margin above baseline (Q_e floor). "
+            "Rewards are computed only for improvements above baseline_theta. "
+            "This ensures a non-negative minimum contribution before applying beta."
+        ),
+    )
+    beta: float = Field(
+        ge=0.0,
+        description="Difficulty weight for emission allocation (must be positive)",
+    )
     salt: Salt = Field(default_factory=Salt)
+
+    def apply_baseline_gate(self, score: float) -> float:
+        """Clamp score to positive margin above baseline."""
+        return max(score - self.baseline_theta, 0.0)
+
+    def improvement(self, score: float) -> float:
+        """Compute improvement with delta_floor applied."""
+        return max(self.apply_baseline_gate(score=score), self.delta_floor)
+
+    def apply_difficulty_weight(self, improvement: float) -> float:
+        """Scale improvement by beta (difficulty weight)."""
+        return self.beta * improvement
+
+    def weight_score(self, score: float) -> float:
+        """Convenience function: baseline → delta → beta."""
+        return self.apply_difficulty_weight(improvement=self.improvement(score=score))
 
     @property
     def category(self) -> ElementPrefix:
@@ -165,7 +198,10 @@ class Element(BaseModel):
 class Tee(BaseModel):
     """
     Trusted Execution Environment parameters.
-    Defines how much reward share comes from Trusted Track.
+
+    Fields:
+        trusted_share_gamma: Fraction (γ_trusted ∈ [0,1]) of total emissions
+                          allocated to the privacy-preserving Trusted Track.
     """
 
     trusted_share_gamma: float
