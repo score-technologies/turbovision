@@ -39,9 +39,8 @@ elements:
     beta: 1.0
 ```
 
-* **PlayerDetect_v1** will only earn rewards for improvements above 0.3, with a minimum contribution of 0.05 scaled by β=1.5.
-* **PitchCalib_v1** has no delta floor and standard scaling.
-
+* **PlayerDetect_v1** has four pillars with custom weights summing to 1.0. will only earn rewards for improvements above 0.3, with a minimum contribution of 0.05 scaled by β=1.5.
+* **PitchCalib_v1** has a single pillar with weight 1.0. has no delta floor and standard scaling.
 ---
 
 ## Scoring Calculation with Economics
@@ -67,19 +66,6 @@ Example table (simplified):
 
 ---
 
-## Economic Plot Reference
-
-Below is an example of how raw scores are transformed through baseline gating, delta floor, and difficulty scaling:
-
-![Economic Controls Example](images/economic_plot.png)
-
-* Horizontal axis: raw element score (0 → 1)
-* Dashed line: baseline gate applied
-* Dash-dot line: delta floor applied
-* Solid line: weighted score after β scaling
-
----
-
 ## Developer Notes
 
 * Metrics must be **registered** via `@register_metric(ElementPrefix, PillarName)`.
@@ -87,10 +73,28 @@ Below is an example of how raw scores are transformed through baseline gating, d
 * Elements with **Qₑ = 0** (after baseline gate and delta floor) can be routed to burn per spec.
 * Pillars with **weight = 0** are included in raw totals but do **not affect weighted totals**.
 * `Element.weight_score()` computes the final gated and scaled contribution for a given score.
+* The **metric function signature** supports flexible arguments via `**kwargs`:
+
+```python
+def metric_fn(
+    pseudo_gt: list[PseudoGroundTruth],
+    miner_predictions: dict[int, dict],
+    frames: FrameStore,
+    image_height: int,
+    image_width: int,
+    challenge_type: ChallengeType,
+    **kwargs
+) -> float:
+    ...
+```
 
 ---
 
 ## Changelog / Release Notes
 
+* **Feature:** Manifest-driven pillar weights for composite scoring.
 * **Feature:** Baseline, delta floor, and β economic controls added per element.
+* **Change:** `post_vlm_ranking` now uses `get_element_scores`.
+* **Impact:** Operators must ensure all pillars in a manifest have a registered metric.
 * **Impact:** Operators can tune θₑ, δₑ, βₑ in the manifest to scale or zero rewards.
+* **Developer Action:** Add new metrics via `@register_metric`.
