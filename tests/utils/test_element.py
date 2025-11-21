@@ -70,3 +70,26 @@ def test_zero_delta_floor(sample_elements):
     element = sample_elements[0]
     element.delta_floor = 0.0
     assert element.weight_score(0.1) == 0.0
+
+
+def test_negative_score_clamped(sample_elements):
+    element = sample_elements[0]
+    element.baseline_theta = 0.0
+    element.delta_floor = 0.05
+    assert element.weight_score(-1.0) == 0.05
+
+
+@pytest.mark.parametrize("beta, expected_multiplier", [(0.0, 0.0), (10.0, 10.0)])
+def test_beta_extremes(sample_elements, beta, expected_multiplier):
+    element = sample_elements[0]
+    element.beta = beta
+    improvement = element.improvement(0.5)
+    assert element.apply_difficulty_weight(improvement) == pytest.approx(
+        improvement * beta
+    )
+
+
+def test_zero_delta_floor(sample_elements):
+    element = sample_elements[0]
+    element.delta_floor = 0.0
+    assert element.improvement(0.0) == 0.0
