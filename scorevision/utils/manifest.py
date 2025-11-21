@@ -253,11 +253,6 @@ class Manifest(BaseModel):
         """
         return sha256(self.to_canonical_json().encode("utf-8")).hexdigest()
 
-    @property
-    def manifest_hash(self) -> str:
-        """Alias used by the protocol text."""
-        return self.hash
-
     @classmethod
     def from_dict(cls, data: dict) -> "Manifest":
         """Rebuild a Manifest (and nested dataclasses) from a plain dict (e.g. JSON)."""

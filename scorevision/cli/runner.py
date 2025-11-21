@@ -275,7 +275,7 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
             try:
                 #                manifest = get_current_manifest(block_number=block_number)
                 manifest = Manifest.load_yaml(path=path_manifest)
-                manifest_hash = manifest.manifest_hash
+                manifest_hash = manifest.hash
                 expected_window_id = manifest.window_id
 
                 blocks_to_expiry = None
