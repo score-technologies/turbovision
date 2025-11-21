@@ -143,7 +143,9 @@ class Element(BaseModel):
     service_rate_fps: int
     pgt_recipe_hash: str
     baseline_theta: float
-    delta_floor: float
+    delta_floor: float = Field(
+        ge=0, description="Minimum margin above baseline (must be non-negative)"
+    )
     beta: float
     salt: Salt = Field(default_factory=Salt)
 
