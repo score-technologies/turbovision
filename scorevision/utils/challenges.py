@@ -305,6 +305,7 @@ async def get_challenge_from_scorevision_with_source(
     )
     return challenge, payload, chal_api, frame_store
 
+
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,
 ) -> dict:
@@ -343,7 +344,7 @@ async def get_next_challenge_v3(
         hotkey_name=settings.BITTENSOR_WALLET_HOT,
     )
     params = build_validator_query_params(keypair)
-    params["manifest_hash"] = manifest_hash 
+    params["manifest_hash"] = manifest_hash
 
     headers: dict[str, str] = {
         "X-Manifest-Hash": manifest_hash,

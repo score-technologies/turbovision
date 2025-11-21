@@ -331,10 +331,7 @@ async def emit_shard(
     meta_out = (challenge.meta or {}).copy()
     meta_out["block"] = current_block
 
-    shard_window_id = (
-        window_id
-        or meta_out.get("window_id")
-    )
+    shard_window_id = window_id or meta_out.get("window_id")
     if shard_window_id is not None:
         meta_out["window_id"] = shard_window_id
 
@@ -352,7 +349,7 @@ async def emit_shard(
     }
     if commitment_meta:
         miner_info["commitment"] = commitment_meta
-        
+
     eval_dict = {
         "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
         "acc": getattr(evaluation, "acc", None),

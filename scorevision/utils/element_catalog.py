@@ -78,9 +78,7 @@ def _extract_elements_raw(manifest: Any) -> List[Any]:
     return []
 
 
-def _extract_element_info(
-    raw: Any, window_id: Optional[str]
-) -> Optional[ElementInfo]:
+def _extract_element_info(raw: Any, window_id: Optional[str]) -> Optional[ElementInfo]:
     """
     Robust extraction against either dicts or dataclass-like objects.
     """
@@ -180,7 +178,7 @@ async def summarize_window(
     explicit_window_id: Optional[str] = None
 
     if window_scope_or_id in ("current", "upcoming"):
-        scope = window_scope_or_id 
+        scope = window_scope_or_id
     else:
         explicit_window_id = window_scope_or_id
 

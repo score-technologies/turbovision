@@ -19,12 +19,14 @@ from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
 
 logger = logging.getLogger(__name__)
 
+
 async def get_miner_hotkey_ss58() -> str:
     """
     Small helper to expose the current miner hotkey (ss58) for CLI tools.
     """
     _w, hk = await _get_wallet_and_hotkey()
     return hk
+
 
 # ---------------------------------------------------------------------------
 # Dataclass for local proofs
@@ -94,9 +96,7 @@ def _load_local_proofs(hotkey: str) -> List[ElementCommitmentProof]:
                     )
                 )
             except Exception as e:
-                logger.debug(
-                    "[commitments] failed to load one proof from %s: %s", p, e
-                )
+                logger.debug("[commitments] failed to load one proof from %s: %s", p, e)
         return out
     except Exception as e:
         logger.warning("[commitments] failed to read %s: %s", p, e)
@@ -432,6 +432,7 @@ async def withdraw_commitment(
     _save_local_proofs(hk, proofs)
 
     return proof
+
 
 async def get_active_element_ids_by_hotkey(
     window_id: str,

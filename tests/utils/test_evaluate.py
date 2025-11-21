@@ -89,3 +89,21 @@ def test_get_element_scores_on_pillar_without_metric_raises_error(
             frame_store=fake_frame_store,
             challenge_type=ChallengeType.FOOTBALL,
         )
+
+
+def test_get_element_scores_economics(
+    dummy_manifest,
+    dummy_pseudo_gt_annotations,
+    fake_miner_predictions,
+    fake_frame_store,
+):
+    scores = get_element_scores(
+        manifest=dummy_manifest,
+        pseudo_gt_annotations=dummy_pseudo_gt_annotations,
+        miner_run=fake_miner_predictions,
+        frame_store=fake_frame_store,
+        challenge_type=ChallengeType.FOOTBALL,
+    )
+    for element in dummy_manifest.elements:
+        gated_score = scores[element.category]["total_weighted_and_gated"]
+        assert gated_score >= element.delta_floor or gated_score == 0.0

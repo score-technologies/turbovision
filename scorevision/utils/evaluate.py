@@ -290,25 +290,33 @@ def get_element_scores(
                 challenge_type=challenge_type,
             )
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
+
+        total_raw = sum(score["score"] for score in pillar_scores.values())
+        total_weighted = sum(
+            score["weighted_score"] for score in pillar_scores.values()
+        )
         pillar_scores.update(
             dict(
-                total_raw=sum(score["score"] for score in pillar_scores.values()),
-                total_weighted=sum(
-                    score["weighted_score"] for score in pillar_scores.values()
-                ),
+                total_raw=total_raw,
+                total_weighted=total_weighted,
+                total_weighted_and_gated=element.weight_score(score=total_weighted),
             )
         )
         element_scores[element.category] = pillar_scores
     element_score_values = list(element_scores.values())
     total_raw = sum(score["total_raw"] for score in element_score_values)
     total_weighted = sum(score["total_weighted"] for score in element_score_values)
+    total_weighted_and_gated = sum(
+        score["total_weighted_and_gated"] for score in element_score_values
+    )
     n_elements = len(manifest.elements)
     logger.info(f"Dividing score equally among {n_elements} Elements")
-    weighted_mean = total_weighted / n_elements if n_elements else 0.0
+    weighted_mean = total_weighted_and_gated / n_elements if n_elements else 0.0
     element_scores.update(
         dict(
             total_raw=total_raw,
             total_weighted=total_weighted,
+            total_weighted_and_gated=total_weighted_and_gated,
             mean_weighted=weighted_mean,
         )
     )

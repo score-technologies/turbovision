@@ -308,7 +308,9 @@ def _weighted_median(values: list[float], weights: list[float]) -> float:
     return pairs[-1][0]
 
 
-async def get_weights(tail: int = 36000, m_min: int = 25, *, window_id: str | None = None):
+async def get_weights(
+    tail: int = 36000, m_min: int = 25, *, window_id: str | None = None
+):
     """
     Cross-validators robust aggregation with stake-weighted outlier filtering.
     Uses alpha stake (meta.S) as the canonical stake for validators, with a
@@ -340,7 +342,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25, *, window_id: str | No
     else:
         for hk in meta.hotkeys:
             stake_by_hk[hk] = 0.0
-            
+
     target_window_id = window_id
 
     validator_indexes = await get_validator_indexes_from_chain(NETUID)
@@ -356,8 +358,14 @@ async def get_weights(tail: int = 36000, m_min: int = 25, *, window_id: str | No
                 payload = line.get("payload") or {}
 
                 shard_meta = payload.get("meta") or {}
-                shard_window_id = payload.get("window_id") or shard_meta.get("window_id")
-                if target_window_id and shard_window_id and shard_window_id != target_window_id:
+                shard_window_id = payload.get("window_id") or shard_meta.get(
+                    "window_id"
+                )
+                if (
+                    target_window_id
+                    and shard_window_id
+                    and shard_window_id != target_window_id
+                ):
                     VALIDATOR_MINERS_SKIPPED_TOTAL.labels(
                         reason="window_mismatch"
                     ).inc()
@@ -403,10 +411,12 @@ async def get_weights(tail: int = 36000, m_min: int = 25, *, window_id: str | No
 
             shard_meta = payload.get("meta") or {}
             shard_window_id = payload.get("window_id") or shard_meta.get("window_id")
-            if target_window_id and shard_window_id and shard_window_id != target_window_id:
-                VALIDATOR_MINERS_SKIPPED_TOTAL.labels(
-                    reason="window_mismatch"
-                ).inc()
+            if (
+                target_window_id
+                and shard_window_id
+                and shard_window_id != target_window_id
+            ):
+                VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="window_mismatch").inc()
                 continue
 
             miner = payload.get("miner") or {}

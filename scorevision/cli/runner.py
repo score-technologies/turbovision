@@ -243,7 +243,11 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
     last_pgt_duration = 0.0
     NETUID = settings.SCOREVISION_NETUID
     MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
-    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in ("0", "false", "False")
+    WARMUP_ENABLED = os.getenv("SV_WARMUP_BEFORE_RUN", "1") not in (
+        "0",
+        "false",
+        "False",
+    )
     WARMUP_CONC = int(os.getenv("SV_WARMUP_CONCURRENCY", "8"))
     WARMUP_TIMEOUT = int(os.getenv("SV_WARMUP_TIMEOUT_S", "60"))
     REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
@@ -257,7 +261,11 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
     frame_store: FrameStore | None = None
     run_result = "success"
 
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in ("0", "false", "False")
+    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
+        "0",
+        "false",
+        "False",
+    )
     manifest: Manifest | None = None
     manifest_hash: str | None = None
     expected_window_id: str | None = None
@@ -265,9 +273,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
     try:
         if use_v3:
             try:
-#                manifest = get_current_manifest(block_number=block_number)
+                #                manifest = get_current_manifest(block_number=block_number)
                 manifest = Manifest.load_yaml(path=path_manifest)
-                manifest_hash = manifest.manifest_hash
+                manifest_hash = manifest.hash
                 expected_window_id = manifest.window_id
 
                 blocks_to_expiry = None
@@ -282,13 +290,10 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                     blocks_to_expiry,
                 )
 
-                if (
-                    block_number is not None
-                    and not is_window_active(
-                        expected_window_id,
-                        current_block=block_number,
-                        expiry_block=manifest.expiry_block,
-                    )
+                if block_number is not None and not is_window_active(
+                    expected_window_id,
+                    current_block=block_number,
+                    expiry_block=manifest.expiry_block,
                 ):
                     logger.warning(
                         "[Runner] Window %s is not active at block %s (expiry_block=%s). Skipping run.",
@@ -358,7 +363,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
             try:
                 element_id = _extract_element_id_from_chal_api(chal_api)
             except Exception as e:
-                logger.warning("[Runner] Failed to extract element_id from challenge: %s", e)
+                logger.warning(
+                    "[Runner] Failed to extract element_id from challenge: %s", e
+                )
 
             if not element_id:
                 logger.warning(
@@ -406,7 +413,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
         try:
-            active_commitments = await get_active_element_ids_by_hotkey(current_window_id)
+            active_commitments = await get_active_element_ids_by_hotkey(
+                current_window_id
+            )
         except Exception as e:
             logger.warning(
                 "[Runner] Failed to load element commitments for window %s: %s",
@@ -449,7 +458,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
 
             hk = getattr(m, "hotkey", None)
-            miner_commitments_for_hk = active_commitments.get(hk or "", {}) if hk else {}
+            miner_commitments_for_hk = (
+                active_commitments.get(hk or "", {}) if hk else {}
+            )
             miner_proof = miner_commitments_for_hk.get(str(element_id))
 
             if not miner_proof:
@@ -521,7 +532,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                     )
                 except Exception:
                     dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.exception("[emit] FAILED for %s in %.1fms", miner_label, dt_emit)
+                    logger.exception(
+                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
+                    )
                     raise
                 else:
                     dt_emit = (loop.time() - emit_start) * 1000.0
@@ -543,7 +556,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                 continue
             finally:
                 duration = loop.time() - miner_total_start
-                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(duration)
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
+                    duration
+                )
     except Exception as e:
         logger.error(e)
         run_result = "error"
