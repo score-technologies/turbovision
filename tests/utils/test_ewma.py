@@ -123,3 +123,50 @@ def test_ewma_persistence_and_update(tmp_path, monkeypatch):
 
     save_ewma(6, {"1": updated})
     assert load_previous_ewma(6)["1"] == updated
+
+
+def test_load_previous_ewma_corrupt_file(tmp_path, monkeypatch):
+    """If the EWMA JSON is malformed, load_previous_ewma should return {} and not crash."""
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    path = tmp_path / "ewma_42.json"
+    path.write_text("{ this is not valid json }")
+
+    scores = load_previous_ewma(42)
+    assert scores == {}  # recovers gracefully
+
+
+def test_update_ewma_multiple_miners(tmp_path, monkeypatch):
+    """Ensure update_ewma_score works correctly for multiple miners/elements."""
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    # previous window scores for 2 miners
+    prev_scores = {"1": 0.2, "2": 0.5}
+    save_ewma(1, prev_scores)
+
+    alpha = calculate_ewma_alpha(3.0)
+    current_scores = {"1": 0.8, "2": 0.6}
+
+    ewma_scores = {
+        uid: update_ewma_score(
+            current_score=score, previous_ewma=prev_scores[uid], alpha=alpha
+        )
+        for uid, score in current_scores.items()
+    }
+
+    # Confirm each updated score is in-between prev and current
+    assert 0.2 < ewma_scores["1"] < 0.8
+    assert 0.5 < ewma_scores["2"] < 0.6
+
+
+@pytest.mark.parametrize(
+    "alpha, prev, current, expected",
+    [
+        (0.0, 0.5, 0.9, 0.5),  # α=0 → full smoothing, ignore current
+        (1.0, 0.5, 0.9, 0.9),  # α=1 → immediate update
+    ],
+)
+def test_update_ewma_alpha_boundary(alpha, prev, current, expected):
+    """Test boundary alpha values α=0 and α=1 behave as expected."""
+    updated = update_ewma_score(current_score=current, previous_ewma=prev, alpha=alpha)
+    assert updated == pytest.approx(expected)
