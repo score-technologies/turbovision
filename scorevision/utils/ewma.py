@@ -1,11 +1,6 @@
-"""Exponentially Weighted Moving Average"""
-
-from __future__ import annotations
+"""Exponentially Weighted Moving Average (EWMA)"""
 
 from logging import getLogger
-from typing import Optional
-
-import math
 
 logger = getLogger(__name__)
 
@@ -14,7 +9,7 @@ def calculate_ewma_alpha(half_life_windows: float) -> float:
     """
     Compute the EWMA decay factor α from a half-life measured in evaluation windows.
 
-    Paper definition (Appendix C):
+    Definition (Appendix C):
         α = 1 − 2^(-1/h)
 
     Where:
@@ -30,31 +25,16 @@ def calculate_ewma_alpha(half_life_windows: float) -> float:
     Raises:
         ValueError: If half_life_windows is not positive or alpha is out of bounds.
     """
-    if half_life_windows is None:
-        raise ValueError("half_life_windows must not be None")
-
-    if half_life_windows <= 0:
-        raise ValueError(f"half_life_windows must be > 0, got {half_life_windows}")
-
-    # α = 1 − 2^(-1/h)
-    alpha = 1.0 - math.pow(2.0, -1.0 / float(half_life_windows))
-
-    # Numerical safety: enforce 0 < α < 1 with a tiny epsilon
-    if not (0.0 < alpha < 1.0):
-        logger.warning(
-            "Calculated EWMA alpha out of expected bounds (0,1): "
-            "alpha=%f (h=%f). Clamping into [0,1].",
-            alpha,
-            half_life_windows,
-        )
-        alpha = min(max(alpha, 0.0), 1.0)
-
-    return alpha
+    assert (
+        half_life_windows > 0
+    ), f"half_life_windows must be > 0, got {half_life_windows}"
+    alpha = 1.0 - 2 ** (-1.0 / float(half_life_windows))
+    return min(max(alpha, 0.0), 1.0)
 
 
 def update_ewma_score(
     current_score: float,
-    previous_ewma: Optional[float],
+    previous_ewma: float | None,
     alpha: float,
 ) -> float:
     """

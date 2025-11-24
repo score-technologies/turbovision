@@ -1,7 +1,3 @@
-# tests/utils/test_ewma.py
-
-import math
-
 import pytest
 
 from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score
@@ -36,7 +32,7 @@ def test_alpha_bounds(h):
 
 @pytest.mark.parametrize("h", [0.0, -1.0, -10.0])
 def test_alpha_invalid_half_life_raises(h):
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         calculate_ewma_alpha(h)
 
 
@@ -44,7 +40,9 @@ def test_update_ewma_no_history_returns_current():
     """If there is no previous EWMA, we start with the current score."""
     alpha = calculate_ewma_alpha(3.0)
     current_score = 0.7
-    updated = update_ewma_score(current_score=current_score, previous_ewma=None, alpha=alpha)
+    updated = update_ewma_score(
+        current_score=current_score, previous_ewma=None, alpha=alpha
+    )
     assert updated == pytest.approx(current_score)
 
 
@@ -67,7 +65,9 @@ def test_update_ewma_converges_to_constant():
     ewma = 0.0  # start far away
 
     for _ in range(50):
-        ewma = update_ewma_score(current_score=current_score, previous_ewma=ewma, alpha=alpha)
+        ewma = update_ewma_score(
+            current_score=current_score, previous_ewma=ewma, alpha=alpha
+        )
 
     assert ewma == pytest.approx(current_score, rel=1e-2)
 
