@@ -15,6 +15,9 @@ def fake_settings():
         NETWORK="testnet",
         SCOREVISION_M_MIN=1,
         SCOREVISION_WINDOW_TIEBREAK_ENABLE=False,
+        SCOREVISION_NETUID=44,
+        SCOREVISION_WINDOW_DELTA_ABS=0.1,
+        SCOREVISION_WINDOW_DELTA_REL=0.1,
     )
 
 
