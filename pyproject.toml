@@ -36,7 +36,8 @@ dependencies = [
   "ruamel.yaml",
   "boto3",
   "tenacity",
-  "pynacl"
+  "pynacl",
+  "pytest-asyncio"
 ]
  
 [project.scripts]

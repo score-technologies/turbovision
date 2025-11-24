@@ -1,5 +1,3 @@
-# tests/fixtures/manifest_fixtures.py
-
 from json import loads
 from pathlib import Path
 

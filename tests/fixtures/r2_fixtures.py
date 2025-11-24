@@ -4,6 +4,11 @@ from pytest import fixture
 
 
 @fixture
+def cache_root(tmp_path):
+    return tmp_path
+
+
+@fixture
 def r2_mock_store():
     """
     Provides a mock in-memory R2 store with helpers:
