@@ -74,5 +74,5 @@ def test_update_ewma_converges_to_constant():
 
 @pytest.mark.parametrize("alpha", [-0.1, 1.1])
 def test_update_ewma_invalid_alpha_raises(alpha):
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         update_ewma_score(current_score=0.5, previous_ewma=0.5, alpha=alpha)

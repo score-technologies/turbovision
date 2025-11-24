@@ -23,7 +23,7 @@ def calculate_ewma_alpha(half_life_windows: float) -> float:
         alpha: EWMA decay factor in the range (0, 1).
 
     Raises:
-        ValueError: If half_life_windows is not positive or alpha is out of bounds.
+        AssertionError: If half_life_windows is not positive or alpha is out of bounds.
     """
     assert (
         half_life_windows > 0
@@ -40,7 +40,7 @@ def update_ewma_score(
     """
     Update EWMA window score given the current per-window mean and the previous EWMA.
 
-    Paper definition (Section 3.9 / 5.2.2):
+    Definition (Section 3.9 / 5.2.2):
         S_e,t = α × ClipMean_e,t + (1 − α) × S_e,t−1
 
     Behavior:
@@ -57,13 +57,9 @@ def update_ewma_score(
         Updated EWMA score S_e,t.
 
     Raises:
-        ValueError: If alpha is outside [0, 1].
+        AssertionError: If alpha is outside [0, 1].
     """
-    if alpha < 0.0 or alpha > 1.0:
-        raise ValueError(f"EWMA alpha must be in [0,1], got {alpha}")
-
-    # No history: start EWMA at the current score
     if previous_ewma is None:
         return current_score
-
+    assert 0.0 <= alpha <= 1.0, f"EWMA alpha must be in [0,1], got {alpha}"
     return alpha * current_score + (1.0 - alpha) * previous_ewma
