@@ -39,6 +39,72 @@ logger = logging.getLogger("scorevision.validator")
 shutdown_event = asyncio.Event()
 
 
+async def retry_set_weights(wallet, uids, weights):
+
+    settings = get_settings()
+    NETUID = settings.SCOREVISION_NETUID
+    MECHID = settings.SCOREVISION_MECHID
+    signer_url = settings.SIGNER_URL
+
+    loop = asyncio.get_running_loop()
+    request_start = loop.time()
+    try:
+        timeout = aiohttp.ClientTimeout(connect=2, total=300)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            resp = await sess.post(
+                f"{signer_url}/set_weights",
+                json={
+                    "netuid": NETUID,
+                    "mechid": MECHID,
+                    "uids": uids,
+                    "weights": weights,
+                    "wait_for_inclusion": True,
+                    "wait_for_finalization": True,
+                },
+            )
+            try:
+                data = await resp.json()
+            except Exception:
+                data = {"raw": await resp.text()}
+
+            duration = loop.time() - request_start
+            VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(duration)
+
+            if resp.status == 200 and data.get("success"):
+                return True
+
+            body_txt = ""
+            try:
+                body_txt = (
+                    data
+                    if isinstance(data, str)
+                    else (data.get("error") or data.get("raw") or "")
+                )
+            except Exception:
+                pass
+            if "SettingWeightsTooFast" in str(body_txt):
+                logger.warning(
+                    "Signer returns SettingWeightsTooFast; weights are likely set working on confirmation."
+                )
+                return True
+
+            VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_http").inc()
+            logger.warning("Signer error status=%s body=%s", resp.status, data)
+
+    except aiohttp.ClientConnectorError as e:
+        VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
+        logger.warning("Signer unreachable: %s — skipping local fallback", e)
+        VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_connect").inc()
+    except asyncio.TimeoutError:
+        VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS.set(loop.time() - request_start)
+        logger.warning(
+            "Signer timed out — weights are likely set working on confirmation"
+        )
+        VALIDATOR_WEIGHT_FAIL_TOTAL.labels(stage="signer_timeout").inc()
+
+    return False
+
+
 @lru_cache(maxsize=1)
 def _validator_hotkey_ss58() -> str:
     settings = get_settings()
@@ -196,6 +262,3 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
                 continue
 
     logger.info("Validator shutting down gracefully...")
-
-
-# Keep retry_set_weights, _validator_hotkey_ss58, and other helpers as-is

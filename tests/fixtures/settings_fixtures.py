@@ -18,6 +18,8 @@ def fake_settings():
         SCOREVISION_NETUID=44,
         SCOREVISION_WINDOW_DELTA_ABS=0.1,
         SCOREVISION_WINDOW_DELTA_REL=0.1,
+        BITTENSOR_WALLET_COLD="cold_wallet_name",
+        BITTENSOR_WALLET_HOT="hot_wallet_name",
     )
 
 
