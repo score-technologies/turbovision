@@ -6,6 +6,7 @@ import time
 import traceback
 import gc
 from functools import lru_cache
+import aiohttp
 
 import bittensor as bt
 from scorevision.utils.settings import get_settings
@@ -121,7 +122,7 @@ def _validator_hotkey_ss58() -> str:
     return wallet.hotkey.ss58_address
 
 
-async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
+async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> None:
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
 
@@ -233,7 +234,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
 
                 logger.info("[EWMA] window %s alpha=%.4f", current_window_id, alpha)
                 for uid, ew in ewma_scores.items():
-                    logger.info(
+                    logger.debug(
                         "[EWMA] uid=%s ewma=%.4f current=%.4f prev=%s",
                         uid,
                         ew,
