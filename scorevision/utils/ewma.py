@@ -1,8 +1,12 @@
 """Exponentially Weighted Moving Average (EWMA)"""
 
 from logging import getLogger
+from json import dump, load
+
+from scorevision.utils.prometheus import CACHE_DIR
 
 logger = getLogger(__name__)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def calculate_ewma_alpha(half_life_windows: float) -> float:
@@ -63,3 +67,28 @@ def update_ewma_score(
         return current_score
     assert 0.0 <= alpha <= 1.0, f"EWMA alpha must be in [0,1], got {alpha}"
     return alpha * current_score + (1.0 - alpha) * previous_ewma
+
+
+def load_previous_ewma(window_id: str) -> [int, float]:
+    """
+    Load EWMA scores for a given window from disk.
+    Returns a dict: {miner_id: score}.
+    """
+    path = CACHE_DIR / f"ewma_{window_id}.json"
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r") as f:
+            return load(f)
+    except Exception:
+        logger.warning("Corrupted EWMA file %s — resetting.", path)
+        return {}
+
+
+def save_ewma(window_id: str, ewma_scores: dict) -> None:
+    """
+    Persist EWMA scores to disk.
+    """
+    path = CACHE_DIR / f"ewma_{window_id}.json"
+    with path.open("w") as f:
+        dump(ewma_scores, f)

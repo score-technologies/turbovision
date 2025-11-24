@@ -114,7 +114,8 @@ For each miner × element:
 
 ```
 current = clip_mean.total_weighted_and_gated
-previous = load_previous_ewma(miner, element)
+prev_scores = load_previous_ewma(window_id)  # may return {} if missing/corrupt
+previous = prev_scores.get(miner, {}).get(element, None)
 S_e,t = α * current + (1-α) * previous
 ```
 
@@ -133,13 +134,16 @@ The updated EWMA scores are saved in the **window summary** JSONL entry under:
 ```
 
 Validators reading current window scores always use the **updated** field.
+- EWMA scores are persisted per window in $CACHE_DIR/ewma_<window_id>.json.
+- Missing or corrupted files are reset and logged, ensuring validators always have a starting point.
+
 
 ### 3.3 Alpha Calculation
 
 Configured via settings (defaults to half-life 3 windows).
 
 ```
-from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score
+from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score, load_previous_ewma, save_ewma
 ```
 
 ---
@@ -167,3 +171,26 @@ from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score
 
 Schema, integration points, and EWMA responsibilities defined.
 Ready for code implementation in `scorevision/utils/window_scores.py`.
+
+---
+
+## 6. State File Behavior / Recovery
+
+- `load_previous_ewma(window_id)` reads the EWMA JSON file for a given window.
+- If the file is missing or corrupted, it returns `{}`. Validators then use the current window's clip_mean as the starting EWMA.
+- This ensures multiple validators running in parallel do not double-count scores.
+- Logs and metrics indicate if previous EWMA was missing, aiding debugging.
+
+---
+
+## 7. Alpha Tuning Notes
+
+- EWMA decay factor α is computed as:
+
+    α = 1 − 2^(-1 / half_life_windows)
+
+- Configured via settings (default half-life = 3 windows).
+- Smaller half-life → larger α → faster adaptation.
+- Larger half-life → smaller α → more smoothing.
+- Adjust based on desired responsiveness of per-miner scores.
+

@@ -1,6 +1,12 @@
 import pytest
 
-from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score
+from scorevision.utils.ewma import (
+    calculate_ewma_alpha,
+    update_ewma_score,
+    load_previous_ewma,
+    save_ewma,
+)
+from scorevision.utils.prometheus import CACHE_DIR
 
 
 def test_calculate_ewma_alpha_default_half_life():
@@ -76,3 +82,44 @@ def test_update_ewma_converges_to_constant():
 def test_update_ewma_invalid_alpha_raises(alpha):
     with pytest.raises(AssertionError):
         update_ewma_score(current_score=0.5, previous_ewma=0.5, alpha=alpha)
+
+
+def test_save_and_load_ewma(tmp_path, monkeypatch):
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    scores = {"1": 0.5, "2": 0.8}
+    save_ewma(10, scores)
+
+    loaded = load_previous_ewma(10)
+    assert loaded == scores
+
+
+def test_ewma_first_window():
+    alpha = calculate_ewma_alpha(3.0)
+    s = update_ewma_score(current_score=0.7, previous_ewma=None, alpha=alpha)
+    assert s == 0.7
+
+
+def test_ewma_update_with_history():
+    alpha = calculate_ewma_alpha(3)
+    prev = 0.2
+    cur = 0.8
+
+    updated = update_ewma_score(cur, prev, alpha)
+    assert updated == alpha * cur + (1 - alpha) * prev
+
+
+def test_ewma_persistence_and_update(tmp_path, monkeypatch):
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    # Previous window
+    save_ewma(5, {"1": 0.4})
+
+    prev = load_previous_ewma(5)
+    alpha = calculate_ewma_alpha(3.0)
+
+    updated = update_ewma_score(0.9, prev.get("1"), alpha)
+    assert 0.4 < updated < 0.9  # in between
+
+    save_ewma(6, {"1": updated})
+    assert load_previous_ewma(6)["1"] == updated

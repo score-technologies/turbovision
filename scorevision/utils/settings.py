@@ -96,6 +96,7 @@ class Settings(BaseModel):
     SCOREVISION_WINDOW_K_PER_VALIDATOR: int
     SCOREVISION_WINDOW_DELTA_ABS: float
     SCOREVISION_WINDOW_DELTA_REL: float
+    SCOREVISION_WINDOW_HALF_LIFE: float
 
 
 @lru_cache
@@ -234,6 +235,7 @@ def get_settings() -> Settings:
         SCOREVISION_WINDOW_DELTA_REL=float(
             getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
         ),
+        SCOREVISION_WINDOW_HALF_LIFE=float(getenv("SCOREVISION_WINDOW_HALF_LIFE", 3.0)),
     )
 
 
