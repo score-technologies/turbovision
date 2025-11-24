@@ -3,6 +3,11 @@ from json import dumps
 from pytest import fixture
 
 
+@pytest.fixture
+def cache_root(tmp_path):
+    return tmp_path
+
+
 @fixture
 def r2_mock_store():
     """
