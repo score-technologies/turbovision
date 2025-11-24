@@ -1,6 +1,12 @@
 import pytest
 
-from scorevision.utils.ewma import calculate_ewma_alpha, update_ewma_score
+from scorevision.utils.ewma import (
+    calculate_ewma_alpha,
+    update_ewma_score,
+    load_previous_ewma,
+    save_ewma,
+)
+from scorevision.utils.prometheus import CACHE_DIR
 
 
 def test_calculate_ewma_alpha_default_half_life():
@@ -76,3 +82,91 @@ def test_update_ewma_converges_to_constant():
 def test_update_ewma_invalid_alpha_raises(alpha):
     with pytest.raises(AssertionError):
         update_ewma_score(current_score=0.5, previous_ewma=0.5, alpha=alpha)
+
+
+def test_save_and_load_ewma(tmp_path, monkeypatch):
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    scores = {"1": 0.5, "2": 0.8}
+    save_ewma(10, scores)
+
+    loaded = load_previous_ewma(10)
+    assert loaded == scores
+
+
+def test_ewma_first_window():
+    alpha = calculate_ewma_alpha(3.0)
+    s = update_ewma_score(current_score=0.7, previous_ewma=None, alpha=alpha)
+    assert s == 0.7
+
+
+def test_ewma_update_with_history():
+    alpha = calculate_ewma_alpha(3)
+    prev = 0.2
+    cur = 0.8
+
+    updated = update_ewma_score(cur, prev, alpha)
+    assert updated == alpha * cur + (1 - alpha) * prev
+
+
+def test_ewma_persistence_and_update(tmp_path, monkeypatch):
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    # Previous window
+    save_ewma(5, {"1": 0.4})
+
+    prev = load_previous_ewma(5)
+    alpha = calculate_ewma_alpha(3.0)
+
+    updated = update_ewma_score(0.9, prev.get("1"), alpha)
+    assert 0.4 < updated < 0.9  # in between
+
+    save_ewma(6, {"1": updated})
+    assert load_previous_ewma(6)["1"] == updated
+
+
+def test_load_previous_ewma_corrupt_file(tmp_path, monkeypatch):
+    """If the EWMA JSON is malformed, load_previous_ewma should return {} and not crash."""
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    path = tmp_path / "ewma_42.json"
+    path.write_text("{ this is not valid json }")
+
+    scores = load_previous_ewma(42)
+    assert scores == {}  # recovers gracefully
+
+
+def test_update_ewma_multiple_miners(tmp_path, monkeypatch):
+    """Ensure update_ewma_score works correctly for multiple miners/elements."""
+    monkeypatch.setattr("scorevision.utils.ewma.CACHE_DIR", tmp_path)
+
+    # previous window scores for 2 miners
+    prev_scores = {"1": 0.2, "2": 0.5}
+    save_ewma(1, prev_scores)
+
+    alpha = calculate_ewma_alpha(3.0)
+    current_scores = {"1": 0.8, "2": 0.6}
+
+    ewma_scores = {
+        uid: update_ewma_score(
+            current_score=score, previous_ewma=prev_scores[uid], alpha=alpha
+        )
+        for uid, score in current_scores.items()
+    }
+
+    # Confirm each updated score is in-between prev and current
+    assert 0.2 < ewma_scores["1"] < 0.8
+    assert 0.5 < ewma_scores["2"] < 0.6
+
+
+@pytest.mark.parametrize(
+    "alpha, prev, current, expected",
+    [
+        (0.0, 0.5, 0.9, 0.5),  # α=0 → full smoothing, ignore current
+        (1.0, 0.5, 0.9, 0.9),  # α=1 → immediate update
+    ],
+)
+def test_update_ewma_alpha_boundary(alpha, prev, current, expected):
+    """Test boundary alpha values α=0 and α=1 behave as expected."""
+    updated = update_ewma_score(current_score=current, previous_ewma=prev, alpha=alpha)
+    assert updated == pytest.approx(expected)

@@ -6,6 +6,7 @@ import time
 import traceback
 import gc
 from functools import lru_cache
+import aiohttp
 
 import bittensor as bt
 from scorevision.utils.settings import get_settings
@@ -33,6 +34,12 @@ from scorevision.utils.bittensor_helpers import reset_subtensor, get_subtensor
 from scorevision.utils.window_scores import (
     aggregate_window_shards,
     compute_winner_from_window,
+)
+from scorevision.utils.ewma import (
+    calculate_ewma_alpha,
+    load_previous_ewma,
+    save_ewma,
+    update_ewma_score,
 )
 
 logger = logging.getLogger("scorevision.validator")
@@ -115,7 +122,7 @@ def _validator_hotkey_ss58() -> str:
     return wallet.hotkey.ss58_address
 
 
-async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
+async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> None:
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
 
@@ -188,8 +195,56 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
                     last_done = block
                     continue
 
-                # window_summary_file contains the aggregated scores per miner
-                uids, weights = await compute_winner_from_window(window_summary_file)
+                # ---------------------------------------------------------
+                # EWMA INTEGRATION
+                # ---------------------------------------------------------
+
+                # Compute the per-window clip-mean winners
+                uids, clip_means = await compute_winner_from_window(window_summary_file)
+
+                if not uids:
+                    CURRENT_WINNER.set(-1)
+                    VALIDATOR_WINNER_SCORE.set(0.0)
+                    VALIDATOR_LOOP_TOTAL.labels(outcome="no_uids").inc()
+                    last_done = block
+                    continue
+
+                # EWMA alpha from settings (half-life in windows)
+                alpha = calculate_ewma_alpha(settings.SCOREVISION_WINDOW_HALF_LIFE)
+
+                # Load EWMA state from previous window
+                prev_window_id = current_window_id - 1
+                prev_scores = load_previous_ewma(prev_window_id)
+
+                # Build current score dict
+                current_scores = {uid: score for uid, score in zip(uids, clip_means)}
+
+                # Compute EWMA: S_t = α×current + (1−α)×prev
+                ewma_scores = {}
+                for uid, score in current_scores.items():
+                    prev = prev_scores.get(str(uid))
+                    ewma_scores[str(uid)] = update_ewma_score(
+                        current_score=score,
+                        previous_ewma=prev,
+                        alpha=alpha,
+                    )
+
+                # Persist EWMA state for the current window
+                save_ewma(current_window_id, ewma_scores)
+
+                logger.info("[EWMA] window %s alpha=%.4f", current_window_id, alpha)
+                for uid, ew in ewma_scores.items():
+                    logger.debug(
+                        "[EWMA] uid=%s ewma=%.4f current=%.4f prev=%s",
+                        uid,
+                        ew,
+                        current_scores.get(int(uid), 0.0),
+                        prev_scores.get(uid),
+                    )
+
+                # Use EWMA scores as the actual weights
+                uids = [int(uid) for uid in ewma_scores.keys()]
+                weights = list(ewma_scores.values())
 
                 if not uids:
                     CURRENT_WINNER.set(-1)
