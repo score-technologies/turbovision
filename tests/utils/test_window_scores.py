@@ -67,32 +67,19 @@ def test_dedup_shard_write(cache_root):
 
 
 @pytest.mark.asyncio
-async def test_compute_winner_basic(tmp_path):
-    window_file = tmp_path / "window_scores.jsonl"
-    # Simulate 3 miners with different scores/stakes
-    lines = [
-        {"uid": 1, "hotkey": "hk1", "mean_score": 0.8, "n_samples": 10, "stake": 1.0},
-        {"uid": 2, "hotkey": "hk2", "mean_score": 0.9, "n_samples": 10, "stake": 1.0},
-        {"uid": 3, "hotkey": "hk3", "mean_score": 0.85, "n_samples": 10, "stake": 0.5},
-    ]
-    with window_file.open("w") as f:
-        for l in lines:
-            f.write(dumps(l) + "\n")
+async def test_compute_winner_basic(fake_window_file, fake_settings):
 
-    # Patch settings to bypass min_samples
-    with patch("scorevision.utils.window_scores.get_settings") as mock_settings:
-        settings = mock_settings.return_value
-        settings.SCOREVISION_M_MIN = 1
-        settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE = False
-
-        # Patch validator hotkey to exclude miner 99 (not in file)
-        with patch(
+    with (
+        patch(
+            "scorevision.utils.window_scores.get_settings", return_value=fake_settings
+        ),
+        patch(
             "scorevision.utils.window_scores._validator_hotkey_ss58",
             return_value="hk99",
-        ):
-            uids, weights = await compute_winner_from_window(window_file)
+        ),
+    ):
+        uids, weights = await compute_winner_from_window(fake_window_file)
 
-    # Miner with uid=2 has highest score
     assert uids == [2]
     assert weights == [65535]
 

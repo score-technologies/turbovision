@@ -13,6 +13,8 @@ def fake_settings():
         SCOREVISION_ACCESS_KEY="x",
         SCOREVISION_SECRET_KEY="y",
         NETWORK="testnet",
+        SCOREVISION_M_MIN=1,
+        SCOREVISION_WINDOW_TIEBREAK_ENABLE=False,
     )
 
 

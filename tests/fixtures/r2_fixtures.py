@@ -3,7 +3,7 @@ from json import dumps
 from pytest import fixture
 
 
-@pytest.fixture
+@fixture
 def cache_root(tmp_path):
     return tmp_path
 
