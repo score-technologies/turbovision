@@ -284,6 +284,11 @@ async def emit_shard(
     miner_hotkey_ss58: str,
     window_id: str | None = None,
     *,
+    element_id: str | None = None,
+    manifest_hash: str | None = None,
+    pgt_recipe_hash: str | None = None,
+    salt_id: int | None = None,
+    lane: str = "public",
     model: str | None = None,
     revision: str | None = None,
     chute_id: str | None = None,
@@ -353,35 +358,93 @@ async def emit_shard(
     eval_dict = {
         "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
         "acc": getattr(evaluation, "acc", None),
-        "score": getattr(evaluation, "score", None),
+        "score": getattr(evaluation, "score", None),}
+
+    acc_breakdown = getattr(evaluation, "acc_breakdown", {}) or {}
+    composite_score = float(getattr(evaluation, "score", 0.0))
+
+    metrics = {
+        "acc_breakdown": acc_breakdown,
+        "composite_score": composite_score,
     }
 
     p95_latency_ms = getattr(evaluation, "latency_p95_ms", None)
     if p95_latency_ms is None:
         p95_latency_ms = getattr(evaluation, "latency_ms", None)
+    if p95_latency_ms is None:
+        p95_latency_ms = getattr(miner_run, "latency_p95_ms", None)
+    if p95_latency_ms is None:
+        p95_latency_ms = getattr(miner_run, "latency_ms", 0.0)
 
-    eval_dict["p95_latency_ms"] = p95_latency_ms
-    eval_dict["latency_pass"] = getattr(evaluation, "latency_pass", None)
-    eval_dict["rtf"] = getattr(evaluation, "rtf", None)
+    latency_pass = getattr(evaluation, "latency_pass", None)
+    if latency_pass is None:
+        latency_pass = True
 
-    shard_payload = {
-        "env": "SVEnv",
+    rtf_value = getattr(evaluation, "rtf", None)
+
+    telemetry = {
+        "env": getattr(challenge, "env", None),
         "task_id": meta_out.get("task_id"),
+        "challenge_id": challenge.challenge_id,
+        "api_task_id": challenge.api_task_id,
         "prompt": challenge.prompt,
-        "meta": meta_out,
+        "video_url": video_url,
+        "block": current_block,
+        "window_id": shard_window_id,
+        "source": meta_out.get("source") or "api_v2_video",
+        "timestamp": time(),
         "miner": miner_info,
         "run": {
             "success": getattr(miner_run, "success", None),
             "latency_ms": getattr(miner_run, "latency_ms", None),
+            "latency_p50_ms": getattr(miner_run, "latency_p50_ms", None),
+            "latency_p95_ms": p95_latency_ms,
+            "latency_p99_ms": getattr(miner_run, "latency_p99_ms", None),
+            "latency_max_ms": getattr(miner_run, "latency_max_ms", None),
             "error": getattr(miner_run, "error", None),
             "responses_key": resp_key,
+            "rtf": rtf_value,
+            "latency_pass": latency_pass,
         },
-        "evaluation": eval_dict,
-        "ts": time(),
-        "block": current_block,
-        "window_id": shard_window_id,
-        "source": "api_v2_video",
+        "hardware": {
+            "gpu_type": meta_out.get("gpu_type"),
+            "cpu_type": meta_out.get("cpu_type"),
+        },
+        "debug": {
+            "meta": meta_out,
+        },
     }
+
+    validator_ss58 = getattr(settings, "SCOREVISION_VALIDATOR_HOTKEY_SS58", None)
+    if not validator_ss58:
+        logger.warning(
+            "[emit:%s] SCOREVISION_VALIDATOR_HOTKEY_SS58 not set; 'validator' field "
+            "will be null in shard payload.",
+            rid,
+        )
+
+    if pgt_recipe_hash is None:
+        pgt_recipe_hash = getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None)
+    if pgt_recipe_hash is None:
+        pgt_recipe_hash = "sha256:unknown"
+
+    salt_id_val = int(salt_id or 0)
+
+    shard_payload = {
+        "window_id": shard_window_id,
+        "validator": validator_ss58,
+        "element_id": element_id,
+        "lane": lane,
+        "manifest_hash": manifest_hash,
+        "pgt_recipe_hash": pgt_recipe_hash,
+        "salt_id": salt_id_val,
+        "metrics": metrics,
+        "composite_score": composite_score,
+        "latency_pass": bool(latency_pass),
+        "p95_latency_ms": float(p95_latency_ms),
+        "telemetry": telemetry,
+    }
+
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
 
     try:
@@ -400,15 +463,16 @@ async def emit_shard(
 
     # --- logs run ---
     logger.info("\n=== SV Runner (R2) ===")
-    logger.info(f"challenge_id: {challenge.challenge_id}")
+    logger.info(f"challenge_id : {challenge.challenge_id}")
+    logger.info(f"window_id    : {shard_window_id}")
+    logger.info(f"element_id   : {element_id}")
     if getattr(miner_run, "latency_ms", None) is not None:
-        logger.info(f"latency_ms  : {miner_run.latency_ms:.1f} ms")
-    if getattr(evaluation, "acc", None) is not None:
-        logger.info(
-            f"acc         : {evaluation.acc:.3f}  breakdown={getattr(evaluation, 'acc_breakdown', None)}"
-        )
-    if getattr(evaluation, "score", None) is not None:
-        logger.info(f"score       : {evaluation.score:.3f}\n")
+        logger.info(f"latency_ms   : {miner_run.latency_ms:.1f} ms")
+    logger.info(f"p95_latency  : {p95_latency_ms:.1f} ms (pass={latency_pass})")
+    logger.info(f"composite    : {composite_score:.3f}")
+    if rtf_value is not None:
+        logger.info(f"rtf          : {rtf_value:.3f}")
+    logger.info("")
 
 
 async def dataset_sv(tail: int, *, max_concurrency: int = None):
