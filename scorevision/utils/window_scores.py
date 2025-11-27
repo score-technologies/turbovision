@@ -41,6 +41,7 @@ from collections import defaultdict
 from logging import getLogger
 from functools import lru_cache
 from statistics import mean
+import bittensor as bt
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.prometheus import (
@@ -193,11 +194,10 @@ async def compute_winner_from_window(window_summary_file: Path):
         return [], []
 
     settings = get_settings()
-    stake_by_uid = {}
-    S_by_miner = {}
-    miners_seen = set()
-    uid_to_hk = {}
-    hk_to_uid = {}
+    stake_by_uid: dict[int, float] = {}
+    S_by_miner: dict[int, float] = {}
+    uid_to_hk: dict[int, str] = {}
+    hk_to_uid: dict[str, int] = {}
 
     with window_summary_file.open("r") as f:
         for line in f:
@@ -217,21 +217,20 @@ async def compute_winner_from_window(window_summary_file: Path):
 
                 stake_by_uid[uid] = stake
                 S_by_miner[uid] = mean_score
-                miners_seen.add(uid)
                 uid_to_hk[uid] = hk
                 hk_to_uid[hk] = uid
             except Exception:
                 continue
 
     if not S_by_miner:
-        return [6], [65535]
+        return [], []
 
-    validator_uid = None
     try:
-        validator_uid = _validator_hotkey_ss58()
-        validator_uid = hk_to_uid.get(validator_uid)
+        validator_hk = _validator_hotkey_ss58()
+        validator_uid = hk_to_uid.get(validator_hk)
         if validator_uid in S_by_miner:
             S_by_miner.pop(validator_uid, None)
+            stake_by_uid.pop(validator_uid, None)
             logger.info(
                 "Excluding validator uid=%d from candidate miners", validator_uid
             )
@@ -239,17 +238,12 @@ async def compute_winner_from_window(window_summary_file: Path):
         pass
 
     if not S_by_miner:
-        return [6], [65535]
+        return [], []
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_miner))
 
     a_final = 1.0
-    num = den = 0.0
-    for uid, s in S_by_miner.items():
-        wf = stake_by_uid.get(uid, 0.0) ** a_final
-        num += wf * s
-        den += wf
-    final_scores = {}
+    final_scores: dict[int, float] = {}
     for uid, s in S_by_miner.items():
         wf = stake_by_uid.get(uid, 0.0) ** a_final
         final_scores[uid] = s * wf
@@ -262,12 +256,9 @@ async def compute_winner_from_window(window_summary_file: Path):
         try:
             delta_abs = settings.SCOREVISION_WINDOW_DELTA_ABS
             delta_rel = settings.SCOREVISION_WINDOW_DELTA_REL
-            window_hi = final_scores[winner_uid] + max(
-                delta_abs, delta_rel * abs(final_scores[winner_uid])
-            )
-            window_lo = final_scores[winner_uid] - max(
-                delta_abs, delta_rel * abs(final_scores[winner_uid])
-            )
+            winner_score = final_scores[winner_uid]
+            window_hi = winner_score + max(delta_abs, delta_rel * abs(winner_score))
+            window_lo = winner_score - max(delta_abs, delta_rel * abs(winner_score))
 
             close_uids = [
                 uid for uid, s in final_scores.items() if window_lo <= s <= window_hi
@@ -299,7 +290,9 @@ async def compute_winner_from_window(window_summary_file: Path):
         except Exception as e:
             logger.warning(f"[window-tiebreak] disabled due to error: {e}")
 
-    return [winner_uid], [65535]
+    uids = list(S_by_miner.keys())
+    scores = [S_by_miner[uid] for uid in uids]
+    return uids, scores
 
 
 async def aggregate_window_shards(

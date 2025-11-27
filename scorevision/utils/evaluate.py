@@ -128,7 +128,7 @@ def post_vlm_ranking(
     challenge: SVChallenge,
     pseudo_gt_annotations: list[PseudoGroundTruth],
     frame_store: FrameStore,
-    manifest: Manifest,
+    manifest: Manifest | None,
     element_id: str | None = None,
 ) -> SVEvaluation:
     settings = get_settings()
@@ -152,6 +152,7 @@ def post_vlm_ranking(
         and frame_count >= settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER
         and frame_count <= settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
         and challenge_type is not None
+        and manifest is not None
     ):
         breakdown_dict = get_element_scores(
             manifest=manifest,
@@ -164,6 +165,7 @@ def post_vlm_ranking(
         logger.info(
             f"Miner success={miner_run.success} frames={frame_count} "
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
+            f"manifest_present={manifest is not None}."
         )
     details = {
         "breakdown": breakdown_dict,
@@ -184,10 +186,12 @@ def post_vlm_ranking(
 
     p95_latency_ms = getattr(miner_run, "latency_p95_ms", None) or miner_run.latency_ms
 
-    service_rate_fps = get_service_rate_fps_for_element(
-        manifest=manifest,
-        element_id=element_id,
-    )
+    service_rate_fps = None
+    if manifest is not None and element_id:
+        service_rate_fps = get_service_rate_fps_for_element(
+            manifest=manifest,
+            element_id=element_id,
+        )
 
     latency_pass = True
     rtf_value = None

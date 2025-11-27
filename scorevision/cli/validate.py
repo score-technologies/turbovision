@@ -179,6 +179,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                 # NEW: Aggregate shards via window_scores.py
                 # ------------------------------
                 window_summary_file = await aggregate_window_shards(
+                    cache_root=CACHE_DIR,
                     tail=tail,
                     window_id=current_window_id,
                     min_samples=m_min,
@@ -212,8 +213,8 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                 # EWMA alpha from settings (half-life in windows)
                 alpha = calculate_ewma_alpha(settings.SCOREVISION_WINDOW_HALF_LIFE)
 
-                # Load EWMA state from previous window
-                prev_window_id = current_window_id - 1
+                # Previous window id: on recule d'un tempo en bloc
+                prev_window_id = get_current_window_id(block - tempo, tempo=tempo)
                 prev_scores = load_previous_ewma(prev_window_id)
 
                 # Build current score dict
@@ -233,13 +234,14 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                 save_ewma(current_window_id, ewma_scores)
 
                 logger.info("[EWMA] window %s alpha=%.4f", current_window_id, alpha)
-                for uid, ew in ewma_scores.items():
+                for uid_str, ew in ewma_scores.items():
+                    uid_int = int(uid_str)
                     logger.debug(
                         "[EWMA] uid=%s ewma=%.4f current=%.4f prev=%s",
-                        uid,
+                        uid_int,
                         ew,
-                        current_scores.get(int(uid), 0.0),
-                        prev_scores.get(uid),
+                        current_scores.get(uid_int, 0.0),
+                        prev_scores.get(uid_str),
                     )
 
                 # Use EWMA scores as the actual weights

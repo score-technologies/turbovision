@@ -236,7 +236,7 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     return None
 
 
-async def runner(slug: str | None = None, *, block_number: int | None = None) -> None:
+async def runner(slug: str | None = None, *, block_number: int | None = None,path_manifest: Path | None = None) -> None:
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
@@ -273,8 +273,11 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
     try:
         if use_v3:
             try:
-                #                manifest = get_current_manifest(block_number=block_number)
-                manifest = Manifest.load_yaml(path=path_manifest)
+                if path_manifest is not None:
+                    manifest = Manifest.load_yaml(path_manifest)
+                else:
+                    manifest = get_current_manifest(block_number=block_number)
+
                 manifest_hash = manifest.hash
                 expected_window_id = manifest.window_id
 
@@ -526,7 +529,7 @@ async def runner(slug: str | None = None, *, block_number: int | None = None) ->
                         miner_hotkey_ss58=m.hotkey,
                         window_id=current_window_id,
                         element_id=str(element_id) if element_id is not None else None,
-                        manifest_hash=getattr(manifest, "manifest_hash", None),
+                        manifest_hash=manifest_hash,
                         salt_id=0,
                         pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
                         lane="public",
@@ -692,7 +695,7 @@ async def runner_loop(path_manifest: Path | None = None):
                     block,
                     last_trigger_block,
                 )
-                await runner(block_number=block)
+                await runner(block_number=block, path_manifest=path_manifest)
                 gc.collect()
                 last_trigger_block = block
                 last_trigger_time = loop.time()
