@@ -236,7 +236,12 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     return None
 
 
-async def runner(slug: str | None = None, *, block_number: int | None = None,path_manifest: Path | None = None) -> None:
+async def runner(
+    slug: str | None = None,
+    *,
+    block_number: int | None = None,
+    path_manifest: Path | None = None,
+) -> None:
     settings = get_settings()
     loop = asyncio.get_running_loop()
     run_start = loop.time()
@@ -531,7 +536,9 @@ async def runner(slug: str | None = None, *, block_number: int | None = None,pat
                         element_id=str(element_id) if element_id is not None else None,
                         manifest_hash=manifest_hash,
                         salt_id=0,
-                        pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
+                        pgt_recipe_hash=getattr(
+                            settings, "SCOREVISION_PGT_RECIPE_HASH", None
+                        ),
                         lane="public",
                         model=m.model,
                         revision=m.revision,

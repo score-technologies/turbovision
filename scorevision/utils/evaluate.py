@@ -34,7 +34,10 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
-from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
+from scorevision.utils.pillar_metric_registry import (
+    METRIC_REGISTRY,
+    element_pillar_registry_availability,
+)
 
 # NOTE: The following imports are required to load METRIC_REGISTRY
 import scorevision.vlm_pipeline.non_vlm_scoring.keypoints
