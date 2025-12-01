@@ -34,7 +34,7 @@ _seen_shards.json schema:
 
 import json
 from pathlib import Path
-from typing import Iterable, Dict, Any
+from typing import Iterable, Dict, Any, Tuple 
 from threading import Lock
 from statistics import median
 from collections import defaultdict
@@ -191,7 +191,7 @@ def _weighted_median(values: list[float], weights: list[float]) -> float:
 
 async def compute_winner_from_window(window_summary_file: Path):
     if not window_summary_file.exists():
-        return [], []
+        return [], [], None
 
     settings = get_settings()
     stake_by_uid: dict[int, float] = {}
@@ -223,7 +223,7 @@ async def compute_winner_from_window(window_summary_file: Path):
                 continue
 
     if not S_by_miner:
-        return [], []
+        return [], [], None
 
     try:
         validator_hk = _validator_hotkey_ss58()
@@ -238,7 +238,7 @@ async def compute_winner_from_window(window_summary_file: Path):
         pass
 
     if not S_by_miner:
-        return [], []
+        return [], [], None
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_miner))
 
@@ -292,7 +292,7 @@ async def compute_winner_from_window(window_summary_file: Path):
 
     uids = list(S_by_miner.keys())
     scores = [S_by_miner[uid] for uid in uids]
-    return uids, scores
+    return uids, scores, winner_uid
 
 
 async def aggregate_window_shards(
