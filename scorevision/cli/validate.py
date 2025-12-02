@@ -201,7 +201,9 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                 # ---------------------------------------------------------
 
                 # Compute the per-window clip-mean winners
-                uids, clip_means = await compute_winner_from_window(window_summary_file)
+                uids, clip_means, winner_uid = await compute_winner_from_window(
+                    window_summary_file
+                )
 
                 if not uids:
                     CURRENT_WINNER.set(-1)
@@ -209,6 +211,12 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                     VALIDATOR_LOOP_TOTAL.labels(outcome="no_uids").inc()
                     last_done = block
                     continue
+
+                logger.info(
+                    "[validator] window=%s raw_winner_uid=%s (pre-EWMA)",
+                    current_window_id,
+                    winner_uid,
+                )
 
                 # EWMA alpha from settings (half-life in windows)
                 alpha = calculate_ewma_alpha(settings.SCOREVISION_WINDOW_HALF_LIFE)

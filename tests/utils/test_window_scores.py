@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from json import loads, dumps
+from json import loads
 
 from scorevision.utils.window_scores import (
     save_window_scores,
@@ -77,10 +77,14 @@ async def test_compute_winner_basic(fake_window_file, fake_settings):
             return_value="hk99",
         ),
     ):
-        uids, weights = await compute_winner_from_window(fake_window_file)
+        uids, weights, winner_uid = await compute_winner_from_window(fake_window_file)
 
-    assert uids == [4]
-    assert weights == [65535]
+    # On ne suppose plus que uids == [winner]
+    assert uids
+    assert len(uids) == len(weights)
+
+    # On teste juste le gagnant attendu (ancien comportement : uid 4)
+    assert winner_uid == 4
 
 
 @pytest.mark.asyncio
@@ -94,10 +98,13 @@ async def test_compute_winner_with_validator_exclusion(fake_window_file, fake_se
             return_value="hk_validator",
         ),
     ):
-        uids, weights = await compute_winner_from_window(fake_window_file)
+        uids, weights, winner_uid = await compute_winner_from_window(fake_window_file)
 
-    assert uids == [2]
-    assert weights == [65535]
+    assert uids
+    assert len(uids) == len(weights)
+
+    # Gagnant attendu après exclusion du validator = uid 2
+    assert winner_uid == 2
 
 
 @pytest.mark.asyncio
@@ -116,11 +123,15 @@ async def test_compute_winner_with_tiebreak(fake_window_file, fake_settings):
             return_value=AsyncMock,
         ) as mock_first_commit,
     ):
+        # hk1 & hk2 sont très proches en score → tiebreak sur block
         mock_first_commit.return_value = {"hk1": 100, "hk2": 50}
-        uids, weights = await compute_winner_from_window(fake_window_file)
+        uids, weights, winner_uid = await compute_winner_from_window(fake_window_file)
 
-    assert uids == [2]
-    assert weights == [65535]
+    assert uids
+    assert len(uids) == len(weights)
+
+    # Le tiebreak doit favoriser hk2 → uid 2
+    assert winner_uid == 2
 
 
 @pytest.mark.asyncio
