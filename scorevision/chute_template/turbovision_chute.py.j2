@@ -137,8 +137,8 @@ def load_chute(
 
 
 def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
-    path = path_hf_repo / filename
-    if not path.is_file():
+    path_miner = path_hf_repo / filename
+    if not path_miner.is_file():
         raise FileNotFoundError(
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
@@ -152,7 +152,7 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             if not spec or not spec.origin:
                 return spec  # built‑ins or namespace packages
             origin = Path(spec.origin).resolve()
-            if origin == path.resolve():
+            if origin == path_miner.resolve():
                 return spec
             if path_hf_repo not in origin.parents:
                 return spec
@@ -162,7 +162,7 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             return spec
     sys.meta_path.insert(0, HFRepoImportBlocker)
 
-    spec = spec_from_file_location("miner", path)
+    spec = spec_from_file_location("miner", path_miner)
     module = module_from_spec(spec)
     sys.modules["miner"] = module
     spec.loader.exec_module(module)
