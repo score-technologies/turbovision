@@ -3,10 +3,12 @@
 from typing import Any, Generator
 from tempfile import NamedTemporaryFile
 from pathlib import Path
+from importlib.machinery import PathFinder
 from importlib.util import spec_from_file_location, module_from_spec
 import sys
 from inspect import signature
 from urllib.parse import quote
+
 
 from aiohttp import ClientSession
 from yaml import safe_load
@@ -140,6 +142,25 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         raise FileNotFoundError(
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
+    
+    class HFRepoImportBlocker(PathFinder):
+        """Block imports of any file that lives inside the HF repo except miner.py."""
+
+        @classmethod
+        def find_spec(cls, fullname, path=None, target=None):
+            spec = super().find_spec(fullname, path, target)
+            if not spec or not spec.origin:
+                return spec  # built‑ins or namespace packages
+            origin = Path(spec.origin).resolve()
+            if origin == path.resolve():
+                return spec
+            if path_hf_repo not in origin.parents:
+                return spec
+            raise ImportError(
+                f"❌ Import blocked: '{fullname}' tries to load code from {origin}"
+            )        
+            return spec
+    sys.meta_path.insert(0, HFRepoImportBlocker)
 
     spec = spec_from_file_location("miner", path)
     module = module_from_spec(spec)
