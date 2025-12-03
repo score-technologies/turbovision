@@ -3,10 +3,12 @@
 from typing import Any, Generator
 from tempfile import NamedTemporaryFile
 from pathlib import Path
+from importlib.machinery import PathFinder
 from importlib.util import spec_from_file_location, module_from_spec
 import sys
 from inspect import signature
 from urllib.parse import quote
+
 
 from aiohttp import ClientSession
 from yaml import safe_load
@@ -135,13 +137,26 @@ def load_chute(
 
 
 def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
-    path = path_hf_repo / filename
-    if not path.is_file():
+    path_miner = path_hf_repo / filename
+    if not path_miner.is_file():
         raise FileNotFoundError(
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
+    
+    blocked_names = {
+        f.stem for f in path_hf_repo.glob("*") if f.is_file() and f.name != filename
+    }
 
-    spec = spec_from_file_location("miner", path)
+    class HFRepoImportBlocker(PathFinder):
+        @classmethod
+        def find_spec(cls, fullname, path=None, target=None):
+            if fullname.split('.')[-1] in blocked_names:
+                raise ImportError(f"❌ Import blocked: '{fullname}'. A file with this name was detected in the repo. All code related to the miner MUST be stored in miner.py")
+            return super().find_spec(fullname, path, target)
+
+    sys.meta_path.insert(0, HFRepoImportBlocker)
+
+    spec = spec_from_file_location("miner", path_miner)
     module = module_from_spec(spec)
     sys.modules["miner"] = module
     spec.loader.exec_module(module)
