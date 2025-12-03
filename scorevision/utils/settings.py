@@ -20,6 +20,8 @@ class Settings(BaseModel):
     CHUTES_USERNAME: str
     CHUTES_VLM: str
     CHUTES_VLM_ENDPOINT: str
+    CHUTES_SAM3_ENDPOINT: str
+    CHUTES_SAM3_ID: str
     CHUTES_MINERS_ENDPOINT: str
     CHUTES_MINER_PREDICT_ENDPOINT: str
     CHUTES_MINER_BASE_URL_TEMPLATE: str
@@ -143,6 +145,10 @@ def get_settings() -> Settings:
         CHUTES_VLM_ENDPOINT=getenv(
             "CHUTES_VLM_ENDPOINT", "https://llm.chutes.ai/v1/chat/completions"
         ),
+        CHUTES_SAM3_ENDPOINT=getenv(
+            "CHUTES_SAM3_ENDPOINT", "https://score-test-sam3.chutes.ai/sam3/segment"
+        ),
+        CHUTES_SAM3_ID=getenv("CHUTES_SAM3_ID", "e97a02fe-1932-5f43-84b5-5dced5443012"),
         OPENROUTER_VLM_ENDPOINT=getenv(
             "OPENROUTER_VLM_ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"
         ),
