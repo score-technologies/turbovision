@@ -295,6 +295,7 @@ def get_element_scores(
                 image_width=settings.SCOREVISION_IMAGE_WIDTH,
                 frames=frame_store,
                 challenge_type=challenge_type,
+                keypoints_template=element.keypoints,
             )
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
 

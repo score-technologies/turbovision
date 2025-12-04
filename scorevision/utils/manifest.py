@@ -115,11 +115,16 @@ class KeypointTemplate(BaseModel):
 
     @property
     def template(self) -> ndarray:
-        current_dir = Path(__file__).parent
-        return imread(str(current_dir / self.filename))
+        current_dir = Path(__file__).parent.parent
+        path_template = str(current_dir / "keypoints_templates" / self.filename)
+        image = imread(path_template)
+        if image is None:
+            raise ValueError(f"No image file found for template at: {path_template}")
+        return image
 
     @model_validator(mode="after")
-    def validate_indices(self):
+    def validate_template_and_indices(self):
+        self.template
         try:
             self.bottom_left
             self.bottom_right
@@ -273,7 +278,7 @@ class Element(BaseModel):
     )
     salt: Salt = Field(default_factory=Salt)
     keypoint_template: KeypointDomain | None = None
-    objects: list[str] | None
+    objects: list[str] | None = None
 
     def apply_baseline_gate(self, score: float) -> float:
         """Clamp score to positive margin above baseline."""
@@ -292,7 +297,7 @@ class Element(BaseModel):
         return self.apply_difficulty_weight(improvement=self.improvement(score=score))
 
     @property
-    def keypoints() -> KeypointTemplate | None:
+    def keypoints(self) -> KeypointTemplate | None:
         return KEYPOINT_TEMPLATES.get(self.keypoint_template)
 
     @property

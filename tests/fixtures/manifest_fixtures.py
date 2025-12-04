@@ -97,6 +97,7 @@ def dummy_manifest():
         baseline_theta=0.3,
         delta_floor=0.05,
         beta=1.0,
+        keypoint_template="football",
     )
 
     return Manifest(

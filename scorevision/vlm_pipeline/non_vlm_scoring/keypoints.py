@@ -28,17 +28,9 @@ from cv2 import (
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 
 from scorevision.chute_template.schemas import SVFrame
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    football_pitch as challenge_template,
-    FOOTBALL_KEYPOINTS as KEYPOINTS,
-    INDEX_KEYPOINT_CORNER_BOTTOM_LEFT,
-    INDEX_KEYPOINT_CORNER_BOTTOM_RIGHT,
-    INDEX_KEYPOINT_CORNER_TOP_LEFT,
-    INDEX_KEYPOINT_CORNER_TOP_RIGHT,
-)
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.pillar_metric_registry import register_metric
-from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.utils.manifest import ElementPrefix, PillarName, KeypointTemplate
 
 logger = getLogger(__name__)
 
@@ -97,14 +89,16 @@ def validate_mask_ground(mask: ndarray) -> None:
 
 
 def validate_projected_corners(
-    source_keypoints: list[tuple[int, int]], homography_matrix: ndarray
+    source_keypoints: list[tuple[int, int]],
+    homography_matrix: ndarray,
+    keypoint_template: KeypointTemplate,
 ) -> None:
     src_corners = array(
         [
-            source_keypoints[INDEX_KEYPOINT_CORNER_BOTTOM_LEFT],
-            source_keypoints[INDEX_KEYPOINT_CORNER_BOTTOM_RIGHT],
-            source_keypoints[INDEX_KEYPOINT_CORNER_TOP_RIGHT],
-            source_keypoints[INDEX_KEYPOINT_CORNER_TOP_LEFT],
+            keypoint_template.bottom_left,
+            keypoint_template.bottom_right,
+            keypoint_template.top_right,
+            keypoint_template.top_left,
         ],
         dtype="float32",
     )[None, :, :]
@@ -121,6 +115,7 @@ def project_image_using_keypoints(
     destination_keypoints: list[tuple[int, int]],
     destination_width: int,
     destination_height: int,
+    keypoint_template: KeypointTemplate,
     inverse: bool = False,
 ) -> ndarray:
     filtered_src = []
@@ -143,7 +138,11 @@ def project_image_using_keypoints(
         return warpPerspective(image, H_inv, (destination_width, destination_height))
     H, _ = findHomography(source_points, destination_points)
     projected_image = warpPerspective(image, H, (destination_width, destination_height))
-    validate_projected_corners(source_keypoints=source_keypoints, homography_matrix=H)
+    validate_projected_corners(
+        source_keypoints=source_keypoints,
+        homography_matrix=H,
+        keypoint_template=keypoint_template,
+    )
     return projected_image
 
 
@@ -200,6 +199,7 @@ def evaluate_keypoints_for_frame(
     frame_keypoints: list[tuple[int, int]],
     frame: ndarray,
     floor_markings_template: ndarray,
+    keypoint_template: KeypointTemplate,
 ) -> float:
     try:
         warped_template = project_image_using_keypoints(
@@ -208,6 +208,7 @@ def evaluate_keypoints_for_frame(
             destination_keypoints=frame_keypoints,
             destination_width=frame.shape[1],
             destination_height=frame.shape[0],
+            keypoint_template=keypoint_template,
         )
         mask_ground, mask_lines_expected = extract_masks_for_ground_and_lines(
             image=warped_template
@@ -234,12 +235,14 @@ def evaluate_keypoints(
     miner_predictions: dict[int, dict],
     frames: Any,
     challenge_type: SVChallenge,
+    keypoints_template: KeypointTemplate | None,
     **kwargs,
 ) -> float:
     # TODO: use challenge_type to switch the template and keypoints
-    template_image = challenge_template()
-    template_keypoints = KEYPOINTS
-    # frame_lookup = {frame.frame_id: frame for frame in frames}
+    if keypoints_template is None:
+        raise ValueError("No Keypoints template was specified")
+    template_image = keypoints_template.template
+    template_keypoints = keypoints_template.keypoints_on_template
     frame_scores = []
     for frame_number, annotations_miner in miner_predictions.items():
         miner_keypoints = annotations_miner["keypoints"]
@@ -260,15 +263,16 @@ def evaluate_keypoints(
         if (
             annotations_miner is None
             or frame_image is None
-            or len(miner_keypoints) != len(KEYPOINTS)
+            or len(miner_keypoints) != keypoints_template.n_keypoints
         ):
             frame_score = 0.0
         else:
             frame_score = evaluate_keypoints_for_frame(
                 template_keypoints=template_keypoints,
                 frame_keypoints=miner_keypoints,
-                frame=frame_image,  # array(frame_image.image),
+                frame=frame_image,
                 floor_markings_template=template_image.copy(),
+                keypoint_template=keypoints_template,
             )
         logger.info(f"[evaluate_keypoints] Frame {frame_number}: {frame_score}")
         frame_scores.append(frame_score)
