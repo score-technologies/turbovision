@@ -179,7 +179,10 @@ def _team_auc_f1(
     return max(f1_m1, f1_m2)
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.IOU)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.IOU),
+    (ElementPrefix.BALL_DETECTION, PillarName.IOU),
+)
 def compare_object_placement(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -263,7 +266,10 @@ def compare_team_labels(
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.ROLE)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.ROLE),
+    (ElementPrefix.BALL_DETECTION, PillarName.ROLE),
+)
 def compare_object_and_team_labels(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -276,7 +282,10 @@ def compare_object_and_team_labels(
     return (score1 + score2) / 2
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.COUNT)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.COUNT),
+    (ElementPrefix.BALL_DETECTION, PillarName.COUNT),
+)
 def compare_object_counts(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:

@@ -3,9 +3,10 @@ from scorevision.utils.manifest import Manifest, ElementPrefix, PillarName
 METRIC_REGISTRY: dict[tuple[ElementPrefix, PillarName], callable] = {}
 
 
-def register_metric(element_prefix: ElementPrefix, pillar: PillarName):
+def register_metric(*registrations: tuple[ElementPrefix, PillarName]):
     def wrapper(fn: callable):
-        METRIC_REGISTRY[(element_prefix, pillar)] = fn
+        for element_prefix, pillar in registrations:
+            METRIC_REGISTRY[(element_prefix, pillar)] = fn
         return fn
 
     return wrapper
@@ -17,11 +18,9 @@ def element_pillar_registry_availability() -> dict:
             dict(
                 element_name=element.value,
                 pillars=[
-                    dict(
-                        pillar_name=pillar.value,
-                        metric_assigned=(element, pillar) in METRIC_REGISTRY,
-                    )
+                    pillar.value
                     for pillar in PillarName
+                    if (element, pillar) in METRIC_REGISTRY
                 ],
             )
             for element in ElementPrefix

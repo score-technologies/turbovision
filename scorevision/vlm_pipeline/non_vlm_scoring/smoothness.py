@@ -109,7 +109,10 @@ def bbox_smoothness(
     return smoothness
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS),
+    (ElementPrefix.BALL_DETECTION, PillarName.SMOOTHNESS),
+)
 def bbox_smoothness_per_type(
     video_bboxes: list[list[BoundingBox]], image_height: int, image_width: int, **kwargs
 ) -> float:
