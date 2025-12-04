@@ -273,6 +273,7 @@ class Element(BaseModel):
     )
     salt: Salt = Field(default_factory=Salt)
     keypoint_template: KeypointDomain | None = None
+    objects: list[str] | None
 
     def apply_baseline_gate(self, score: float) -> float:
         """Clamp score to positive margin above baseline."""
@@ -292,7 +293,7 @@ class Element(BaseModel):
 
     @property
     def keypoints() -> KeypointTemplate | None:
-        return KEYPOINT_TEMPLATES.get(keypoint_template)
+        return KEYPOINT_TEMPLATES.get(self.keypoint_template)
 
     @property
     def category(self) -> ElementPrefix:

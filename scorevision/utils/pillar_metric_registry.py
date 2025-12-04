@@ -1,4 +1,9 @@
-from scorevision.utils.manifest import Manifest, ElementPrefix, PillarName
+from scorevision.utils.manifest import (
+    Manifest,
+    ElementPrefix,
+    PillarName,
+    KEYPOINT_TEMPLATES,
+)
 
 METRIC_REGISTRY: dict[tuple[ElementPrefix, PillarName], callable] = {}
 
@@ -22,6 +27,7 @@ def element_pillar_registry_availability() -> dict:
                     for pillar in PillarName
                     if (element, pillar) in METRIC_REGISTRY
                 ],
+                keypoint_template=list(KEYPOINT_TEMPLATES),
             )
             for element in ElementPrefix
         ]
