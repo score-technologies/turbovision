@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from aiobotocore.session import get_session
 from botocore.config import Config as BotoConfig
 
+from scorevision.utils.windows import get_window_start_block
 from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
@@ -295,16 +296,34 @@ async def emit_shard(
     commitment_meta: dict | None = None,
 ) -> None:
 
-    settings = get_settings()
-    rid = f"{challenge.challenge_id[:8]}:{miner_hotkey_ss58[-6:]}"
     st = await get_subtensor()
     current_block, st = await _safe_get_current_block(st, rid)
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
-    ns = None
-    prefix = _results_prefix(ns)
-    eval_key = f"{prefix}{miner_hotkey_ss58}/evaluation/{current_block:09d}-{challenge.challenge_id}.json"
-    resp_key = f"{prefix}{miner_hotkey_ss58}/responses/{current_block:09d}-{challenge.challenge_id}.json"
+    shard_window_id = window_id or getattr(challenge, "window_id", None) or (
+        (challenge.meta or {}).get("window_id") if getattr(challenge, "meta", None) else None
+    )
+
+    tempo = int(os.getenv("SV_WINDOW_TEMPO", "300"))
+    window_start_block = None
+    if shard_window_id:
+        try:
+            window_start_block = get_window_start_block(shard_window_id, tempo=tempo)
+        except Exception:
+            window_start_block = None
+
+    if window_start_block is None:
+        window_start_block = current_block
+
+
+    safe_element_id = (element_id or "unknown-element").strip()
+    safe_element_id = safe_element_id.replace("/", "_")
+
+    base_prefix = "scorevision"
+    prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/"
+
+    eval_key = f"{prefix}evaluation/{window_start_block:09d}-{challenge.challenge_id}.json"
+    resp_key = f"{prefix}responses/{window_start_block:09d}-{challenge.challenge_id}.json"
 
     video_url = None
     try:
