@@ -30,7 +30,6 @@ from scorevision.vlm_pipeline.utils.response_models import (
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     Person as ObjectOfInterest,
-    OBJECT_ID_LOOKUP,
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
@@ -77,36 +76,6 @@ def parse_miner_prediction(
                         object_names[object_id] if object_id is not None else None
                     )
 
-                    object_type: ObjectOfInterest
-                    object_colour: ShirtColor = ShirtColor.OTHER
-
-                    if looked_up is None:
-                        object_type = ObjectOfInterest.PLAYER
-
-                    elif isinstance(looked_up, str):
-                        team_str = looked_up.strip().lower().replace(" ", "")
-                        object_type = ObjectOfInterest.PLAYER
-                        if team_str == "team1":
-                            object_colour = TEAM1_SHIRT_COLOUR
-                        elif team_str == "team2":
-                            object_colour = TEAM2_SHIRT_COLOUR
-                        else:
-                            object_colour = ShirtColor.OTHER
-
-                    else:
-                        object_type = looked_up
-                        team_field = (
-                            (bbox.get("team") or bbox.get("team_id") or "")
-                            .strip()
-                            .lower()
-                        )
-                        if team_field in {"1", "team1"}:
-                            object_colour = TEAM1_SHIRT_COLOUR
-                        elif team_field in {"2", "team2"}:
-                            object_colour = TEAM2_SHIRT_COLOUR
-                        else:
-                            object_colour = ShirtColor.OTHER
-
                     bboxes.append(
                         BoundingBox(
                             bbox_2d=[
@@ -115,8 +84,8 @@ def parse_miner_prediction(
                                 int(bbox["x2"]),
                                 int(bbox["y2"]),
                             ],
-                            label=object_type,
-                            cluster_id=object_colour,
+                            label=looked_up,
+                            # cluster_id=object_colour,
                         )
                     )
                 except Exception as e:

@@ -39,14 +39,15 @@ class Person(Enum):
     REFEREE = "referee"
 
 
-OBJECT_ID_LOOKUP = {
-    0: Person.BALL,
-    1: Person.GOALIE,
-    2: Person.PLAYER,
-    3: Person.REFEREE,
-    6: "team 1",
-    7: "team 2",
-}
+# NOTE: kept here for reference, but this is now specified in the manifest element
+# OBJECT_ID_LOOKUP = {
+#     0: Person.BALL,
+#     1: Person.GOALIE,
+#     2: Person.PLAYER,
+#     3: Person.REFEREE,
+#     6: "team 1",
+#     7: "team 2",
+# }
 
 
 class Action(Enum):
