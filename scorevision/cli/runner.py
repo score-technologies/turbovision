@@ -62,6 +62,7 @@ def _chute_id_for_miner(m: Miner) -> str | None:
 
 async def _build_pgt_with_retries(
     chal_api: dict,
+    manifest: Manifest,
     *,
     required_n_frames: int,
     max_bbox_retries: int = 5,
@@ -118,6 +119,7 @@ async def _build_pgt_with_retries(
                             frames=challenge.frames,
                             flow_frames=challenge.dense_optical_flow_frames,
                             frame_numbers=challenge.frame_numbers,
+                            manifest=manifest,
                         )
                     )
                     n_frames = len(pseudo_gt_annotations)
@@ -450,6 +452,7 @@ async def runner(
                 max_bbox_retries=MAX_PGT_BBOX_RETRIES,
                 max_quality_retries=MAX_PGT_QUALITY_RETRIES,
                 video_cache=video_cache,
+                manifest=manifest,
             )
             last_pgt_duration = loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
