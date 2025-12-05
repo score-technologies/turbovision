@@ -8,41 +8,43 @@ from scorevision.utils.manifest import (
 )
 
 
-def test_sign_and_verify_happy_path(minimal_manifest, keypair):
+def test_sign_and_verify_happy_path(dummy_manifest, keypair):
     private_key, public_key = keypair
 
-    minimal_manifest.sign(private_key)
-    assert isinstance(minimal_manifest.signature, str)
-    assert len(minimal_manifest.signature) > 0
+    dummy_manifest.sign(private_key)
+    assert isinstance(dummy_manifest.signature, str)
+    assert len(dummy_manifest.signature) > 0
 
-    assert minimal_manifest.verify(public_key)
+    assert dummy_manifest.verify(public_key)
 
 
-def test_verify_fails_for_unsigned_manifest(minimal_manifest, keypair):
+def test_verify_fails_for_unsigned_manifest(dummy_manifest, keypair):
     _, public_key = keypair
 
     # Ensure unsigned
-    minimal_manifest.signature = None
+    dummy_manifest.signature = None
 
     with pytest.raises(ValueError):
-        minimal_manifest.verify(public_key)
+        dummy_manifest.verify(public_key)
 
 
-def test_verify_fails_after_tamper(minimal_manifest, keypair):
+def test_verify_fails_after_tamper(dummy_manifest, keypair):
     private_key, public_key = keypair
 
-    minimal_manifest.sign(private_key)
-    minimal_manifest.window_id = "TAMPERED"
+    dummy_manifest.sign(private_key)
+    dummy_manifest.window_id = "TAMPERED"
 
-    assert minimal_manifest.verify(public_key) is False
+    assert dummy_manifest.verify(public_key) is False
 
 
-def test_manifest_hash_is_stable(sample_elements):
+def test_manifest_hash_is_stable(dummy_detect_element, dummy_pitch_element):
     tee = Tee(trusted_share_gamma=0.2)
+
+    elements = [dummy_detect_element, dummy_pitch_element]
 
     man1 = Manifest(
         window_id="2025-10-27",
-        elements=sample_elements,
+        elements=elements,
         tee=tee,
         version="1.3",
         expiry_block=123456,
@@ -51,10 +53,22 @@ def test_manifest_hash_is_stable(sample_elements):
     # reversed element order
     man2 = Manifest(
         window_id="2025-10-27",
-        elements=list(reversed(sample_elements)),
+        elements=list(reversed(elements)),
         tee=tee,
         version="1.3",
         expiry_block=123456,
     )
 
     assert man1.hash == man2.hash
+
+
+def test_manifest_get_element_by_id(dummy_detect_element, dummy_pitch_element):
+    man = Manifest(
+        window_id="2025-10-27",
+        elements=[dummy_detect_element, dummy_pitch_element],
+        tee=Tee(trusted_share_gamma=0.2),
+        version="1.3",
+        expiry_block=123456,
+    )
+    assert dummy_detect_element == man.get_element(id=dummy_detect_element.id)
+    assert dummy_pitch_element == man.get_element(id=dummy_pitch_element.id)

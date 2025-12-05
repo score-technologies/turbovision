@@ -7,9 +7,6 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    Person as ObjectOfInterest,
-)
 from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
@@ -56,7 +53,7 @@ def _extract_boxes_labels(
     boxes: List[Tuple[int, int, int, int]] = []
     labels: List[object] = []
     for bb in bboxes or []:
-        if only_players and bb.label != ObjectOfInterest.PLAYER:
+        if only_players and bb.label != "player":
             continue
         boxes.append(tuple(bb.bbox_2d))
         labels.append(bb.cluster_id if use_team else bb.label)
@@ -179,7 +176,10 @@ def _team_auc_f1(
     return max(f1_m1, f1_m2)
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.IOU)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.IOU),
+    (ElementPrefix.BALL_DETECTION, PillarName.IOU),
+)
 def compare_object_placement(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -263,7 +263,7 @@ def compare_team_labels(
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.ROLE)
+@register_metric((ElementPrefix.PLAYER_DETECTION, PillarName.ROLE))
 def compare_object_and_team_labels(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -276,7 +276,10 @@ def compare_object_and_team_labels(
     return (score1 + score2) / 2
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.COUNT)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.COUNT),
+    (ElementPrefix.BALL_DETECTION, PillarName.COUNT),
+)
 def compare_object_counts(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:

@@ -1,12 +1,6 @@
 from enum import Enum
 
 
-class Person(Enum):
-    PLAYER = "player"
-    REFEREE = "referee"
-    BALL = "ball"
-
-
 class Action(Enum):
     NONE = "No Special Action"
     TIP_OFF = "Tip-off"

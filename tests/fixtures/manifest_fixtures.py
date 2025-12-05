@@ -16,55 +16,23 @@ from scorevision.utils.manifest import (
 
 
 @fixture
-def sample_elements():
-    """Provide 3 example Elements for manifest construction."""
-
-    def mk_el(id_, clips):
-        return Element(
-            id=id_,
-            clips=[Clip(hash=c, weight=1.0) for c in clips],
-            metrics=Metrics(
-                pillars={
-                    PillarName.IOU: 0.3,
-                    PillarName.COUNT: 0.0,
-                    PillarName.PALETTE: 0.7,
-                    PillarName.SMOOTHNESS: 0.0,
-                    PillarName.ROLE: 0.0,
-                }
-            ),
-            preproc=Preproc(fps=30, resize_long=720, norm="none"),
-            latency_p95_ms=100,
-            service_rate_fps=30,
-            pgt_recipe_hash="sha256:deadbeef",
-            baseline_theta=0.3,
-            delta_floor=0.05,
-            beta=1.0,
-        )
-
+def dummy_objects():
     return [
-        mk_el("PlayerDetect_v1@1.0", ["b", "a"]),
-        mk_el("BallDetect_v1@1.01", ["e", "f"]),
-        mk_el("PitchCalib_v1@1.0", ["c", "d"]),
+        "ball",
+        "goalkeeper",
+        "player",
+        "referee",
+        "",
+        "",
+        "team 1",
+        "team 2",
     ]
 
 
 @fixture
-def minimal_manifest(sample_elements):
-    """A reusable manifest for tests."""
-    return Manifest(
-        window_id="2025-10-27",
-        version="1.3",
-        expiry_block=123456,
-        elements=sample_elements,
-        tee=Tee(trusted_share_gamma=0.2),
-    )
-
-
-@fixture
-def dummy_manifest():
-    """A minimal manifest for publish tests."""
-    el1 = Element(
-        id="PlayerDetect_v1",
+def dummy_detect_element(dummy_objects):
+    return Element(
+        id="PlayerDetect_v1@1.0",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
             pillars={
@@ -81,9 +49,14 @@ def dummy_manifest():
         baseline_theta=0.3,
         delta_floor=0.05,
         beta=1.0,
+        objects=dummy_objects,
     )
-    el2 = Element(
-        id="PitchCalib_v1",
+
+
+@fixture
+def dummy_pitch_element():
+    return Element(
+        id="PitchCalib_v1@1.0",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
         metrics=Metrics(
             pillars={
@@ -97,13 +70,18 @@ def dummy_manifest():
         baseline_theta=0.3,
         delta_floor=0.05,
         beta=1.0,
+        keypoint_template="football",
     )
 
+
+@fixture
+def dummy_manifest(dummy_detect_element, dummy_pitch_element):
+    """A minimal manifest for publish tests."""
     return Manifest(
         window_id="2025-10-27",
         version="1.3",
         expiry_block=123456,
-        elements=[el1, el2],
+        elements=[dummy_detect_element, dummy_pitch_element],
         tee=Tee(trusted_share_gamma=0.2),
     )
 
@@ -146,7 +124,7 @@ def manifest_with_pillar_that_has_no_metric_registered():
 
 
 @fixture
-def manifest_with_pillar_weight_of_zero():
+def manifest_with_pillar_weight_of_zero(dummy_objects):
     return Manifest(
         window_id="2025-10-27",
         version="1.3",
@@ -164,6 +142,7 @@ def manifest_with_pillar_weight_of_zero():
                 baseline_theta=0.3,
                 delta_floor=0.05,
                 beta=1.0,
+                objects=dummy_objects,
             )
         ],
     )

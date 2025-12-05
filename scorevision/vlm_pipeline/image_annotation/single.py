@@ -50,7 +50,7 @@ def annotate_bbox(frame: ndarray, bbox: BoundingBox) -> None:
     rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
     putText(
         frame,
-        bbox.label.value,
+        bbox.label,
         (x_min, y_min - 4),
         FONT_HERSHEY_SIMPLEX,
         0.5,

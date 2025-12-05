@@ -6,15 +6,15 @@ from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import (
     FrameAnnotation,
     BoundingBox,
-    ShirtColor,
 )
-from scorevision.vlm_pipeline.domain_specific_schemas.football import Person, Action
+from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 
 
 @fixture
 def fake_vlm_bbox() -> BoundingBox:
     return BoundingBox(
-        bbox_2d=[10, 23, 100, 200], label=Person.BALL, cluster_id=ShirtColor.OTHER
+        bbox_2d=[10, 23, 100, 200],
+        label="ball",
     )
 
 

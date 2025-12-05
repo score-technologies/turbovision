@@ -11,9 +11,8 @@ from scorevision.utils.manifest import Element
         (0.5, 0.2),  # above baseline
     ],
 )
-def test_apply_baseline_gate(sample_elements, score, expected_gate):
-    element = sample_elements[0]  # PlayerDetect_v1 baseline_theta=0.3
-    result = element.apply_baseline_gate(score)
+def test_apply_baseline_gate(dummy_detect_element, score, expected_gate):
+    result = dummy_detect_element.apply_baseline_gate(score)
     assert result == expected_gate
 
 
@@ -25,9 +24,8 @@ def test_apply_baseline_gate(sample_elements, score, expected_gate):
         (0.5, 0.2),  # above baseline → actual margin
     ],
 )
-def test_improvement(sample_elements, score, expected_improvement):
-    element = sample_elements[0]
-    result = element.improvement(score)
+def test_improvement(dummy_detect_element, score, expected_improvement):
+    result = dummy_detect_element.improvement(score)
     assert result == expected_improvement
 
 
@@ -39,10 +37,11 @@ def test_improvement(sample_elements, score, expected_improvement):
         (0.05, 0.0, 0.0),  # beta=0
     ],
 )
-def test_apply_difficulty_weight(sample_elements, improvement, beta, expected_weighted):
-    element = sample_elements[0]
-    element.beta = beta
-    result = element.apply_difficulty_weight(improvement)
+def test_apply_difficulty_weight(
+    dummy_detect_element, improvement, beta, expected_weighted
+):
+    dummy_detect_element.beta = beta
+    result = dummy_detect_element.apply_difficulty_weight(improvement)
     assert result == pytest.approx(expected_weighted)
 
 
@@ -54,42 +53,36 @@ def test_apply_difficulty_weight(sample_elements, improvement, beta, expected_we
         (0.5, 0.2),  # above baseline
     ],
 )
-def test_weight_score(sample_elements, score, expected_weighted):
-    element = sample_elements[0]  # beta=1.0
-    result = element.weight_score(score)
+def test_weight_score(dummy_detect_element, score, expected_weighted):
+    result = dummy_detect_element.weight_score(score)
     assert result == expected_weighted
 
 
-def test_negative_score_clamps_to_floor(sample_elements):
-    element = sample_elements[0]
-    result = element.weight_score(-0.5)
-    assert result == element.delta_floor  # cannot go below delta_floor
+def test_negative_score_clamps_to_floor(dummy_detect_element):
+    result = dummy_detect_element.weight_score(-0.5)
+    assert result == dummy_detect_element.delta_floor  # cannot go below delta_floor
 
 
-def test_zero_delta_floor(sample_elements):
-    element = sample_elements[0]
-    element.delta_floor = 0.0
-    assert element.weight_score(0.1) == 0.0
+def test_zero_delta_floor(dummy_detect_element):
+    dummy_detect_element.delta_floor = 0.0
+    assert dummy_detect_element.weight_score(0.1) == 0.0
 
 
-def test_negative_score_clamped(sample_elements):
-    element = sample_elements[0]
-    element.baseline_theta = 0.0
-    element.delta_floor = 0.05
-    assert element.weight_score(-1.0) == 0.05
+def test_negative_score_clamped(dummy_detect_element):
+    dummy_detect_element.baseline_theta = 0.0
+    dummy_detect_element.delta_floor = 0.05
+    assert dummy_detect_element.weight_score(-1.0) == 0.05
 
 
 @pytest.mark.parametrize("beta, expected_multiplier", [(0.0, 0.0), (10.0, 10.0)])
-def test_beta_extremes(sample_elements, beta, expected_multiplier):
-    element = sample_elements[0]
-    element.beta = beta
-    improvement = element.improvement(0.5)
-    assert element.apply_difficulty_weight(improvement) == pytest.approx(
+def test_beta_extremes(dummy_detect_element, beta, expected_multiplier):
+    dummy_detect_element.beta = beta
+    improvement = dummy_detect_element.improvement(0.5)
+    assert dummy_detect_element.apply_difficulty_weight(improvement) == pytest.approx(
         improvement * beta
     )
 
 
-def test_zero_delta_floor(sample_elements):
-    element = sample_elements[0]
-    element.delta_floor = 0.0
-    assert element.improvement(0.0) == 0.0
+def test_zero_delta_floor(dummy_detect_element):
+    dummy_detect_element.delta_floor = 0.0
+    assert dummy_detect_element.improvement(0.0) == 0.0
