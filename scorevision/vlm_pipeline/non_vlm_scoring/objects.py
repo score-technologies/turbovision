@@ -7,9 +7,6 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    Person as ObjectOfInterest,
-)
 from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
@@ -56,7 +53,7 @@ def _extract_boxes_labels(
     boxes: List[Tuple[int, int, int, int]] = []
     labels: List[object] = []
     for bb in bboxes or []:
-        if only_players and bb.label != ObjectOfInterest.PLAYER:
+        if only_players and bb.label != "player":
             continue
         boxes.append(tuple(bb.bbox_2d))
         labels.append(bb.cluster_id if use_team else bb.label)

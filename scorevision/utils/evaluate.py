@@ -28,9 +28,6 @@ from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
 )
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    Person as ObjectOfInterest,
-)
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
 from scorevision.utils.pillar_metric_registry import (

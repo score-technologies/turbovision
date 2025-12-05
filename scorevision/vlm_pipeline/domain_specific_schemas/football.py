@@ -32,12 +32,6 @@ TEAM2_SHIRT_COLOUR = ShirtColor.BLACK
 # =======================
 # Enums
 # =======================
-class Person(Enum):
-    BALL = "ball"
-    GOALIE = "goalkeeper"
-    PLAYER = "player"
-    REFEREE = "referee"
-
 
 # NOTE: kept here for reference, but this is now specified in the manifest element
 # OBJECT_ID_LOOKUP = {

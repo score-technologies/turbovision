@@ -26,9 +26,6 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     FOOTBALL_CATEGORY_CONFIDENCE,
     FOOTBALL_REASON_PREFIX,
 )
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    Person as ObjectOfInterest,
-)
 from scorevision.utils.async_clients import get_semaphore
 
 logger = getLogger(__name__)
