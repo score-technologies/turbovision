@@ -60,3 +60,15 @@ def test_manifest_hash_is_stable(dummy_detect_element, dummy_pitch_element):
     )
 
     assert man1.hash == man2.hash
+
+
+def test_manifest_get_element_by_id(dummy_detect_element, dummy_pitch_element):
+    man = Manifest(
+        window_id="2025-10-27",
+        elements=[dummy_detect_element, dummy_pitch_element],
+        tee=Tee(trusted_share_gamma=0.2),
+        version="1.3",
+        expiry_block=123456,
+    )
+    assert dummy_detect_element == man.get_element(id=dummy_detect_element.id)
+    assert dummy_pitch_element == man.get_element(id=dummy_pitch_element.id)

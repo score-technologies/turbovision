@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from numpy import ndarray
 
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Element
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.llm_vlm import async_vlm_api, retry_api, VLMProvider
 from scorevision.vlm_pipeline.utils.response_models import (
@@ -248,10 +248,11 @@ async def _step1_detect_persons_and_ball_double_qwen(
 
 
 async def _step2_palette_internvl(
-    raw_bgr, provider: VLMProvider, manifest: Manifest
+    raw_bgr, provider: VLMProvider, element: Element
 ) -> dict:
-    valid_roles = []
-    # TODO:
+    valid_roles = element.objects
+    if valid_roles is None:
+        raise ValueError(f"No objects to detect for this element: {element}")
 
     raw_bgr = _ensure_bgr_contiguous(raw_bgr)
     schema_json_str, sys_prompt, user_prompt = build_step2_schema_and_prompts(
@@ -385,7 +386,7 @@ async def generate_annotations_for_select_frame(
     frame_number: int,
     frame: ndarray,
     flow_frame: ndarray,
-    manifest: Manifest,
+    element: Element,
     provider: VLMProvider = VLMProvider.PRIMARY,
 ) -> PseudoGroundTruth | None:
 
@@ -406,7 +407,7 @@ async def generate_annotations_for_select_frame(
             persons_vis = _draw_boxes_with_idx(raw_bgr, persons)
 
             s2 = await _step2_palette_internvl(
-                raw_bgr, provider=provider, manifest=manifest
+                raw_bgr, provider=provider, element=element
             )
 
             s3 = await _step3_assign_classes_from_palette(
@@ -440,7 +441,7 @@ async def generate_annotations_for_select_frames(
     frames: list[ndarray],
     flow_frames: list[ndarray],
     frame_numbers: list[int],
-    manifest: Manifest,
+    element: Element,
 ) -> list[PseudoGroundTruth]:
     tasks = [
         generate_annotations_for_select_frame(
@@ -448,7 +449,7 @@ async def generate_annotations_for_select_frames(
             frame_number=frame_number,
             frame=frame,
             flow_frame=flow_frame,
-            manifest=manifest,
+            element=element,
         )
         for frame_number, frame, flow_frame in zip(
             frame_numbers, frames, flow_frames, strict=True

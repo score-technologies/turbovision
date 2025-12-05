@@ -29,7 +29,7 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
-from scorevision.utils.manifest import Manifest, get_current_manifest
+from scorevision.utils.manifest import Manifest, Element, get_current_manifest
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.prometheus import (
     RUNNER_BLOCK_HEIGHT,
@@ -62,7 +62,7 @@ def _chute_id_for_miner(m: Miner) -> str | None:
 
 async def _build_pgt_with_retries(
     chal_api: dict,
-    manifest: Manifest,
+    element: Element,
     *,
     required_n_frames: int,
     max_bbox_retries: int = 5,
@@ -119,7 +119,7 @@ async def _build_pgt_with_retries(
                             frames=challenge.frames,
                             flow_frames=challenge.dense_optical_flow_frames,
                             frame_numbers=challenge.frame_numbers,
-                            manifest=manifest,
+                            element=element,
                         )
                     )
                     n_frames = len(pseudo_gt_annotations)
@@ -445,6 +445,10 @@ async def runner(
             return
 
         try:
+            element = manifest.get_element(id=element_id)
+            if element is None:
+                raise ValueError(f"element id {element_id} not found in manifest")
+
             pgt_build_start = loop.time()
             challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                 chal_api=chal_api,
@@ -452,7 +456,7 @@ async def runner(
                 max_bbox_retries=MAX_PGT_BBOX_RETRIES,
                 max_quality_retries=MAX_PGT_QUALITY_RETRIES,
                 video_cache=video_cache,
-                manifest=manifest,
+                element=element,
             )
             last_pgt_duration = loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)

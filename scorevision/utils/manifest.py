@@ -358,6 +358,11 @@ class Manifest(BaseModel):
         data = yaml.load(path.read_text())
         return Manifest(**data)
 
+    def get_element(self, id: str) -> Element | None:
+        for element in self.elements:
+            if element.id == id:
+                return element
+
     def to_canonical_json(self) -> str:
         """
         Produce deterministic canonical JSON suitable for hashing and signing.
