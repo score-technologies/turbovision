@@ -73,8 +73,10 @@ class ElementPrefix(str, Enum):
     PITCH_CALIBRATION = "PitchCalib"
 
 
-class KeypointDomain(str, Enum):
+class ChallengeType(str, Enum):
     FOOTBALL = "football"
+    CRICKET = "cricket"
+    BASKETBALL = "basketball"
 
 
 # ------------------------------------------------------------
@@ -135,8 +137,8 @@ class KeypointTemplate(BaseModel):
         return self
 
 
-KEYPOINT_TEMPLATES: dict[KeypointDomain, KeypointTemplate] = {
-    KeypointDomain.FOOTBALL: KeypointTemplate(
+KEYPOINT_TEMPLATES: dict[ChallengeType, KeypointTemplate] = {
+    ChallengeType.FOOTBALL: KeypointTemplate(
         filename="football_pitch_template.png",
         keypoints_on_template=[
             (5, 5),  # 1
@@ -277,7 +279,7 @@ class Element(BaseModel):
         description="Difficulty weight for emission allocation (must be positive)",
     )
     salt: Salt = Field(default_factory=Salt)
-    keypoint_template: KeypointDomain | None = None
+    keypoint_template: ChallengeType | None = None
     objects: list[str] | None = None
 
     def apply_baseline_gate(self, score: float) -> float:

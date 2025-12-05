@@ -16,7 +16,21 @@ from scorevision.utils.manifest import (
 
 
 @fixture
-def dummy_detect_element():
+def dummy_objects():
+    return [
+        "ball",
+        "goalkeeper",
+        "player",
+        "referee",
+        "",
+        "",
+        "team 1",
+        "team 2",
+    ]
+
+
+@fixture
+def dummy_detect_element(dummy_objects):
     return Element(
         id="PlayerDetect_v1@1.0",
         clips=[Clip(hash="sha256:abc", weight=1.0)],
@@ -35,16 +49,7 @@ def dummy_detect_element():
         baseline_theta=0.3,
         delta_floor=0.05,
         beta=1.0,
-        objects=[
-            "ball",
-            "goalkeeper",
-            "player",
-            "referee",
-            "",
-            "",
-            "team 1",
-            "team 2",
-        ],
+        objects=dummy_objects,
     )
 
 
@@ -119,7 +124,7 @@ def manifest_with_pillar_that_has_no_metric_registered():
 
 
 @fixture
-def manifest_with_pillar_weight_of_zero():
+def manifest_with_pillar_weight_of_zero(dummy_objects):
     return Manifest(
         window_id="2025-10-27",
         version="1.3",
@@ -137,6 +142,7 @@ def manifest_with_pillar_weight_of_zero():
                 baseline_theta=0.3,
                 delta_floor=0.05,
                 beta=1.0,
+                objects=dummy_objects,
             )
         ],
     )

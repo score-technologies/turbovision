@@ -52,7 +52,9 @@ from scorevision.utils.rtf import (
 logger = getLogger(__name__)
 
 
-def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
+def parse_miner_prediction(
+    miner_run: SVRunOutput, object_names: list[str]
+) -> dict[int, dict]:
     predicted_frames = (
         (miner_run.predictions or {}).get("frames") if miner_run.predictions else None
     ) or []
@@ -62,61 +64,64 @@ def parse_miner_prediction(miner_run: SVRunOutput) -> dict[int, dict]:
     for predicted_frame in predicted_frames:
         bboxes = []
         frame_number = predicted_frame.get("frame_id", -1)
-        for bbox in predicted_frame.get("boxes", []) or []:
-            try:
-                raw_cls = bbox.get("cls_id")
+        if any(object_names):
+            for bbox in predicted_frame.get("boxes", []) or []:
                 try:
-                    object_id = int(raw_cls)
-                except (TypeError, ValueError):
-                    object_id = None
+                    raw_cls = bbox.get("cls_id")
+                    try:
+                        object_id = int(raw_cls)
+                    except (TypeError, ValueError):
+                        object_id = None
 
-                looked_up = (
-                    OBJECT_ID_LOOKUP.get(object_id) if object_id is not None else None
-                )
-
-                object_type: ObjectOfInterest
-                object_colour: ShirtColor = ShirtColor.OTHER
-
-                if looked_up is None:
-                    object_type = ObjectOfInterest.PLAYER
-
-                elif isinstance(looked_up, str):
-                    team_str = looked_up.strip().lower().replace(" ", "")
-                    object_type = ObjectOfInterest.PLAYER
-                    if team_str == "team1":
-                        object_colour = TEAM1_SHIRT_COLOUR
-                    elif team_str == "team2":
-                        object_colour = TEAM2_SHIRT_COLOUR
-                    else:
-                        object_colour = ShirtColor.OTHER
-
-                else:
-                    object_type = looked_up
-                    team_field = (
-                        (bbox.get("team") or bbox.get("team_id") or "").strip().lower()
+                    looked_up = (
+                        object_names[object_id] if object_id is not None else None
                     )
-                    if team_field in {"1", "team1"}:
-                        object_colour = TEAM1_SHIRT_COLOUR
-                    elif team_field in {"2", "team2"}:
-                        object_colour = TEAM2_SHIRT_COLOUR
-                    else:
-                        object_colour = ShirtColor.OTHER
 
-                bboxes.append(
-                    BoundingBox(
-                        bbox_2d=[
-                            int(bbox["x1"]),
-                            int(bbox["y1"]),
-                            int(bbox["x2"]),
-                            int(bbox["y2"]),
-                        ],
-                        label=object_type,
-                        cluster_id=object_colour,
+                    object_type: ObjectOfInterest
+                    object_colour: ShirtColor = ShirtColor.OTHER
+
+                    if looked_up is None:
+                        object_type = ObjectOfInterest.PLAYER
+
+                    elif isinstance(looked_up, str):
+                        team_str = looked_up.strip().lower().replace(" ", "")
+                        object_type = ObjectOfInterest.PLAYER
+                        if team_str == "team1":
+                            object_colour = TEAM1_SHIRT_COLOUR
+                        elif team_str == "team2":
+                            object_colour = TEAM2_SHIRT_COLOUR
+                        else:
+                            object_colour = ShirtColor.OTHER
+
+                    else:
+                        object_type = looked_up
+                        team_field = (
+                            (bbox.get("team") or bbox.get("team_id") or "")
+                            .strip()
+                            .lower()
+                        )
+                        if team_field in {"1", "team1"}:
+                            object_colour = TEAM1_SHIRT_COLOUR
+                        elif team_field in {"2", "team2"}:
+                            object_colour = TEAM2_SHIRT_COLOUR
+                        else:
+                            object_colour = ShirtColor.OTHER
+
+                    bboxes.append(
+                        BoundingBox(
+                            bbox_2d=[
+                                int(bbox["x1"]),
+                                int(bbox["y1"]),
+                                int(bbox["x2"]),
+                                int(bbox["y2"]),
+                            ],
+                            label=object_type,
+                            cluster_id=object_colour,
+                        )
                     )
-                )
-            except Exception as e:
-                logger.error(e)
-                continue
+                except Exception as e:
+                    logger.error(e)
+                    continue
         miner_annotations[frame_number] = {
             "bboxes": bboxes,
             "action": predicted_frame.get("action", None),
@@ -274,9 +279,12 @@ def get_element_scores(
     challenge_type: ChallengeType,
 ) -> dict:
     settings = get_settings()
-    miner_annotations = parse_miner_prediction(miner_run=miner_run)
+
     element_scores = {}
     for element in manifest.elements:
+        miner_annotations = parse_miner_prediction(
+            miner_run=miner_run, object_names=element.objects or []
+        )
         pillar_scores = {}
         for pillar, weight in element.metrics.pillars.items():
             metric_fn = METRIC_REGISTRY.get((element.category, pillar))
