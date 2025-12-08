@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from numpy import ndarray
 
+from scorevision.utils.manifest import Element
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.llm_vlm import async_vlm_api, retry_api, VLMProvider
 from scorevision.vlm_pipeline.utils.response_models import (
@@ -24,9 +25,6 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     FOOTBALL_DEFAULT_CATEGORY,
     FOOTBALL_CATEGORY_CONFIDENCE,
     FOOTBALL_REASON_PREFIX,
-)
-from scorevision.vlm_pipeline.domain_specific_schemas.football import (
-    Person as ObjectOfInterest,
 )
 from scorevision.utils.async_clients import get_semaphore
 
@@ -246,9 +244,17 @@ async def _step1_detect_persons_and_ball_double_qwen(
     return {"persons": merged, "ball": ball}
 
 
-async def _step2_palette_internvl(raw_bgr, provider: VLMProvider) -> dict:
+async def _step2_palette_internvl(
+    raw_bgr, provider: VLMProvider, element: Element
+) -> dict:
+    valid_roles = element.objects
+    if valid_roles is None:
+        raise ValueError(f"No objects to detect for this element: {element}")
+
     raw_bgr = _ensure_bgr_contiguous(raw_bgr)
-    schema_json_str, sys_prompt, user_prompt = build_step2_schema_and_prompts()
+    schema_json_str, sys_prompt, user_prompt = build_step2_schema_and_prompts(
+        roles=valid_roles
+    )
     res = await _vlm_call_with_model(
         [raw_bgr],
         sys_prompt,
@@ -258,7 +264,7 @@ async def _step2_palette_internvl(raw_bgr, provider: VLMProvider) -> dict:
         INTERNVL_MODEL,
         temperature=0.0,
     )
-    return normalize_palette_roles(res)
+    return normalize_palette_roles(raw_res=res, valid_roles=valid_roles)
 
 
 async def _step3_assign_classes_from_palette(
@@ -335,43 +341,18 @@ def _objects_to_frameannotation(
     role_to_color = {
         r.get("role"): r.get("color") for r in (palette_roles or []) if r.get("role")
     }
-    t1_color = _to_shirtcolor(role_to_color.get("team1"), default=TEAM1_SHIRT_COLOUR)
-    t2_color = _to_shirtcolor(role_to_color.get("team2"), default=TEAM2_SHIRT_COLOUR)
-    ref_color = _to_shirtcolor(role_to_color.get("referee"), default=ShirtColor.BLACK)
-    gk_color = _to_shirtcolor(role_to_color.get("goalkeeper"), default=ShirtColor.OTHER)
-
     bboxes: list[BoundingBox] = []
     for o in objects:
         if not isinstance(o.get("bbox"), (list, tuple)) or len(o["bbox"]) != 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in o["bbox"]]
-        cls = o["class"]
-        if cls == "player":
-            team_id = int(o.get("team_id") or 1)
-            cluster = t1_color if team_id == 1 else t2_color
-            bboxes.append(
-                BoundingBox(
-                    bbox_2d=(x1, y1, x2, y2),
-                    label=ObjectOfInterest.PLAYER,
-                    cluster_id=cluster,
-                )
+        bboxes.append(
+            BoundingBox(
+                bbox_2d=(x1, y1, x2, y2),
+                label=o["class"],
+                cluster_id=_to_shirtcolor(role_to_color.get(cls)) or ShirtColor.OTHER,
             )
-        elif cls == "referee":
-            bboxes.append(
-                BoundingBox(
-                    bbox_2d=(x1, y1, x2, y2),
-                    label=ObjectOfInterest.REFEREE,
-                    cluster_id=ref_color,
-                )
-            )
-        elif cls == "goalkeeper":
-            bboxes.append(
-                BoundingBox(
-                    bbox_2d=(x1, y1, x2, y2),
-                    label=ObjectOfInterest.GOALIE,
-                    cluster_id=gk_color,
-                )
-            )
+        )
 
     if (
         ball_obj.get("present")
@@ -382,7 +363,7 @@ def _objects_to_frameannotation(
         bboxes.append(
             BoundingBox(
                 bbox_2d=(x1, y1, x2, y2),
-                label=ObjectOfInterest.BALL,
+                label="ball",
                 cluster_id=ShirtColor.OTHER,
             )
         )
@@ -391,7 +372,7 @@ def _objects_to_frameannotation(
         bboxes=bboxes,
         category=FOOTBALL_DEFAULT_CATEGORY,
         confidence=FOOTBALL_CATEGORY_CONFIDENCE,
-        reason=f"{FOOTBALL_REASON_PREFIX} players/referees/goalkeeper via palette + ball if present.",
+        reason=f"{FOOTBALL_REASON_PREFIX} via palette + ball if present.",
     )
 
 
@@ -402,6 +383,7 @@ async def generate_annotations_for_select_frame(
     frame_number: int,
     frame: ndarray,
     flow_frame: ndarray,
+    element: Element,
     provider: VLMProvider = VLMProvider.PRIMARY,
 ) -> PseudoGroundTruth | None:
 
@@ -421,7 +403,9 @@ async def generate_annotations_for_select_frame(
 
             persons_vis = _draw_boxes_with_idx(raw_bgr, persons)
 
-            s2 = await _step2_palette_internvl(raw_bgr, provider=provider)
+            s2 = await _step2_palette_internvl(
+                raw_bgr, provider=provider, element=element
+            )
 
             s3 = await _step3_assign_classes_from_palette(
                 raw_bgr, persons_vis, persons, s2, provider=provider
@@ -454,6 +438,7 @@ async def generate_annotations_for_select_frames(
     frames: list[ndarray],
     flow_frames: list[ndarray],
     frame_numbers: list[int],
+    element: Element,
 ) -> list[PseudoGroundTruth]:
     tasks = [
         generate_annotations_for_select_frame(
@@ -461,6 +446,7 @@ async def generate_annotations_for_select_frames(
             frame_number=frame_number,
             frame=frame,
             flow_frame=flow_frame,
+            element=element,
         )
         for frame_number, frame, flow_frame in zip(
             frame_numbers, frames, flow_frames, strict=True
