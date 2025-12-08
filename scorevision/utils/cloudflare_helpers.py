@@ -377,7 +377,8 @@ async def emit_shard(
     eval_dict = {
         "acc_breakdown": getattr(evaluation, "acc_breakdown", None),
         "acc": getattr(evaluation, "acc", None),
-        "score": getattr(evaluation, "score", None),}
+        "score": getattr(evaluation, "score", None),
+    }
 
     acc_breakdown = getattr(evaluation, "acc_breakdown", {}) or {}
     composite_score = float(getattr(evaluation, "score", 0.0))
