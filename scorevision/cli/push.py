@@ -14,6 +14,7 @@ async def push_ml_model(
     hf_revision: str | None,
     skip_chutes_deploy: bool,
     skip_bittensor_commit: bool,
+    element_id: str | None,
 ) -> None:
     hf_revision = await create_update_or_verify_huggingface_repo(
         model_path=ml_model_path, hf_revision=hf_revision
@@ -30,4 +31,5 @@ async def push_ml_model(
             revision=hf_revision,
             chute_id=chute_id,
             chute_slug=chute_slug,
+            element_id=element_id,
         )

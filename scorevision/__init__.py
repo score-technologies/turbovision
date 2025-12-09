@@ -48,7 +48,6 @@ def runner_cmd():
     path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
     asyncio.run(runner_loop(path_manifest=path_manifest))
 
-
 @cli.command("push")
 @click.option(
     "--model-path",
@@ -64,11 +63,17 @@ def runner_cmd():
 @click.option(
     "--no-commit", is_flag=True, help="Skip on-chain commitment (print payload only)."
 )
+@click.option(
+    "--element-id",
+    required=True,
+    help="Element ID this miner is committing to (e.g. 'bbox', 'keypoints', '0', '1', etc.).",
+)
 def push(
     model_path,
     revision,
     no_deploy,
     no_commit,
+    element_id,
 ):
     """Push the miner's ML model stored on Huggingface onto Chutes and commit information on-chain"""
     try:
@@ -78,6 +83,7 @@ def push(
                 hf_revision=revision,
                 skip_chutes_deploy=no_deploy,
                 skip_bittensor_commit=no_commit,
+                element_id=element_id,
             )
         )
     except Exception as e:
