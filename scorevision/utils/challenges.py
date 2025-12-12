@@ -174,15 +174,7 @@ async def prepare_challenge_payload(
 
 async def get_next_challenge() -> dict:
     """
-    Fetches the next video challenge from ScoreVision API.
-    Returns a dict like:
-      {
-        "task_id": "...",     # we will propagate this end-to-end
-        "video_url": "...",   # or "asset_url"
-        "fps": 25|30,         # optional (fallback 30)
-        "seed": <int>,        # optional
-        ...
-      }
+    Fetches the next video challenge from ScoreVision API (legacy v2).
     """
     settings = get_settings()
 
@@ -263,6 +255,7 @@ async def get_challenge_from_scorevision_with_source(
     *,
     video_cache: dict[str, Any] | None = None,
     manifest_hash: str | None = None,
+    element_id: str | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
     use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
         "0",
@@ -277,7 +270,10 @@ async def get_challenge_from_scorevision_with_source(
                     "SCOREVISION_USE_CHALLENGE_V3=1 but no manifest_hash provided "
                     "to get_challenge_from_scorevision_with_source()."
                 )
-            chal_api = await get_next_challenge_v3(manifest_hash=manifest_hash)
+            chal_api = await get_next_challenge_v3(
+                manifest_hash=manifest_hash,
+                element_id=element_id,
+            )
         else:
             chal_api = await get_next_challenge()
     except ClientResponseError as e:
@@ -308,14 +304,17 @@ async def get_challenge_from_scorevision_with_source(
 
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,
+    element_id: str | None = None,
 ) -> dict:
     """
-    New v3 challenge client using Manifest hash + new schema.
+    New v3 challenge client using Manifest hash + optional element_id.
 
     Request:
       GET /api/challenge/v3
-        - query params: same auth as /tasks/next/v2
-        - header: X-Manifest-Hash: <manifest_hash>
+        - query params: auth + manifest_hash + optional element_id
+        - headers:
+            X-Manifest-Hash: <manifest_hash>
+            X-Element-Id: <element_id> (si fourni)
 
     Response attendu (exemple simplifié):
       {
@@ -325,7 +324,7 @@ async def get_next_challenge_v3(
         "seed": 123,
         "element_id": "PlayerDetect_v1@1.0",
         "window_id": "block-123456",
-        "manifest_hash": "..."  # idéalement égal à ce qu'on a envoyé
+        "manifest_hash": "...",
         ...
       }
     """
@@ -336,7 +335,7 @@ async def get_next_challenge_v3(
 
     if manifest_hash is None:
         raise ScoreVisionChallengeError(
-            "get_next_challenge_v3() requires a manifest_hash argument for now."
+            "get_next_challenge_v3() requires a manifest_hash argument."
         )
 
     keypair = load_hotkey_keypair(
@@ -345,10 +344,14 @@ async def get_next_challenge_v3(
     )
     params = build_validator_query_params(keypair)
     params["manifest_hash"] = manifest_hash
+    if element_id is not None:
+        params["element_id"] = element_id
 
     headers: dict[str, str] = {
         "X-Manifest-Hash": manifest_hash,
     }
+    if element_id is not None:
+        headers["X-Element-Id"] = element_id
 
     session = await get_async_client()
     try:
@@ -406,6 +409,14 @@ async def get_next_challenge_v3(
             if not challenge.get("window_id"):
                 raise ScoreVisionChallengeError(
                     "Missing window_id in /api/challenge/v3 response."
+                )
+
+            if element_id is not None and str(challenge.get("element_id")) != str(
+                element_id
+            ):
+                raise ScoreVisionChallengeError(
+                    f"Element_id mismatch in /api/challenge/v3 response "
+                    f"(requested={element_id}, got={challenge.get('element_id')})."
                 )
 
             logger.info(

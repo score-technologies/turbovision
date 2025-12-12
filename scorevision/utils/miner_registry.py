@@ -22,6 +22,7 @@ class Miner:
     slug: Optional[str]
     chute_id: Optional[str]
     block: int
+    element_id: Optional[str] = None
 
 
 # ------------------------- HF gating & revision checks ------------------------- #
@@ -143,10 +144,18 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             logger.debug("[Registry] uid=%s hotkey=%s invalid JSON", uid, hk)
             continue
 
+        role = obj.get("role")
+        if role and role != "miner":
+            continue
+
         model = obj.get("model")
         revision = obj.get("revision")
         slug = obj.get("slug")
         chute_id = obj.get("chute_id")
+
+        element_id = obj.get("element_id")
+        if element_id is not None:
+            element_id = str(element_id)
 
         if not slug:
             # no slug -> cannot call this miner
@@ -160,6 +169,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             slug=slug,
             chute_id=chute_id,
             block=int(block or 0) if uid != 0 else 0,  # mirror special-case for uid 0
+            element_id=element_id,
         )
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))
@@ -227,4 +237,12 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
     logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
+
+    missing_eid = [m for m in kept.values() if not m.element_id]
+    if missing_eid:
+        logger.info(
+            "[Registry] %d kept miners without element_id (will be ignored for element-scoped runs)",
+            len(missing_eid),
+        )
+
     return kept
