@@ -9,14 +9,13 @@ import sys
 from inspect import signature
 from urllib.parse import quote
 
-
 from aiohttp import ClientSession
 from yaml import safe_load
 from pydantic import BaseModel
 from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
 from numpy import ndarray
 from huggingface_hub import snapshot_download
-import torch 
+import torch
 
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
@@ -29,6 +28,8 @@ CHUTES_USERNAME = "{{ chute_username }}"
 CHUTE_NAME = "{{ chute_name }}"
 FILENAME = "miner.py"
 CLASSNAME = "Miner"
+CHUTE_CONFIG_FILENAME = "chute_config.yml"
+MAX_LOADED_MODEL_SIZE_GB = 5.0
 
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
@@ -49,7 +50,7 @@ def verify_cuda_version() -> str:
     device_count = torch.cuda.device_count()
     if device_count < 1:
         return "❌ No CUDA devices detected"
-    cuda_version_str = torch.version.cuda 
+    cuda_version_str = torch.version.cuda
     if cuda_version_str is None:
         return "❌ PyTorch was not compiled with CUDA support"
     try:
@@ -97,7 +98,7 @@ def safe_instantiate(cls, config: dict):
 
 
 def load_chute(
-    hf_repo: str, hf_revision: str, config_filename:str,  chutes_username:str, chute_name:str, 
+    hf_repo: str, hf_revision: str, config_filename:str,  chutes_username:str, chute_name:str,
 ) -> Chute:
     hf_repo_path = Path(snapshot_download(hf_repo, revision=hf_revision))
     print("✅ Huggingface Hub repo downloaded")
@@ -108,7 +109,7 @@ def load_chute(
     image_config = config.get("Image", {})
     image_config.update(
         {
-            "username": chutes_username, 
+            "username": chutes_username,
             "name": chute_name,
             "tag":"latest",
         }
@@ -142,7 +143,7 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         raise FileNotFoundError(
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
-    
+
     blocked_names = {
         f.stem for f in path_hf_repo.glob("*") if f.is_file() and f.name != filename
     }
@@ -163,6 +164,42 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
     miner_object = getattr(module, classname)
     return miner_object
 
+def object_size_in_bytes(current_obj: Any, seen_ids: set[int], limit: int) -> int:
+    obj_id = id(current_obj)
+    if obj_id in seen_ids or limit <= 0:
+        return 0
+    seen_ids.add(obj_id)
+    total_size = 0
+    if isinstance(current_obj, torch.Tensor):
+        return current_obj.numel() * current_obj.element_size()
+    if isinstance(current_obj, ndarray):
+        return current_obj.nbytes
+    try:
+        total_size += sys.getsizeof(current_obj)
+    except TypeError:
+        pass
+    if isinstance(current_obj, dict):
+        for key, value in current_obj.items():
+            total_size += object_size_in_bytes(key, seen_ids, limit - 1)
+            total_size += object_size_in_bytes(value, seen_ids, limit - 1)
+    elif isinstance(current_obj, (list, tuple, set)):
+        try:
+            for item in current_obj:
+                total_size += object_size_in_bytes(item, seen_ids, limit - 1)
+        except TypeError:
+            pass
+    elif hasattr(current_obj, '__dict__'):
+        for value in current_obj.__dict__.values():
+            total_size += object_size_in_bytes(value, seen_ids, limit - 1)
+    return total_size
+
+def get_miner_size_gb(miner) -> float:
+    total_size_bytes = object_size_in_bytes(
+        current_obj=miner,
+        seen_ids=set(),
+        limit=100
+    )
+    return total_size_bytes / (1024**3)
 
 def get_video_frames_in_batches(
     video: VideoCapture, batch_size: int
@@ -184,11 +221,11 @@ def get_video_frames_in_batches(
 
 ##=========ENDPOINTS================
 chute = load_chute(
-    hf_repo=HF_REPO_NAME, 
-    hf_revision=HF_REPO_REVISION, 
-    chutes_username=CHUTES_USERNAME, 
+    hf_repo=HF_REPO_NAME,
+    hf_revision=HF_REPO_REVISION,
+    chutes_username=CHUTES_USERNAME,
     chute_name=CHUTE_NAME,
-    config_filename="config.yml",
+    config_filename=CHUTE_CONFIG_FILENAME,
 )
 
 @chute.on_startup()
@@ -199,18 +236,24 @@ async def load_model(self) -> None:
         self.cuda_status = f"❌ Failed to check cuda status: {e}"
     print(self.cuda_status)
 
+    self.miner_size = None
     try:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
-        print("�~\~E Huggingface Hub repo downloaded")         
+        print("✅ Huggingface Hub repo downloaded")
 
         miner_class = load_miner_from_hf_repo(
             path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
         )
         self.miner = miner_class(hf_repo_path)
-        self.status = "healthy"
         print(f"✅ Miner loaded {self.miner}")
+        self.miner_size = get_miner_size_gb(self.miner)
+        if self.miner_size > MAX_LOADED_MODEL_SIZE_GB:
+            raise ValueError(
+                f"Loaded Miner memory footprint {self.miner_size:.2f} GB exceeds the allowed limit of {MAX_LOADED_MODEL_SIZE_GB:.2f} GB. "
+            )
+        self.status = "healthy"
     except Exception as e:
-        self.status = f"❌ Failed to load miner from Huggingface repo: {e}"
+        self.status = f"❌ Failed to load miner: {e}"
         self.miner = None
         print(self.status)
 
@@ -220,6 +263,7 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": self.status,
         "model_loaded": str(self.miner),
+        "memory_gb":self.miner_size,
         "cuda": self.cuda_status
     }
 
@@ -235,7 +279,7 @@ async def predict(self, data: TVPredictInput) -> dict:
         metadata = data.meta
         batch_size = metadata.get('batch_size',64)
         n_keypoints = metadata.get('n_keypoints',32)
-        
+
         url = f"https://proxy.chutes.ai/misc/proxy?url={quote(data.url, safe='')}"
         async with ClientSession() as session:
             async with session.get(url) as response:
