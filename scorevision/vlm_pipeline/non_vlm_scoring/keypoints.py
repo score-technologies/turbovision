@@ -4,6 +4,8 @@ from typing import Any
 from numpy import array, uint8, float32, ndarray
 from cv2 import (
     bitwise_and,
+    bitwise_not,
+    bitwise_or,
     findHomography,
     warpPerspective,
     cvtColor,
@@ -214,9 +216,23 @@ def evaluate_keypoints_for_frame(
             image=frame, ground_mask=mask_ground
         )
 
-        pixels_overlapping = bitwise_and(
+        pixels_overlapping_result = bitwise_and(
             mask_lines_expected, mask_lines_predicted
-        ).sum()
+        )
+
+        inv_expected = bitwise_not(mask_lines_expected)
+        pixels_rest = bitwise_and(inv_expected, mask_lines_predicted).sum()
+
+        total_pixels = bitwise_or(mask_lines_expected, mask_lines_predicted).sum()
+
+        if total_pixels == 0:
+            return 0.0
+
+        if (pixels_rest / (total_pixels)) > 0.9:
+            logger.info('threshold exceeded')
+            return 0.0
+
+        pixels_overlapping = pixels_overlapping_result.sum()
         pixels_on_lines = mask_lines_expected.sum()
         score = pixels_overlapping / (pixels_on_lines + 1e-8)
         return score
