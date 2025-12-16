@@ -109,7 +109,10 @@ def bbox_smoothness(
     return smoothness
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS),
+    (ElementPrefix.BALL_DETECTION, PillarName.SMOOTHNESS),
+)
 def bbox_smoothness_per_type(
     video_bboxes: list[list[BoundingBox]], image_height: int, image_width: int, **kwargs
 ) -> float:
@@ -121,7 +124,9 @@ def bbox_smoothness_per_type(
     for frame_bboxes in video_bboxes:
         grouped = defaultdict(list)
         for bbox in frame_bboxes:
-            grouped[f"{bbox.label.value}_{bbox.cluster_id.value}"].append(bbox)
+            grouped[
+                f"{bbox.label}_{bbox.cluster_id.value if bbox.cluster_id else 'null'}"
+            ].append(bbox)
         for cls_id, boxes in grouped.items():
             by_type[cls_id].append(boxes)
 

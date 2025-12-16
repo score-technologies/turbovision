@@ -7,7 +7,7 @@ from logging import getLogger
 import aiohttp
 from huggingface_hub import HfApi
 
-from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -121,14 +121,33 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     and returns at most one miner per model (earliest block wins).
     """
     settings = get_settings()
-    st = await get_subtensor()
     mechid = settings.SCOREVISION_MECHID
+
+    try:
+        st = await get_subtensor()
+    except Exception as e:
+        logger.warning(
+            "[Registry] failed to initialize subtensor (netuid=%s mechid=%s): %s",
+            netuid,
+            mechid,
+            e,
+        )
+        reset_subtensor()
+        return {}
+
     logger.info(
         "[Registry] extracting candidates (netuid=%s mechid=%s)", netuid, mechid
     )
 
-    meta = await st.metagraph(netuid, mechid=mechid)
-    commits = await st.get_all_revealed_commitments(netuid)
+    try:
+        meta = await st.metagraph(netuid, mechid=mechid)
+        commits = await st.get_all_revealed_commitments(netuid)
+    except Exception as e:
+        logger.warning(
+            "[Registry] error while fetching metagraph/commitments: %s", e
+        )
+        reset_subtensor()
+        return {}
 
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
@@ -159,7 +178,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             revision=revision,
             slug=slug,
             chute_id=chute_id,
-            block=int(block or 0) if uid != 0 else 0,  # mirror special-case for uid 0
+            block=int(block or 0) if uid != 0 else 0,
         )
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))

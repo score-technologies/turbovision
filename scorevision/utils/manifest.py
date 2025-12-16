@@ -28,7 +28,8 @@ from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
 from ruamel.yaml import YAML
 from pydantic import BaseModel, Field, model_validator
-
+from numpy import ndarray
+from cv2 import imread
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -72,9 +73,122 @@ class ElementPrefix(str, Enum):
     PITCH_CALIBRATION = "PitchCalib"
 
 
+class ChallengeType(str, Enum):
+    FOOTBALL = "football"
+    CRICKET = "cricket"
+    BASKETBALL = "basketball"
+
+
 # ------------------------------------------------------------
 # DATA CLASSES
 # ------------------------------------------------------------
+
+
+class KeypointTemplate(BaseModel):
+    filename: str = Field(..., description="name of keypoints template image file")
+    keypoints_on_template: list[tuple[int, int]] = Field(
+        ...,
+        description="the pixel coordinates of each keypoint on the template image file",
+    )
+    keypoint_index_bottom_left: int = Field(..., ge=0)
+    keypoint_index_bottom_right: int = Field(..., ge=0)
+    keypoint_index_top_left: int = Field(..., ge=0)
+    keypoint_index_top_right: int = Field(..., ge=0)
+
+    @property
+    def bottom_left(self) -> tuple[int, int]:
+        return self.keypoints_on_template[self.keypoint_index_bottom_left]
+
+    @property
+    def bottom_right(self) -> tuple[int, int]:
+        return self.keypoints_on_template[self.keypoint_index_bottom_right]
+
+    @property
+    def top_left(self) -> tuple[int, int]:
+        return self.keypoints_on_template[self.keypoint_index_top_left]
+
+    @property
+    def top_right(self) -> tuple[int, int]:
+        return self.keypoints_on_template[self.keypoint_index_top_right]
+
+    @property
+    def n_keypoints(self) -> int:
+        return len(self.keypoints_on_template)
+
+    @property
+    def template(self) -> ndarray:
+        current_dir = Path(__file__).parent.parent
+        path_template = str(current_dir / "keypoints_templates" / self.filename)
+        image = imread(path_template)
+        if image is None:
+            raise ValueError(f"No image file found for template at: {path_template}")
+        return image
+
+    @model_validator(mode="after")
+    def validate_template_and_indices(self):
+        self.template
+        try:
+            self.bottom_left
+            self.bottom_right
+            self.top_left
+            self.top_right
+        except IndexError as e:
+            raise ValueError(f"index must be within 0 and {self.n_keypoints-1}: {e}")
+        return self
+
+
+KEYPOINT_TEMPLATES: dict[ChallengeType, KeypointTemplate] = {
+    ChallengeType.FOOTBALL: KeypointTemplate(
+        filename="football_pitch_template.png",
+        keypoints_on_template=[
+            (5, 5),  # 1
+            (5, 140),  # 2
+            (5, 250),  # 3
+            (5, 430),  # 4
+            (5, 540),  # 5
+            (5, 675),  # 6
+            # -------------
+            (55, 250),  # 7
+            (55, 430),  # 8
+            # -------------
+            (110, 340),  # 9
+            # -------------
+            (165, 140),  # 10
+            (165, 270),  # 11
+            (165, 410),  # 12
+            (165, 540),  # 13
+            # -------------
+            (527, 5),  # 14
+            (527, 253),  # 15
+            (527, 433),  # 16
+            (527, 675),  # 17
+            # -------------
+            (888, 140),  # 18
+            (888, 270),  # 19
+            (888, 410),  # 20
+            (888, 540),  # 21
+            # -------------
+            (940, 340),  # 22
+            # -------------
+            (998, 250),  # 23
+            (998, 430),  # 24
+            # -------------
+            (1045, 5),  # 25
+            (1045, 140),  # 26
+            (1045, 250),  # 27
+            (1045, 430),  # 28
+            (1045, 540),  # 29
+            (1045, 675),  # 30
+            # -------------
+            (435, 340),  # 31
+            (615, 340),  # 32
+        ],
+        keypoint_index_bottom_left=5,
+        keypoint_index_bottom_right=29,
+        keypoint_index_top_left=0,
+        keypoint_index_top_right=24,
+    )
+}
 
 
 class Preproc(BaseModel):
@@ -165,6 +279,8 @@ class Element(BaseModel):
         description="Difficulty weight for emission allocation (must be positive)",
     )
     salt: Salt = Field(default_factory=Salt)
+    keypoint_template: ChallengeType | None = None
+    objects: list[str] | None = None
 
     def apply_baseline_gate(self, score: float) -> float:
         """Clamp score to positive margin above baseline."""
@@ -181,6 +297,10 @@ class Element(BaseModel):
     def weight_score(self, score: float) -> float:
         """Convenience function: baseline → delta → beta."""
         return self.apply_difficulty_weight(improvement=self.improvement(score=score))
+
+    @property
+    def keypoints(self) -> KeypointTemplate | None:
+        return KEYPOINT_TEMPLATES.get(self.keypoint_template)
 
     @property
     def category(self) -> ElementPrefix:
@@ -237,6 +357,11 @@ class Manifest(BaseModel):
     def load_yaml(cls, path: Path) -> "Manifest":
         data = yaml.load(path.read_text())
         return Manifest(**data)
+
+    def get_element(self, id: str) -> Element | None:
+        for element in self.elements:
+            if element.id == id:
+                return element
 
     def to_canonical_json(self) -> str:
         """

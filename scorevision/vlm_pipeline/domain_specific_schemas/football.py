@@ -28,82 +28,20 @@ class ShirtColor(Enum):
 TEAM1_SHIRT_COLOUR = ShirtColor.WHITE
 TEAM2_SHIRT_COLOUR = ShirtColor.BLACK
 
-# =======================
-# GEOM
-# =======================
-FOOTBALL_KEYPOINTS: list[tuple[int, int]] = [
-    (5, 5),  # 1
-    (5, 140),  # 2
-    (5, 250),  # 3
-    (5, 430),  # 4
-    (5, 540),  # 5
-    (5, 675),  # 6
-    # -------------
-    (55, 250),  # 7
-    (55, 430),  # 8
-    # -------------
-    (110, 340),  # 9
-    # -------------
-    (165, 140),  # 10
-    (165, 270),  # 11
-    (165, 410),  # 12
-    (165, 540),  # 13
-    # -------------
-    (527, 5),  # 14
-    (527, 253),  # 15
-    (527, 433),  # 16
-    (527, 675),  # 17
-    # -------------
-    (888, 140),  # 18
-    (888, 270),  # 19
-    (888, 410),  # 20
-    (888, 540),  # 21
-    # -------------
-    (940, 340),  # 22
-    # -------------
-    (998, 250),  # 23
-    (998, 430),  # 24
-    # -------------
-    (1045, 5),  # 25
-    (1045, 140),  # 26
-    (1045, 250),  # 27
-    (1045, 430),  # 28
-    (1045, 540),  # 29
-    (1045, 675),  # 30
-    # -------------
-    (435, 340),  # 31
-    (615, 340),  # 32
-]
-
-INDEX_KEYPOINT_CORNER_BOTTOM_LEFT = 5
-INDEX_KEYPOINT_CORNER_BOTTOM_RIGHT = 29
-INDEX_KEYPOINT_CORNER_TOP_LEFT = 0
-INDEX_KEYPOINT_CORNER_TOP_RIGHT = 24
-
-
-def football_pitch() -> ndarray:
-    current_dir = Path(__file__).parent
-    return imread(str(current_dir / "football_pitch_template.png"))
-
 
 # =======================
 # Enums
 # =======================
-class Person(Enum):
-    BALL = "ball"
-    GOALIE = "goalkeeper"
-    PLAYER = "player"
-    REFEREE = "referee"
 
-
-OBJECT_ID_LOOKUP = {
-    0: Person.BALL,
-    1: Person.GOALIE,
-    2: Person.PLAYER,
-    3: Person.REFEREE,
-    6: "team 1",
-    7: "team 2",
-}
+# NOTE: kept here for reference, but this is now specified in the manifest element
+# OBJECT_ID_LOOKUP = {
+#     0: Person.BALL,
+#     1: Person.GOALIE,
+#     2: Person.PLAYER,
+#     3: Person.REFEREE,
+#     6: "team 1",
+#     7: "team 2",
+# }
 
 
 class Action(Enum):
@@ -132,7 +70,7 @@ class Action(Enum):
 # =======================
 
 # couleurs autorisées (Enum -> str)
-FOOTBALL_COLOR_NAMES = [c.value for c in ShirtColor]
+OBJECT_COLOR_NAMES = [c.value for c in ShirtColor]
 
 
 def map_role_color_to_shirtcolor(name: str | None, default: ShirtColor) -> ShirtColor:
@@ -190,7 +128,7 @@ STEP1_USER = """Return ONLY:
 
 
 # STEP 2: Context
-def build_step2_schema_and_prompts() -> tuple[str, str, str]:
+def build_step2_schema_and_prompts(roles: list[str]) -> tuple[str, str, str]:
     schema = {
         "type": "object",
         "properties": {
@@ -200,9 +138,9 @@ def build_step2_schema_and_prompts() -> tuple[str, str, str]:
                     "properties": {
                         "role": {
                             "type": "string",
-                            "enum": ["team1", "team2", "referee", "goalkeeper"],
+                            "enum": roles,
                         },
-                        "color": {"type": "string", "enum": FOOTBALL_COLOR_NAMES},
+                        "color": {"type": "string", "enum": OBJECT_COLOR_NAMES},
                         "present": {"type": "boolean"},
                         "confidence": {
                             "type": "number",
@@ -216,21 +154,21 @@ def build_step2_schema_and_prompts() -> tuple[str, str, str]:
         },
         "required": ["roles"],
     }
-    sys_prompt = """You are a soccer COLOR PALETTE extractor.
+    sys_prompt = f"""You are a soccer COLOR PALETTE extractor.
 Return ONLY JSON per schema.
 
 INPUT
 - RAW frame ONLY (reference for colors). Ignore crowd/staff.
 TASK
-- Report the dominant jersey COLOR for each visible ROLE among:
-  team1, team2, referee, goalkeeper.
+- Report the dominant COLOR for each visible ROLE among:
+  {' '.join(roles)}.
 CONSTRAINTS
 - ≤1 color for referee; ≤1 color for goalkeeper.
 - team1 and team2 MUST be distinct if both present.
 - If a role is not visible, set present=false and still keep the role with a best guess or omit it (we'll mark present=false).
 - Colors must come from the provided enum; prefer named colors over 'other' when plausible.
 OUTPUT
-- roles: list of {role, color, present?, confidence?}.
+- roles: list of {'{ role, color, present?, confidence? }'}.
 """
     user_prompt = (
         "Return ONLY a compact JSON like:\n"
@@ -242,14 +180,14 @@ OUTPUT
     return json.dumps(schema, ensure_ascii=False), sys_prompt, user_prompt
 
 
-def normalize_palette_roles(raw_res: dict) -> dict:
+def normalize_palette_roles(raw_res: dict, valid_roles: list[str]) -> dict:
     roles = {}
     for it in raw_res.get("roles") or []:
         role = it.get("role")
         color = (it.get("color") or "other").lower()
-        if role not in {"team1", "team2", "referee", "goalkeeper"}:
+        if role not in valid_roles:
             continue
-        if color not in FOOTBALL_COLOR_NAMES:
+        if color not in OBJECT_COLOR_NAMES:
             color = "other"
         present = bool(it.get("present", True))
         conf = (
@@ -266,12 +204,13 @@ def normalize_palette_roles(raw_res: dict) -> dict:
                 "confidence": conf,
             }
     # ensure distinct team colors if both exist
-    if (
-        "team1" in roles
-        and "team2" in roles
-        and roles["team1"]["color"] == roles["team2"]["color"]
-    ):
-        roles["team2"]["color"] = "other"
+    # NOTE: we cannot know what the object names will be in advance as they are set by user
+    # if (
+    #    "team1" in roles
+    #    and "team2" in roles
+    #    and roles["team1"]["color"] == roles["team2"]["color"]
+    # ):
+    #    roles["team2"]["color"] = "other"
     return {"roles": list(roles.values())}
 
 
