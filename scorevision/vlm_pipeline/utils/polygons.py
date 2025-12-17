@@ -3,8 +3,8 @@ from numpy.linalg import norm
 from cv2 import fillPoly, cvtColor, COLOR_BGR2HSV
 
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox
-from scorevision.vlm_pipeline.domain_specific_schemas.football import Person, ShirtColor
-from scorevision.vlm_pipeline.utils.sam3 import Sam3Result
+from scorevision.vlm_pipeline.domain_specific_schemas.football import ShirtColor
+from scorevision.vlm_pipeline.sam3.schemas import Sam3Result
 from scorevision.vlm_pipeline.image_annotation.single import COLOURS
 
 
@@ -83,7 +83,7 @@ def sam3_predictions_to_bounding_boxes(
 ) -> list[BoundingBox]:
     bboxes = []
     for result in results:
-        object_label = Person(result.echo.text)
+        object_label = result.echo.text
         for prediction in result.predictions:
             for polygon in prediction.masks:
                 colour = colour_from_polygon(polygon=polygon, image=image)
