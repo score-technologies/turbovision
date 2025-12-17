@@ -11,7 +11,9 @@ from scorevision.vlm_pipeline.sam3.schemas import Sam3Result
 logger = getLogger(__name__)
 
 
-async def sam3_chute(image: ndarray, object_names: list[str], threshold: float, mosaic:int=0) -> list[Sam3Result]|None:
+async def sam3_chute(
+    image: ndarray, object_names: list[str], threshold: float, mosaic: int = 0
+) -> list[Sam3Result] | None:
     settings = get_settings()
     endpoint = settings.CHUTES_SAM3_ENDPOINT
     headers = {
@@ -24,7 +26,7 @@ async def sam3_chute(image: ndarray, object_names: list[str], threshold: float, 
             {"type": "text", "text": object_name} for object_name in object_names
         ],
         "output_prob_thresh": threshold,
-        "mosaic":mosaic
+        "mosaic": mosaic,
     }
     for attempt in range(settings.SCOREVISION_API_N_RETRIES):
         logger.info(

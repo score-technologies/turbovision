@@ -9,6 +9,9 @@ from scorevision.utils.challenges import prepare_challenge_payload
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
 )
+from scorevision.vlm_pipeline.vlm_annotator_sam3 import (
+    generate_annotations_for_select_frames_sam3,
+)
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.data_models import SVChallenge, SVPredictResult, SVRunOutput
 from scorevision.utils.chutes_helpers import (
@@ -76,11 +79,14 @@ async def run_vlm_pipeline_once_for_single_miner(
         challenge_type=ChallengeType.FOOTBALL,
     )
     # logger.info(f"Challenge: {challenge}")
-    pseudo_gt_annotations = await generate_annotations_for_select_frames(
+    element = manifest.elements[0]  # TODO: select element properly
+    # pseudo_gt_annotations = await generate_annotations_for_select_frames(
+    pseudo_gt_annotations = await generate_annotations_for_select_frames_sam3(
         video_name=challenge.challenge_id,
         frames=challenge.frames,
         flow_frames=challenge.dense_optical_flow_frames,
         frame_numbers=challenge.frame_numbers,
+        element=element,
     )
     logger.info(f"{len(pseudo_gt_annotations)} Pseudo GT annotations generated")
     pseudo_gt_annotations = filter_low_quality_pseudo_gt_annotations(

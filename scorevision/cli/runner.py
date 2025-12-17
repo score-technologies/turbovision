@@ -24,6 +24,9 @@ from scorevision.utils.async_clients import close_http_clients
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
 )
+from scorevision.vlm_pipeline.vlm_annotator_sam3 import (
+    generate_annotations_for_select_frames_sam3,
+)
 from scorevision.utils.miner_registry import get_miners_from_registry, Miner
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
@@ -114,7 +117,8 @@ async def _build_pgt_with_retries(
                     )
 
                     pseudo_gt_annotations = (
-                        await generate_annotations_for_select_frames(
+                        # await generate_annotations_for_select_frames(
+                        await generate_annotations_for_select_frames_sam3(
                             video_name=challenge.challenge_id,
                             frames=challenge.frames,
                             flow_frames=challenge.dense_optical_flow_frames,
