@@ -1,10 +1,14 @@
 from numpy import ndarray, zeros, array, mean
 from collections import Counter
+from logging import getLogger
 
 from scipy.spatial import KDTree
 from cv2 import fillPoly
 
 from scorevision.vlm_pipeline.sam3.detect_objects import sam3_chute
+from scorevision.vlm_pipeline.sam3.schemas import Sam3Result
+
+logger = getLogger(__name__)
 
 def name_of_colour(bgr_pixel:tuple[int,int,int]) -> str:
     COLOR_MAP = {
@@ -33,24 +37,34 @@ async def sam3_extract_shirt_colours(image:ndarray) -> Counter:
         image=image, object_names=["player jersey"], threshold=0.5, mosaic=0
     )
     detected_colours = []
-    for segmentation_result in segmentation_results:
-        for prediction in segmentation_result.predictions:
-            for polygon in prediction.masks:
-                roi = get_roi(image,polygon)
-                if not len(roi):
-                    continue
-                avg_rgb = mean(roi, axis=0)
-                colour_name = name_of_colour(tuple(avg_rgb))
-                detected_colours.append(colour_name)
+    if segmentation_results: 
+        for segmentation_result in segmentation_results:
+            for prediction in segmentation_result.predictions:
+                for polygon in prediction.masks:
+                    roi = get_roi(image,polygon)
+                    if not len(roi):
+                        continue
+                    avg_rgb = mean(roi, axis=0)
+                    colour_name = name_of_colour(tuple(avg_rgb))
+                    detected_colours.append(colour_name)
     return Counter(detected_colours)
 
 
-if __name__ == "__main__":
-    from asyncio import run
-    from cv2 import imread
-    from logging import basicConfig, INFO
 
-    basicConfig(level=INFO)
-    image = imread("vlm_pipeline/sam3/football.jpg")
-    colours =  run(sam3_extract_shirt_colours(image=image))
-    print(colours)
+async def detect_team_players(image:ndarray, object_names:list[str]) -> list[Sam3Result]:
+    jersey_colours = await sam3_extract_shirt_colours(image)
+    logger.info(jersey_colours)
+
+    player_labels = []
+    if jersey_colours:
+        for colour, _ in jersey_colours.most_common(2):
+            player_labels.append(f"player in {colour}")
+    else:
+        player_labels.append("player")
+
+    logger.info(player_labels)
+    object_names.extend(player_labels)
+    return await sam3_chute(
+        image=image, object_names=object_names, threshold=0.5, mosaic=0
+    )
+
