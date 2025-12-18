@@ -155,9 +155,12 @@ def reset_subtensor():
     global _SUBTENSOR
     _SUBTENSOR = None
 
-
 async def on_chain_commit(
-    skip: bool, revision: str, chute_id: str, chute_slug: str | None
+    skip: bool,
+    revision: str,
+    chute_id: str,
+    chute_slug: str | None,
+    element_id: str | None,
 ) -> None:
     settings = get_settings()
     repo_name = get_huggingface_repo_name()
@@ -166,12 +169,16 @@ async def on_chain_commit(
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
     payload = {
+        "role": "miner",
         "model": repo_name,
         "revision": revision,
         "chute_id": chute_id,
         "slug": chute_slug,
         "hotkey": w.hotkey.ss58_address,
     }
+    if element_id is not None:
+        payload["element_id"] = str(element_id)
+
     logger.info(f"Commit payload: {payload}")
     try:
         if skip:
