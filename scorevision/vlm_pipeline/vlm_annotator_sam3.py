@@ -1,6 +1,5 @@
 from asyncio import gather
 from logging import getLogger
-from multiprocessing import BoundedSemaphore
 
 from numpy import ndarray
 
