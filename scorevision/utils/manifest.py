@@ -68,6 +68,9 @@ class ElementPrefix(str, Enum):
     OBJECT_DETECTION = "Detect"
     # NOTE:Player Detection is a special case of Object Detection that adds team classification
     PLAYER_DETECTION = "PlayerDetect"
+    OBJECT_TRACKING = "Track"
+    SCENE_CLASSIFICATION = "ClassifyImage"
+    OBJECT_CLASSIFICATION = "ClassifyObject"
 
 
 class ChallengeType(str, Enum):
