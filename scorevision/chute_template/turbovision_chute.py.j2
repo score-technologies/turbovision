@@ -153,25 +153,12 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
     class HFRepoImportBlocker(PathFinder):
         @classmethod
         def find_spec(cls, fullname, path=None, target=None):
-            # blocked_names = {
-            #     f.stem
-            #     for f in path_hf_repo.rglob("*")
-            #     if f.is_file() and f != path_miner
-            # }
-            # if fullname.split(".")[-1] in blocked_names:
-            #     raise ImportError(
-            #         f"❌ Import blocked: '{fullname}'. A file with this name was detected in the repo. All code related to the miner MUST be stored in {filename}"
-            #     )
+            blocked_names = {f.stem for f in path_hf_repo.rglob("*") if f.is_file()}
+            if fullname.split(".")[-1] in blocked_names:
+                raise ImportError(
+                    f"❌ Import blocked: '{fullname}'. A file with this name was detected in the repo. Please move all code related to the miner into {filename} and remove {fullname}"
+                )
             spec = super().find_spec(fullname, path, target)
-            if spec and spec.origin:
-                origin_path = Path(spec.origin).resolve()
-                if (
-                    str(origin_path).startswith(str(path_hf_repo))
-                    and origin_path != path_miner
-                ):
-                    raise ImportError(
-                        f"❌ Import blocked: '{fullname}'.  All code related to the miner MUST be stored in {filename}"
-                    )
             return spec
 
     sys.meta_path.insert(0, HFRepoImportBlocker)
