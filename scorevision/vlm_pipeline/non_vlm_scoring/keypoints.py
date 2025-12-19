@@ -1,5 +1,6 @@
 from logging import getLogger
 from typing import Any
+import numpy as np
 
 from numpy import array, uint8, float32, ndarray
 from cv2 import (
@@ -219,6 +220,23 @@ def evaluate_keypoints_for_frame(
         pixels_overlapping_result = bitwise_and(
             mask_lines_expected, mask_lines_predicted
         )
+
+        ys, xs = np.where(mask_lines_expected == 1)
+
+        if len(xs) == 0:
+            bbox = None
+        else:
+            min_x = xs.min()
+            max_x = xs.max()
+            min_y = ys.min()
+            max_y = ys.max()
+
+            bbox = (min_x, min_y, max_x, max_y)
+        bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) if bbox is not None else 1
+        frame_area = frame.shape[0] * frame.shape[1]
+
+        if (bbox_area / frame_area) < 0.2:
+            return 0.0
 
         inv_expected = bitwise_not(mask_lines_expected)
         pixels_rest = bitwise_and(inv_expected, mask_lines_predicted).sum()
