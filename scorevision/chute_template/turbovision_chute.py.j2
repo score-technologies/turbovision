@@ -126,7 +126,8 @@ def load_chute(
         {
             "username": chutes_username,
             "name": chute_name,
-            "tag": "latest",
+            "tag":"latest",
+            "readme": "README.md",
         }
     )
     chute_image = safe_instantiate(cls=Image, config=image_config)
@@ -144,7 +145,8 @@ def load_chute(
             "name": chute_name,
             "image": chute_image,
             "node_selector": machine_specs,
-            "allow_external_egress": False,
+            "allow_external_egress":False,
+            "readme": "README.md",
         }
     )
     chute = safe_instantiate(cls=Chute, config=chute_config)
