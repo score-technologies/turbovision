@@ -5,6 +5,8 @@ from importlib.machinery import PathFinder
 from importlib.util import module_from_spec, spec_from_file_location
 from inspect import signature
 from pathlib import Path
+from site import getsitepackages, getusersitepackages
+from sysconfig import get_paths
 from tempfile import NamedTemporaryFile
 from typing import Any, Generator
 from urllib.parse import quote
@@ -43,6 +45,14 @@ class TVPredictOutput(BaseModel):
 
 
 ##=========UTILITY FUNCTIONS=================
+def get_whitelisted_paths() -> set[Path]:
+    STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
+    SITE_PACKAGES_ROOTS = set(map(Path, getsitepackages()))
+    SITE_PACKAGES_ROOTS.add(Path(getusersitepackages()).resolve())
+
+    return {STDLIB_ROOT, *SITE_PACKAGES_ROOTS}
+
+
 def verify_cuda_version() -> str:
     min_version = (12, 8)
     if not torch.cuda.is_available():
@@ -69,7 +79,7 @@ def load_chute_config_from_hf_repo(config_path: Path) -> dict:
 
         with config_path.open() as configuration_file:
             config = safe_load(configuration_file)
-            print(f"✅ Loaded Chutes Configuration")
+            print("✅ Loaded Chutes Configuration")
             return config or {}
     except Exception as e:
         print(f"⚠️ Failed to load Chutes Configuration. Using defaults: {e}")
@@ -150,16 +160,20 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
 
+    WHITELIST = get_whitelisted_paths()
+
     class HFRepoImportBlocker(PathFinder):
         @classmethod
         def find_spec(cls, fullname, path=None, target=None):
-            blocked_names = {f.stem for f in path_hf_repo.rglob("*") if f.is_file()}
-            if fullname.split(".")[-1] in blocked_names:
-                raise ImportError(
-                    f"❌ Import blocked: '{fullname}'. A file with this name was detected in the repo. Please move all code related to the miner into {filename} and remove {fullname}"
-                )
             spec = super().find_spec(fullname, path, target)
-            return spec
+            if spec is None or spec.origin is None:
+                return spec
+            origin_path = Path(spec.origin).resolve()
+            if any(origin_path.is_relative_to(root) for root in WHITELIST):
+                return spec
+            raise ImportError(
+                f"❌ Import blocked: '{fullname}' (file: {origin_path}) is not in the whitelist. All code related to the miner MUST be inside {filename}"
+            )
 
     sys.meta_path.insert(0, HFRepoImportBlocker)
 
@@ -282,7 +296,7 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
 async def predict(self, data: TVPredictInput) -> dict:
     try:
         if self.miner is None:
-            raise ValueError(f"Models were not properly loaded!")
+            raise ValueError("Models were not properly loaded!")
 
         metadata = data.meta
         batch_size = metadata.get("batch_size", 64)
@@ -293,7 +307,7 @@ async def predict(self, data: TVPredictInput) -> dict:
             async with session.get(url) as response:
                 response.raise_for_status()
                 content = await response.read()
-                print(f"✅ Challenge video downloaded. Saving video to temporary file.")
+                print("✅ Challenge video downloaded. Saving video to temporary file.")
 
                 with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
                     f.write(content)
@@ -325,7 +339,7 @@ async def predict(self, data: TVPredictInput) -> dict:
                         )
 
                     cap.release()
-                    print(f"✅ Frame Predictions Completed")
+                    print("✅ Frame Predictions Completed")
 
         result = TVPredictOutput(success=True, predictions={"frames": frame_results})
 
