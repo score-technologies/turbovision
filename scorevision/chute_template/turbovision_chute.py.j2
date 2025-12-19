@@ -175,13 +175,17 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
                 f"❌ Import blocked: '{fullname}' (file: {origin_path}) is not in the whitelist. All code related to the miner MUST be inside {filename}"
             )
 
-    sys.meta_path.insert(0, HFRepoImportBlocker)
-
-    spec = spec_from_file_location("miner", path_miner)
-    module = module_from_spec(spec)
-    sys.modules["miner"] = module
-    spec.loader.exec_module(module)
-    miner_object = getattr(module, classname)
+    try:
+        sys.meta_path.insert(0, HFRepoImportBlocker)
+        spec = spec_from_file_location("miner", path_miner)
+        module = module_from_spec(spec)
+        sys.modules["miner"] = module
+        spec.loader.exec_module(module)
+        miner_object = getattr(module, classname)
+    except Exception as e:
+        raise e
+    finally:
+        sys.meta_path.remove(HFRepoImportBlocker)
     return miner_object
 
 
