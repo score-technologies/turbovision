@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 
-from typing import Any, Generator
-from tempfile import NamedTemporaryFile
-from pathlib import Path
-from importlib.machinery import PathFinder
-from importlib.util import spec_from_file_location, module_from_spec
 import sys
+from importlib.machinery import PathFinder
+from importlib.util import module_from_spec, spec_from_file_location
 from inspect import signature
+from pathlib import Path
+from site import getsitepackages, getusersitepackages
+from sysconfig import get_paths
+from tempfile import NamedTemporaryFile
+from typing import Any, Generator
 from urllib.parse import quote
 
-from aiohttp import ClientSession
-from yaml import safe_load
-from pydantic import BaseModel
-from cv2 import VideoCapture, CAP_PROP_FRAME_COUNT
-from numpy import ndarray
-from huggingface_hub import snapshot_download
 import torch
-
+from aiohttp import ClientSession
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
-
+from cv2 import CAP_PROP_FRAME_COUNT, VideoCapture
+from huggingface_hub import snapshot_download
+from numpy import ndarray
+from pydantic import BaseModel
+from yaml import safe_load
 
 ##============VARIABLES=======================
 HF_REPO_NAME = "{{ huggingface_repository_name }}"
@@ -31,10 +31,12 @@ CLASSNAME = "Miner"
 CHUTE_CONFIG_FILENAME = "chute_config.yml"
 MAX_LOADED_MODEL_SIZE_GB = 5.0
 
+
 ##=========DATA CLASSES================
 class TVPredictInput(BaseModel):
     url: str
-    meta:dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+
 
 class TVPredictOutput(BaseModel):
     success: bool
@@ -43,8 +45,16 @@ class TVPredictOutput(BaseModel):
 
 
 ##=========UTILITY FUNCTIONS=================
+def get_whitelisted_paths() -> set[Path]:
+    STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
+    SITE_PACKAGES_ROOTS = set(map(Path, getsitepackages()))
+    SITE_PACKAGES_ROOTS.add(Path(getusersitepackages()).resolve())
+
+    return {STDLIB_ROOT, *SITE_PACKAGES_ROOTS}
+
+
 def verify_cuda_version() -> str:
-    min_version = (12,8)
+    min_version = (12, 8)
     if not torch.cuda.is_available():
         return "❌ CUDA is not available. Make sure you have a CUDA-capable GPU and correct drivers installed"
     device_count = torch.cuda.device_count()
@@ -54,12 +64,13 @@ def verify_cuda_version() -> str:
     if cuda_version_str is None:
         return "❌ PyTorch was not compiled with CUDA support"
     try:
-        cuda_version = tuple(map(int,cuda_version_str.split('.')))
+        cuda_version = tuple(map(int, cuda_version_str.split(".")))
     except Exception as e:
         return f"❌ Unable to parse CUDA version string: {e}"
     if cuda_version < min_version:
         return f"❌ CUDA version {cuda_version_str} is too old. Requires >= {min_version[0]}.{min_version[1]}"
     return f"CUDA {cuda_version_str} detected_with {device_count} device(s)"
+
 
 def load_chute_config_from_hf_repo(config_path: Path) -> dict:
     try:
@@ -68,7 +79,7 @@ def load_chute_config_from_hf_repo(config_path: Path) -> dict:
 
         with config_path.open() as configuration_file:
             config = safe_load(configuration_file)
-            print(f"✅ Loaded Chutes Configuration")
+            print("✅ Loaded Chutes Configuration")
             return config or {}
     except Exception as e:
         print(f"⚠️ Failed to load Chutes Configuration. Using defaults: {e}")
@@ -98,12 +109,16 @@ def safe_instantiate(cls, config: dict):
 
 
 def load_chute(
-    hf_repo: str, hf_revision: str, config_filename:str,  chutes_username:str, chute_name:str,
+    hf_repo: str,
+    hf_revision: str,
+    config_filename: str,
+    chutes_username: str,
+    chute_name: str,
 ) -> Chute:
     hf_repo_path = Path(snapshot_download(hf_repo, revision=hf_revision))
     print("✅ Huggingface Hub repo downloaded")
 
-    config = load_chute_config_from_hf_repo(config_path = hf_repo_path / config_filename)
+    config = load_chute_config_from_hf_repo(config_path=hf_repo_path / config_filename)
     print("✅ Config file loaded")
 
     image_config = config.get("Image", {})
@@ -140,31 +155,41 @@ def load_chute(
 
 
 def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
+    path_hf_repo = path_hf_repo.resolve()
     path_miner = path_hf_repo / filename
     if not path_miner.is_file():
         raise FileNotFoundError(
             f"❌ Required file '{filename}' not in repo {path_hf_repo}"
         )
 
-    blocked_names = {
-        f.stem for f in path_hf_repo.glob("*") if f.is_file() and f.name != filename
-    }
+    WHITELIST = get_whitelisted_paths()
 
     class HFRepoImportBlocker(PathFinder):
         @classmethod
         def find_spec(cls, fullname, path=None, target=None):
-            if fullname.split('.')[-1] in blocked_names:
-                raise ImportError(f"❌ Import blocked: '{fullname}'. A file with this name was detected in the repo. All code related to the miner MUST be stored in miner.py")
-            return super().find_spec(fullname, path, target)
+            spec = super().find_spec(fullname, path, target)
+            if spec is None or spec.origin is None:
+                return spec
+            origin_path = Path(spec.origin).resolve()
+            if any(origin_path.is_relative_to(root) for root in WHITELIST):
+                return spec
+            raise ImportError(
+                f"❌ Import blocked: '{fullname}' (file: {origin_path}) is not in the whitelist. All code related to the miner MUST be inside {filename}"
+            )
 
-    sys.meta_path.insert(0, HFRepoImportBlocker)
-
-    spec = spec_from_file_location("miner", path_miner)
-    module = module_from_spec(spec)
-    sys.modules["miner"] = module
-    spec.loader.exec_module(module)
-    miner_object = getattr(module, classname)
+    try:
+        sys.meta_path.insert(0, HFRepoImportBlocker)
+        spec = spec_from_file_location("miner", path_miner)
+        module = module_from_spec(spec)
+        sys.modules["miner"] = module
+        spec.loader.exec_module(module)
+        miner_object = getattr(module, classname)
+    except Exception as e:
+        raise e
+    finally:
+        sys.meta_path.remove(HFRepoImportBlocker)
     return miner_object
+
 
 def object_size_in_bytes(current_obj: Any, seen_ids: set[int], limit: int) -> int:
     obj_id = id(current_obj)
@@ -190,18 +215,18 @@ def object_size_in_bytes(current_obj: Any, seen_ids: set[int], limit: int) -> in
                 total_size += object_size_in_bytes(item, seen_ids, limit - 1)
         except TypeError:
             pass
-    elif hasattr(current_obj, '__dict__'):
+    elif hasattr(current_obj, "__dict__"):
         for value in current_obj.__dict__.values():
             total_size += object_size_in_bytes(value, seen_ids, limit - 1)
     return total_size
 
+
 def get_miner_size_gb(miner) -> float:
     total_size_bytes = object_size_in_bytes(
-        current_obj=miner,
-        seen_ids=set(),
-        limit=100
+        current_obj=miner, seen_ids=set(), limit=100
     )
     return total_size_bytes / (1024**3)
+
 
 def get_video_frames_in_batches(
     video: VideoCapture, batch_size: int
@@ -229,6 +254,7 @@ chute = load_chute(
     chute_name=CHUTE_NAME,
     config_filename=CHUTE_CONFIG_FILENAME,
 )
+
 
 @chute.on_startup()
 async def load_model(self) -> None:
@@ -265,8 +291,8 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
     return {
         "status": self.status,
         "model_loaded": str(self.miner),
-        "memory_gb":self.miner_size,
-        "cuda": self.cuda_status
+        "memory_gb": self.miner_size,
+        "cuda": self.cuda_status,
     }
 
 
@@ -276,18 +302,18 @@ async def health(self, *args, **kwargs) -> dict[str, Any]:
 async def predict(self, data: TVPredictInput) -> dict:
     try:
         if self.miner is None:
-            raise ValueError(f"Models were not properly loaded!")
+            raise ValueError("Models were not properly loaded!")
 
         metadata = data.meta
-        batch_size = metadata.get('batch_size',64)
-        n_keypoints = metadata.get('n_keypoints',32)
+        batch_size = metadata.get("batch_size", 64)
+        n_keypoints = metadata.get("n_keypoints", 32)
 
         url = f"https://proxy.chutes.ai/misc/proxy?url={quote(data.url, safe='')}"
         async with ClientSession() as session:
             async with session.get(url) as response:
                 response.raise_for_status()
                 content = await response.read()
-                print(f"✅ Challenge video downloaded. Saving video to temporary file.")
+                print("✅ Challenge video downloaded. Saving video to temporary file.")
 
                 with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
                     f.write(content)
@@ -305,18 +331,21 @@ async def predict(self, data: TVPredictInput) -> dict:
                         get_video_frames_in_batches(video=cap, batch_size=batch_size)
                     ):
                         frame_number = batch_size * batch_number
-                        print(f"Predicting Batch: {batch_number+1}")
+                        print(f"Predicting Batch: {batch_number + 1}")
                         batch_frame_results = self.miner.predict_batch(
                             batch_images=images,
                             offset=frame_number,
                             n_keypoints=n_keypoints,
                         )
                         frame_results.extend(
-                            [frame_result.model_dump() for frame_result in batch_frame_results]
+                            [
+                                frame_result.model_dump()
+                                for frame_result in batch_frame_results
+                            ]
                         )
 
                     cap.release()
-                    print(f"✅ Frame Predictions Completed")
+                    print("✅ Frame Predictions Completed")
 
         result = TVPredictOutput(success=True, predictions={"frames": frame_results})
 
