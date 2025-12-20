@@ -579,6 +579,7 @@ async def retry_set_weights(wallet, uids, weights):
     loop = asyncio.get_running_loop()
     request_start = loop.time()
     try:
+        logger.info("SETTING WEIGHTS uids=%s weights=%s", uids, weights)
         timeout = aiohttp.ClientTimeout(connect=2, total=300)
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             resp = await sess.post(
