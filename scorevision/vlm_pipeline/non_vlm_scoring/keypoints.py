@@ -238,6 +238,26 @@ def evaluate_keypoints_for_frame(
         if (bbox_area / frame_area) < 0.2:
             return 0.0
 
+        valid_keypoints = [
+            (x, y) for x, y in frame_keypoints
+            if not (x == 0 and y == 0)
+        ]
+        if not valid_keypoints:
+            return 0.0
+        xs, ys = zip(* valid_keypoints)
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        frame_height, frame_width = frame.shape[:2]
+        if max_x < 0 or max_y < 0 or min_x >= frame_width or min_y >= frame_height:
+            logger.info("All keypoints are outside the frame")
+            return 0.0
+
+        if (max_x - min_x) > 2 * frame_width or (max_y - min_y) > 2 * frame_height:
+            logger.info("Keypoints spread too wide")
+            return 0.0
+
         inv_expected = bitwise_not(mask_lines_expected)
         pixels_rest = bitwise_and(inv_expected, mask_lines_predicted).sum()
 
