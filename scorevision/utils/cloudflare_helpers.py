@@ -287,6 +287,7 @@ async def emit_shard(
     *,
     element_id: str | None = None,
     manifest_hash: str | None = None,
+    window_start_block: int | None = None,
     pgt_recipe_hash: str | None = None,
     salt_id: int | None = None,
     lane: str = "public",
@@ -297,20 +298,13 @@ async def emit_shard(
 ) -> None:
 
     st = await get_subtensor()
+    rid = f"{(element_id or 'na')}:{miner_hotkey_ss58[:6]}:{challenge.challenge_id[:8]}:{uuid.uuid4().hex[:6]}"
     current_block, st = await _safe_get_current_block(st, rid)
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
     shard_window_id = window_id or getattr(challenge, "window_id", None) or (
         (challenge.meta or {}).get("window_id") if getattr(challenge, "meta", None) else None
     )
-
-    tempo = int(os.getenv("SV_WINDOW_TEMPO", "300"))
-    window_start_block = None
-    if shard_window_id:
-        try:
-            window_start_block = get_window_start_block(shard_window_id, tempo=tempo)
-        except Exception:
-            window_start_block = None
 
     if window_start_block is None:
         window_start_block = current_block
@@ -435,7 +429,7 @@ async def emit_shard(
         },
     }
 
-    validator_ss58 = getattr(settings, "SCOREVISION_VALIDATOR_HOTKEY_SS58", None)
+    validator_ss58 = keypair.ss58_address
     if not validator_ss58:
         logger.warning(
             "[emit:%s] SCOREVISION_VALIDATOR_HOTKEY_SS58 not set; 'validator' field "
