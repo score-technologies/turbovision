@@ -203,6 +203,13 @@ def evaluate_keypoints_for_frame(
     floor_markings_template: ndarray,
 ) -> float:
     try:
+        frame_height, frame_width = frame.shape[:2]
+
+        frame_keypoints = [
+            (0, 0) if (x, y) != (0, 0) and (x < 0 or y < 0 or x >= frame_width or y >= frame_height) else (x, y)
+            for (x, y) in frame_keypoints
+        ]
+        
         warped_template = project_image_using_keypoints(
             image=floor_markings_template,
             source_keypoints=template_keypoints,
@@ -249,7 +256,6 @@ def evaluate_keypoints_for_frame(
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
 
-        frame_height, frame_width = frame.shape[:2]
         if max_x < 0 or max_y < 0 or min_x >= frame_width or min_y >= frame_height:
             logger.info("All keypoints are outside the frame")
             return 0.0
