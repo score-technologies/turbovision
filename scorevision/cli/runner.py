@@ -22,6 +22,7 @@ from scorevision.utils.async_clients import close_http_clients
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
 )
+from scorevision.utils.windows import get_window_start_block
 from scorevision.utils.miner_registry import get_miners_from_registry, Miner
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
@@ -205,6 +206,25 @@ def _enough_bboxes_per_frame(
             ok_frames += 1
     return ok_frames >= min_frames_required
 
+def _to_pos_int(x: object) -> int | None:
+    try:
+        if x is None:
+            return None
+        if isinstance(x, bool):
+            return None
+        if isinstance(x, (int,)):
+            return x if x > 0 else None
+        if isinstance(x, float):
+            xi = int(x)
+            return xi if xi > 0 else None
+        if isinstance(x, str):
+            s = x.strip()
+            if s.isdigit():
+                xi = int(s)
+                return xi if xi > 0 else None
+    except Exception:
+        pass
+    return None
 
 def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     if not isinstance(chal_api, dict):
@@ -228,7 +248,6 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
 
     return None
 
-
 def _extract_element_tempos_from_manifest(
     manifest: Manifest,
     default_tempo_blocks: int,
@@ -239,34 +258,32 @@ def _extract_element_tempos_from_manifest(
     if isinstance(elems, dict):
         for raw_eid, cfg in elems.items():
             eid = str(raw_eid)
-            tempo = default_tempo_blocks
             window_block = None
             if isinstance(cfg, dict):
                 window_block = cfg.get("window_block") or cfg.get("tempo")
             else:
-                window_block = getattr(cfg, "window_block", None) or getattr(
-                    cfg, "tempo", None
-                )
-            if isinstance(window_block, int) and window_block > 0:
-                tempo = window_block
+                window_block = getattr(cfg, "window_block", None) or getattr(cfg, "tempo", None)
+
+            tempo = _to_pos_int(window_block) or default_tempo_blocks
             result[eid] = tempo
-    elif isinstance(elems, (list, tuple)):
+        return result
+
+    if isinstance(elems, (list, tuple)):
         for elem in elems:
-            eid = getattr(elem, "element_id", None) or getattr(elem, "id", None)
+            if isinstance(elem, dict):
+                eid = elem.get("element_id") or elem.get("id")
+                window_block = elem.get("window_block") or elem.get("tempo")
+            else:
+                eid = getattr(elem, "element_id", None) or getattr(elem, "id", None)
+                window_block = getattr(elem, "window_block", None) or getattr(elem, "tempo", None)
+
             if not eid:
                 continue
-            tempo = default_tempo_blocks
-            window_block = getattr(elem, "window_block", None) or getattr(
-                elem, "tempo", None
-            )
-            if isinstance(window_block, int) and window_block > 0:
-                tempo = window_block
+            tempo = _to_pos_int(window_block) or default_tempo_blocks
             result[str(eid)] = tempo
-    else:
-        logger.warning(
-            "[RunnerLoop] Manifest 'elements' is neither dict nor list; no per-element scheduling."
-        )
+        return result
 
+    logger.warning("[RunnerLoop] Manifest 'elements' is neither dict nor list; no per-element scheduling.")
     return result
 
 
@@ -300,6 +317,7 @@ async def runner(
     )
     manifest_hash: str | None = None
     current_window_id: str | None = None
+    logger.info("[Runner] START element_id=%s block=%s", element_id, block_number)
 
     try:
         chal_api: dict
@@ -402,6 +420,20 @@ async def runner(
         )
 
 
+        DEFAULT_ELEMENT_TEMPO = int(os.getenv("SV_DEFAULT_ELEMENT_TEMPO_BLOCKS", "300"))
+        tempo_by_elem = _extract_element_tempos_from_manifest(manifest, DEFAULT_ELEMENT_TEMPO) if manifest else {}
+        tempo_blocks = int(tempo_by_elem.get(str(element_id), DEFAULT_ELEMENT_TEMPO))
+        window_start_block = None
+        try:
+            window_start_block = get_window_start_block(current_window_id, tempo=tempo_blocks)
+        except Exception:
+            window_start_block = block_number or 0
+
+        logger.info(
+            "[Runner] window_start_block=%s (window_id=%s tempo=%s)",
+            window_start_block, current_window_id, tempo_blocks
+        )
+
         miners = await get_miners_from_registry(NETUID, element_id=element_id)
         if not miners:
             logger.warning(
@@ -488,6 +520,7 @@ async def runner(
                         evaluation=evaluation,
                         miner_hotkey_ss58=m.hotkey,
                         window_id=current_window_id,
+                        window_start_block=window_start_block,
                         element_id=str(element_id) if element_id is not None else None,
                         manifest_hash=manifest_hash,
                         salt_id=0,

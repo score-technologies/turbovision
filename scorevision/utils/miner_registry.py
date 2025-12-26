@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, time, asyncio, requests
+import os, json, time, requests
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from logging import getLogger
@@ -64,7 +64,7 @@ def _hf_gated_or_inaccessible(
 ) -> Optional[bool]:
     if not model_id:
         logger.debug("[HF] no model id → treat as not eligible")
-        return True  # no model id -> treat as not eligible
+        return True
     now = time.time()
     cached = _HF_MODEL_GATING_CACHE.get(model_id)
     if cached and (now - cached[1]) < _HF_GATING_TTL:
@@ -72,10 +72,7 @@ def _hf_gated_or_inaccessible(
         logger.debug("[HF] cache hit model=%s gated=%s", model_id, gated)
     else:
         gated = _hf_is_gated(model_id)
-        _HF_MODEL_GATING_CACHE[model_id] = (
-            bool(gated) if gated is not None else False,
-            now,
-        )
+        _HF_MODEL_GATING_CACHE[model_id] = (bool(gated) if gated is not None else False, now)
         logger.debug("[HF] cache set model=%s gated=%s", model_id, gated)
 
     if gated is True:
@@ -84,7 +81,7 @@ def _hf_gated_or_inaccessible(
     if not _hf_revision_accessible(model_id, revision):
         logger.info("[HF] model=%s revision inaccessible", model_id)
         return True
-    return False  # either False or None (unknown) -> allow
+    return False
 
 
 # ------------------------------ Chutes helpers -------------------------------- #
@@ -116,7 +113,11 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
 
 
 # ---------------------------- Miner registry main ----------------------------- #
-async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
+async def get_miners_from_registry(
+    netuid: int,
+    *,
+    element_id: str | None = None,
+) -> Dict[int, Miner]:
     """
     Reads on-chain commitments, verifies HF gating/revision and Chutes slug,
     and returns at most one miner per model (earliest block wins).
@@ -125,7 +126,10 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     st = await get_subtensor()
     mechid = settings.SCOREVISION_MECHID
     logger.info(
-        "[Registry] extracting candidates (netuid=%s mechid=%s)", netuid, mechid
+        "[Registry] extracting candidates (netuid=%s mechid=%s element_id=%s)",
+        netuid,
+        mechid,
+        element_id,
     )
 
     meta = await st.metagraph(netuid, mechid=mechid)
@@ -153,12 +157,10 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
         slug = obj.get("slug")
         chute_id = obj.get("chute_id")
 
-        element_id = obj.get("element_id")
-        if element_id is not None:
-            element_id = str(element_id)
+        committed_eid = obj.get("element_id")
+        committed_eid = str(committed_eid).strip() if committed_eid is not None else None
 
         if not slug:
-            # no slug -> cannot call this miner
             continue
 
         candidates[uid] = Miner(
@@ -168,8 +170,8 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             revision=revision,
             slug=slug,
             chute_id=chute_id,
-            block=int(block or 0) if uid != 0 else 0,  # mirror special-case for uid 0
-            element_id=element_id,
+            block=int(block or 0) if uid != 0 else 0,
+            element_id=committed_eid,
         )
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))
@@ -177,14 +179,26 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
         logger.warning("[Registry] No on-chain candidates")
         return {}
 
+    # 1.5) Element filter (before heavy checks + before de-dup)
+    if element_id is not None:
+        wanted = str(element_id).strip()
+        before = len(candidates)
+        candidates = {uid: m for uid, m in candidates.items() if (m.element_id or "") == wanted}
+        logger.info(
+            "[Registry] %d candidates after element_id filter (wanted=%s, dropped=%d)",
+            len(candidates),
+            wanted,
+            before - len(candidates),
+        )
+        if not candidates:
+            return {}
+
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
     for uid, m in candidates.items():
         gated = _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
-            logger.info(
-                "[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug
-            )
+            logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
             continue
 
         ok = True
@@ -212,6 +226,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
                         ch_rev,
                         m.revision,
                     )
+
         if ok:
             filtered[uid] = m
 
@@ -225,11 +240,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     for uid, m in filtered.items():
         if not m.model:
             continue
-        blk = (
-            m.block
-            if isinstance(m.block, int)
-            else (int(m.block) if m.block is not None else (2**63 - 1))
-        )
+        blk = m.block if isinstance(m.block, int) else (int(m.block) if m.block is not None else (2**63 - 1))
         prev = best_by_model.get(m.model)
         if prev is None or blk < prev[0]:
             best_by_model[m.model] = (blk, uid)
@@ -237,12 +248,5 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
     logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
-
-    missing_eid = [m for m in kept.values() if not m.element_id]
-    if missing_eid:
-        logger.info(
-            "[Registry] %d kept miners without element_id (will be ignored for element-scoped runs)",
-            len(missing_eid),
-        )
 
     return kept

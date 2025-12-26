@@ -1,7 +1,12 @@
 window_id: "2025-10-27"
+version: 1.3
+expiry_block: 123456
+
 elements:
   - id: PlayerDetect_v1@1.0
-    clips: 
+    weight: 0.6
+    window_block: 20
+    clips:
       - hash: sha256:...
         weight: 1.0
       - hash: sha256:...
@@ -26,7 +31,31 @@ elements:
     baseline_theta: 0.78
     delta_floor: 0.01
     beta: 1.0
+
+  - id: BallDetect_v1@1.0
+    weight: 0.4
+    window_block: 10
+    clips:
+      - hash: sha256:...
+        weight: 1.0
+    preproc:
+      fps: 5
+      resize_long: 1280
+      norm: rgb-01
+    metrics:
+      pillars:
+        iou: 0.45
+        count: 0.35
+        smoothness: 0.2
+    latency_p95_ms: 200
+    service_rate_fps: 25
+    salt:
+      offsets: [0, 1, 2, 3, 4]
+      strides: [5, 6]
+    pgt_recipe_hash: sha256:...
+    baseline_theta: 0.80
+    delta_floor: 0.01
+    beta: 1.0
+
 tee:
   trusted_share_gamma: 0.2
-version: 1.3
-expiry_block: 123456

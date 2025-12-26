@@ -143,6 +143,8 @@ class Element(BaseModel):
     """
 
     id: str
+    window_block: int | None = None
+    weight: float | None = None
     clips: list[Clip]
     metrics: Metrics
     preproc: Preproc

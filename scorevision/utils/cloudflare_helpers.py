@@ -429,14 +429,6 @@ async def emit_shard(
         },
     }
 
-    validator_ss58 = keypair.ss58_address
-    if not validator_ss58:
-        logger.warning(
-            "[emit:%s] SCOREVISION_VALIDATOR_HOTKEY_SS58 not set; 'validator' field "
-            "will be null in shard payload.",
-            rid,
-        )
-
     if pgt_recipe_hash is None:
         pgt_recipe_hash = getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None)
     if pgt_recipe_hash is None:
@@ -446,7 +438,6 @@ async def emit_shard(
 
     shard_payload = {
         "window_id": shard_window_id,
-        "validator": validator_ss58,
         "element_id": element_id,
         "lane": lane,
         "manifest_hash": manifest_hash,
