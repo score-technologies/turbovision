@@ -232,7 +232,7 @@ def evaluate_keypoints_for_frame(
             return 0.0
 
         if (pixels_rest / (total_pixels)) > 0.9:
-            logger.info("threshold exceeded")
+            logger.info('threshold exceeded')
             return 0.0
 
         pixels_overlapping = pixels_overlapping_result.sum()
