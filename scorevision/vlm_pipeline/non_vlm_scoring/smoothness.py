@@ -1,14 +1,14 @@
-from logging import getLogger
 from collections import defaultdict
+from logging import getLogger
 
 from numpy import logical_and, logical_or, ndarray
 
-from scorevision.vlm_pipeline.utils.response_models import BoundingBox
+from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.utils.settings import get_settings
 from scorevision.vlm_pipeline.image_annotation.pairwise import bboxes_to_mask
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
-from scorevision.utils.settings import get_settings
-from scorevision.utils.pillar_metric_registry import register_metric
-from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.vlm_pipeline.utils.response_models import BoundingBox
 
 logger = getLogger(__name__)
 
@@ -111,7 +111,7 @@ def bbox_smoothness(
 
 @register_metric(
     (ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS),
-    (ElementPrefix.BALL_DETECTION, PillarName.SMOOTHNESS),
+    (ElementPrefix.OBJECT_DETECTION, PillarName.SMOOTHNESS),
 )
 def bbox_smoothness_per_type(
     video_bboxes: list[list[BoundingBox]], image_height: int, image_width: int, **kwargs

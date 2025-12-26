@@ -143,9 +143,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
         meta = await st.metagraph(netuid, mechid=mechid)
         commits = await st.get_all_revealed_commitments(netuid)
     except Exception as e:
-        logger.warning(
-            "[Registry] error while fetching metagraph/commitments: %s", e
-        )
+        logger.warning("[Registry] error while fetching metagraph/commitments: %s", e)
         reset_subtensor()
         return {}
 

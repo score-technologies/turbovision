@@ -13,23 +13,19 @@ and TEE-related trust parameters.
 - beta (βₑ): Difficulty multiplier scaling rewards based on Element complexity.
 """
 
-from pathlib import Path
-from hashlib import sha256
-from json import dumps
-from base64 import b64encode, b64decode
-import json
 import os
-from pathlib import Path
 from enum import Enum
 from functools import cached_property
-from json import loads
+from hashlib import sha256
+from json import dumps, loads
+from pathlib import Path
 
-from nacl.signing import SigningKey, VerifyKey
-from nacl.exceptions import BadSignatureError
-from ruamel.yaml import YAML
-from pydantic import BaseModel, Field, model_validator
-from numpy import ndarray
 from cv2 import imread
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
+from numpy import ndarray
+from pydantic import BaseModel, Field, model_validator
+from ruamel.yaml import YAML
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -68,9 +64,13 @@ class ElementPrefix(str, Enum):
     - PitchCalib_v1: Geometric calibration. Outputs keypoint locations and homography matrices for image-to-field coordinate transformation.
     """
 
-    PLAYER_DETECTION = "PlayerDetect"
-    BALL_DETECTION = "BallDetect"
     PITCH_CALIBRATION = "PitchCalib"
+    OBJECT_DETECTION = "Detect"
+    # NOTE:Player Detection is a special case of Object Detection that adds team classification
+    PLAYER_DETECTION = "PlayerDetect"
+    OBJECT_TRACKING = "Track"
+    SCENE_CLASSIFICATION = "ClassifyImage"
+    OBJECT_CLASSIFICATION = "ClassifyObject"
 
 
 class ChallengeType(str, Enum):
@@ -133,7 +133,7 @@ class KeypointTemplate(BaseModel):
             self.top_left
             self.top_right
         except IndexError as e:
-            raise ValueError(f"index must be within 0 and {self.n_keypoints-1}: {e}")
+            raise ValueError(f"index must be within 0 and {self.n_keypoints - 1}: {e}")
         return self
 
 

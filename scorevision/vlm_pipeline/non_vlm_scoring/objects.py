@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Tuple, List
+from typing import Iterable, List, Tuple
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from scorevision.vlm_pipeline.utils.response_models import BoundingBox
+from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
+    BoundingBox,
     ShirtColor,
 )
-from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
-from scorevision.utils.pillar_metric_registry import register_metric
-from scorevision.utils.manifest import ElementPrefix, PillarName
 
 AUC_IOU_THRESHOLDS = (0.3, 0.5)
 ENUM_IOU_THRESHOLD = 0.3
@@ -178,7 +178,7 @@ def _team_auc_f1(
 
 @register_metric(
     (ElementPrefix.PLAYER_DETECTION, PillarName.IOU),
-    (ElementPrefix.BALL_DETECTION, PillarName.IOU),
+    (ElementPrefix.OBJECT_DETECTION, PillarName.IOU),
 )
 def compare_object_placement(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
@@ -278,7 +278,7 @@ def compare_object_and_team_labels(
 
 @register_metric(
     (ElementPrefix.PLAYER_DETECTION, PillarName.COUNT),
-    (ElementPrefix.BALL_DETECTION, PillarName.COUNT),
+    (ElementPrefix.OBJECT_DETECTION, PillarName.COUNT),
 )
 def compare_object_counts(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs

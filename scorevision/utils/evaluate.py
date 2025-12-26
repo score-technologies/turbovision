@@ -10,29 +10,20 @@ from scorevision.utils.data_models import (
     SVEvaluation,
 )
 from scorevision.chute_template.schemas import TVPredictInput
-
-from scorevision.vlm_pipeline.non_vlm_scoring.keypoints import evaluate_keypoints
-from scorevision.utils.manifest import Manifest, ElementPrefix, PillarName
+from scorevision.utils.manifest import Manifest
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
 from scorevision.vlm_pipeline.utils.data_models import (
     PseudoGroundTruth,
-    MinerScore,
-    AggregatedScore,
 )
 from scorevision.vlm_pipeline.utils.response_models import (
-    FrameAnnotation,
     BoundingBox,
-    ShirtColor,
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
 )
-from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
-from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import bbox_smoothness_per_type
 from scorevision.utils.pillar_metric_registry import (
     METRIC_REGISTRY,
-    element_pillar_registry_availability,
 )
 
 # NOTE: The following imports are required to load METRIC_REGISTRY
