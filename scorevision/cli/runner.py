@@ -1,26 +1,46 @@
-from logging import getLogger
+import asyncio
+import gc
 import os
 import asyncio
+import random
 import signal
-import gc
+from logging import getLogger
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
-from scorevision.utils.settings import get_settings
+from scorevision.chute_template.schemas import TVPredictInput
+from scorevision.utils.async_clients import close_http_clients
+from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.challenges import (
+    ScoreVisionChallengeError,
+    build_svchallenge_from_parts,
+    get_challenge_from_scorevision,
     get_challenge_from_scorevision_with_source,
     prepare_challenge_payload,
-    build_svchallenge_from_parts,
-    ScoreVisionChallengeError,
 )
-from scorevision.utils.data_models import SVChallenge
-from scorevision.chute_template.schemas import TVPredictInput
-from scorevision.utils.predict import call_miner_model_on_chutes
-from scorevision.utils.evaluate import post_vlm_ranking
+from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.cloudflare_helpers import emit_shard
-from scorevision.utils.async_clients import close_http_clients
-from scorevision.vlm_pipeline.vlm_annotator import (
-    generate_annotations_for_select_frames,
+from scorevision.utils.commitments import get_active_element_ids_by_hotkey
+from scorevision.utils.data_models import SVChallenge
+from scorevision.utils.evaluate import post_vlm_ranking
+from scorevision.utils.manifest import Element, Manifest, get_current_manifest
+from scorevision.utils.miner_registry import Miner, get_miners_from_registry
+from scorevision.utils.predict import call_miner_model_on_chutes
+from scorevision.utils.prometheus import (
+    RUNNER_ACTIVE_MINERS,
+    RUNNER_BLOCK_HEIGHT,
+    RUNNER_EVALUATION_FAIL_TOTAL,
+    RUNNER_EVALUATION_SCORE,
+    RUNNER_LAST_PGT_DURATION_SECONDS,
+    RUNNER_LAST_RUN_DURATION_SECONDS,
+    RUNNER_MINER_CALLS_TOTAL,
+    RUNNER_MINER_LAST_DURATION_SECONDS,
+    RUNNER_MINER_LATENCY_MS,
+    RUNNER_PGT_FRAMES,
+    RUNNER_PGT_RETRY_TOTAL,
+    RUNNER_RUNS_TOTAL,
+    RUNNER_SHARDS_EMITTED_TOTAL,
+    RUNNER_WARMUP_TOTAL,
 )
 from scorevision.utils.windows import get_window_start_block
 from scorevision.utils.miner_registry import get_miners_from_registry, Miner
@@ -44,6 +64,15 @@ from scorevision.utils.prometheus import (
     RUNNER_MINER_LAST_DURATION_SECONDS,
 )
 from scorevision.utils.video_processing import FrameStore
+from scorevision.utils.settings import get_settings
+from scorevision.utils.video_processing import FrameStore
+from scorevision.utils.windows import get_current_window_id, is_window_active
+from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
+    filter_low_quality_pseudo_gt_annotations,
+)
+from scorevision.vlm_pipeline.vlm_annotator_sam3 import (
+    generate_annotations_for_select_frames_sam3,
+)
 
 logger = getLogger(__name__)
 
@@ -56,6 +85,7 @@ def _chute_id_for_miner(m: Miner) -> str | None:
 
 async def _build_pgt_with_retries(
     chal_api: dict,
+    element: Element,
     *,
     required_n_frames: int,
     max_bbox_retries: int = 5,
@@ -76,22 +106,26 @@ async def _build_pgt_with_retries(
     try:
         for quality_attempt in range(max_quality_retries):
             logger.info(
-                f"[PGT] Starting quality attempt {quality_attempt+1}/{max_quality_retries}"
+                f"[PGT] Starting quality attempt {quality_attempt + 1}/{max_quality_retries}"
             )
 
             for bbox_attempt in range(max_bbox_retries):
                 try:
-                    payload, frame_numbers, frames, flows, _frame_store = (
-                        await prepare_challenge_payload(
-                            challenge=chal_api,
-                            video_cache=video_cache,
-                        )
+                    (
+                        payload,
+                        frame_numbers,
+                        frames,
+                        flows,
+                        _frame_store,
+                    ) = await prepare_challenge_payload(
+                        challenge=chal_api,
+                        video_cache=video_cache,
                     )
 
                     if len(frames) < required_n_frames:
                         logger.warning(
                             f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
-                            f"bbox attempt {bbox_attempt+1}/{max_bbox_retries}"
+                            f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries}"
                         )
                         RUNNER_PGT_RETRY_TOTAL.labels(
                             reason="insufficient_frames"
@@ -107,17 +141,18 @@ async def _build_pgt_with_retries(
                     )
 
                     pseudo_gt_annotations = (
-                        await generate_annotations_for_select_frames(
+                        await generate_annotations_for_select_frames_sam3(
                             video_name=challenge.challenge_id,
                             frames=challenge.frames,
                             flow_frames=challenge.dense_optical_flow_frames,
                             frame_numbers=challenge.frame_numbers,
+                            element=element,
                         )
                     )
                     n_frames = len(pseudo_gt_annotations)
                     logger.info(
                         f"[PGT] {n_frames} pseudo-GT annotations generated "
-                        f"(bbox attempt {bbox_attempt+1}/{max_bbox_retries})"
+                        f"(bbox attempt {bbox_attempt + 1}/{max_bbox_retries})"
                     )
 
                     if not _enough_bboxes_per_frame(
@@ -127,7 +162,7 @@ async def _build_pgt_with_retries(
                     ):
                         logger.warning(
                             f"[PGT] Too few bboxes per frame. bbox retry "
-                            f"{bbox_attempt+1}/{max_bbox_retries}"
+                            f"{bbox_attempt + 1}/{max_bbox_retries}"
                         )
                         RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
                         continue
@@ -145,30 +180,30 @@ async def _build_pgt_with_retries(
                         RUNNER_PGT_FRAMES.set(len(filtered))
                         logger.info(
                             f"[PGT] Success: enough filtered frames "
-                            f"(quality attempt {quality_attempt+1}/{max_quality_retries}, "
-                            f"bbox attempt {bbox_attempt+1}/{max_bbox_retries})"
+                            f"(quality attempt {quality_attempt + 1}/{max_quality_retries}, "
+                            f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries})"
                         )
                         return challenge, payload, filtered
 
                     logger.warning(
                         f"[PGT] Not enough quality frames after filtering "
                         f"({len(filtered)}/{required_n_frames}), "
-                        f"quality attempt {quality_attempt+1}/{max_quality_retries}, "
-                        f"bbox attempt {bbox_attempt+1}/{max_bbox_retries}"
+                        f"quality attempt {quality_attempt + 1}/{max_quality_retries}, "
+                        f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries}"
                     )
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_filtered").inc()
 
                 except Exception as e:
                     last_err = e
                     logger.warning(
-                        f"[PGT] Exception during bbox attempt {bbox_attempt+1}/{max_bbox_retries}: {e}"
+                        f"[PGT] Exception during bbox attempt {bbox_attempt + 1}/{max_bbox_retries}: {e}"
                     )
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
                     continue
 
             logger.warning(
                 f"[PGT] Bbox phase failed after {max_bbox_retries} retries "
-                f"→ new quality attempt ({quality_attempt+1}/{max_quality_retries})"
+                f"→ new quality attempt ({quality_attempt + 1}/{max_quality_retries})"
             )
             RUNNER_PGT_RETRY_TOTAL.labels(reason="bbox_phase_failed").inc()
 
@@ -449,6 +484,10 @@ async def runner(
 
 
         try:
+            element = manifest.get_element(id=element_id)
+            if element is None:
+                raise ValueError(f"element id {element_id} not found in manifest")
+
             pgt_build_start = loop.time()
             challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                 chal_api=chal_api,
@@ -456,6 +495,7 @@ async def runner(
                 max_bbox_retries=MAX_PGT_BBOX_RETRIES,
                 max_quality_retries=MAX_PGT_QUALITY_RETRIES,
                 video_cache=video_cache,
+                element=element,
             )
             last_pgt_duration = loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)

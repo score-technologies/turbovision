@@ -34,7 +34,7 @@ _seen_shards.json schema:
 
 import json
 from pathlib import Path
-from typing import Iterable, Dict, Any, Tuple 
+from typing import Iterable, Dict, Any, Tuple
 from threading import Lock
 from statistics import median
 from collections import defaultdict

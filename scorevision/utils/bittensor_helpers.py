@@ -396,36 +396,70 @@ async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
     )
 
 
-async def _first_commit_block_by_miner(netuid: int) -> dict[str, int]:
-    """ """
-    st = await get_subtensor()
-    settings = get_settings()
-    meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
-    commits = await st.get_all_revealed_commitments(netuid)
+async def _first_commit_block_by_miner(
+    netuid: int,
+    *,
+    retries: int = 2,
+) -> dict[str, int]:
+    """"""
+    attempt = 0
+    while True:
+        try:
+            st = await get_subtensor()
+            settings = get_settings()
 
-    first_block_by_hk: dict[str, int] = {}
-    for hk in meta.hotkeys:
-        arr = commits.get(hk)
-        if not arr:
-            continue
-        first_block = None
-        for tup in arr:
-            try:
-                blk, data = tup
-            except Exception:
-                continue
-            try:
-                obj = loads(data)
-            except Exception:
-                continue
-            if isinstance(obj, dict) and obj.get("role") == "validator":
-                continue
-            if first_block is None or (isinstance(blk, int) and blk < first_block):
-                first_block = int(blk) if isinstance(blk, int) else first_block
-        if first_block is not None:
-            first_block_by_hk[hk] = first_block
+            meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
+            commits = await st.get_all_revealed_commitments(netuid)
 
-    return first_block_by_hk
+            last_block_by_hk: dict[str, int] = {}
+            for hk in meta.hotkeys:
+                arr = commits.get(hk)
+                if not arr:
+                    continue
+
+                last_block = None
+                for tup in arr:
+                    try:
+                        blk, data = tup
+                    except Exception:
+                        continue
+
+                    try:
+                        obj = loads(data)
+                    except Exception:
+                        continue
+
+                    if isinstance(obj, dict) and obj.get("role") == "validator":
+                        continue
+
+                    try:
+                        blk_int = int(blk)
+                    except Exception:
+                        continue
+
+                    if last_block is None or blk_int > last_block:
+                        last_block = blk_int
+
+                if last_block is not None:
+                    last_block_by_hk[hk] = last_block
+
+            return last_block_by_hk
+
+        except Exception as e:
+            attempt += 1
+            logger.warning(
+                "[first_commit_block_by_miner] error on attempt %d/%d: %s: %s — resetting subtensor",
+                attempt,
+                retries,
+                type(e).__name__,
+                e,
+            )
+            reset_subtensor()
+
+            if attempt > retries:
+                raise
+
+            await asyncio.sleep(1.0)
 
 
 async def _wait_n_blocks(n: int, timeout_per_block: float = 30.0) -> None:

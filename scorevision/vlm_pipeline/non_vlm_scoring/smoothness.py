@@ -1,14 +1,14 @@
-from logging import getLogger
 from collections import defaultdict
+from logging import getLogger
 
 from numpy import logical_and, logical_or, ndarray
 
-from scorevision.vlm_pipeline.utils.response_models import BoundingBox
+from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.utils.pillar_metric_registry import register_metric
+from scorevision.utils.settings import get_settings
 from scorevision.vlm_pipeline.image_annotation.pairwise import bboxes_to_mask
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
-from scorevision.utils.settings import get_settings
-from scorevision.utils.pillar_metric_registry import register_metric
-from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.vlm_pipeline.utils.response_models import BoundingBox
 
 logger = getLogger(__name__)
 
@@ -109,7 +109,10 @@ def bbox_smoothness(
     return smoothness
 
 
-@register_metric(ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS)
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.SMOOTHNESS),
+    (ElementPrefix.OBJECT_DETECTION, PillarName.SMOOTHNESS),
+)
 def bbox_smoothness_per_type(
     video_bboxes: list[list[BoundingBox]], image_height: int, image_width: int, **kwargs
 ) -> float:
@@ -121,7 +124,9 @@ def bbox_smoothness_per_type(
     for frame_bboxes in video_bboxes:
         grouped = defaultdict(list)
         for bbox in frame_bboxes:
-            grouped[f"{bbox.label.value}_{bbox.cluster_id.value}"].append(bbox)
+            grouped[
+                f"{bbox.label}_{bbox.cluster_id.value if bbox.cluster_id else 'null'}"
+            ].append(bbox)
         for cls_id, boxes in grouped.items():
             by_type[cls_id].append(boxes)
 

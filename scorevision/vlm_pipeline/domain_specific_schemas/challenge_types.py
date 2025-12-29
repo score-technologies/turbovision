@@ -1,11 +1,4 @@
-from enum import Enum
-
-
-class ChallengeType(Enum):
-    FOOTBALL = "football"
-    CRICKET = "cricket"
-    BASKETBALL = "basketball"
-
+from scorevision.utils.manifest import ChallengeType
 
 CHALLENGE_ID_LOOKUP = dict(enumerate(ChallengeType))
 

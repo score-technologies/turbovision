@@ -1,19 +1,19 @@
-import click
-from asyncio import run
-from pathlib import Path
-from logging import getLogger, DEBUG, INFO, WARNING, basicConfig
 import asyncio
+from asyncio import run
+from logging import DEBUG, INFO, WARNING, basicConfig, getLogger
+from pathlib import Path
 
-from scorevision.cli.runner import runner_loop
+import click
+
+from scorevision.cli.elements import elements_cli
+from scorevision.cli.manifest import manifest_cli
+from scorevision.cli.miner import miner as miner_cli
 from scorevision.cli.push import push_ml_model
-from scorevision.utils.settings import get_settings
+from scorevision.cli.runner import runner_loop
 from scorevision.cli.signer_api import run_signer
 from scorevision.cli.validate import _validate_main
 from scorevision.utils.prometheus import _start_metrics, mark_service_ready
-from scorevision.cli.run_vlm_pipeline import run_vlm_pipeline_once_for_single_miner
-from scorevision.cli.miner import miner as miner_cli
-from scorevision.cli.manifest import manifest_cli
-from scorevision.cli.elements import elements_cli
+from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
@@ -118,27 +118,6 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int):
     _start_metrics()
     mark_service_ready("validator")
     asyncio.run(_validate_main(tail=tail, alpha=alpha, m_min=m_min, tempo=tempo))
-
-
-@cli.command("run-once")
-@click.option("--revision", type=str, default=None)
-@click.option("--path-manifest", type=Path, default=None)
-def test_vlm_pipeline(revision: str, path_manifest: Path) -> None:
-    """Run the miner on the VLM-as-Judge pipeline off-chain (results not saved)"""
-    try:
-        if path_manifest is None:
-            root_dir = Path(__file__).parent.parent
-            path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
-            click.echo(f"No manifest path specified. using default: {path_manifest}")
-        result = run(
-            run_vlm_pipeline_once_for_single_miner(
-                path_manifest=path_manifest, hf_revision=revision
-            )
-        )
-        click.echo(result)
-    except Exception as e:
-        click.echo(e)
-        click.echo(e)
 
 
 cli.add_command(manifest_cli)
