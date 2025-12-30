@@ -1,4 +1,4 @@
-# TurboVision
+# TurboVision 
 
 Turbo Vision is Score's decentralized intelligence layer for live video and imagery. The network pairs expert models with a global community of validators and miners so raw footage becomes structured, decision-ready data in real time, with our first deployments concentrated in professional sports. 
 
