@@ -25,7 +25,7 @@ def construct_vlm_input(
     system_prompt: str, user_prompt: str, images: list[ndarray]
 ) -> list[dict]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": [{"type": "text", "text": user_prompt}]
