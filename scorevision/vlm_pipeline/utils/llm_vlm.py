@@ -83,6 +83,13 @@ async def async_vlm_api(
         ),
         "response_format": {"type": "json_object"},
     }
+    logger.error(
+        "[VLM PAYLOAD CHECK] model=%s | system_type=%s | user_type=%s | system_preview=%r",
+        model,
+        type(messages[0]["content"]),
+        type(messages[1]["content"]),
+        messages[0]["content"][:200] if isinstance(messages[0]["content"], str) else messages[0]["content"],
+    )
     session = await get_async_client()
     async with session.post(
         endpoint,
