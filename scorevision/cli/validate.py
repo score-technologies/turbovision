@@ -559,10 +559,21 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         "Winner uid=%d (after window tie-break) over last %d blocks", winner_uid, tail
     )
 
-    CURRENT_WINNER.set(winner_uid)
-    VALIDATOR_WINNER_SCORE.set(S_by_m.get(winner_uid, 0.0))
-
     TARGET_UID = 6
+    final_score = float(S_by_m.get(winner_uid, 0.0) or 0.0)
+
+    if abs(final_score) <= 1e-12:
+        logger.info(
+            "Final winner uid=%d has final_score=%.6f -> forcing winner to TARGET_UID=%d",
+            winner_uid,
+            final_score,
+            TARGET_UID,
+        )
+        winner_uid = TARGET_UID
+        final_score = float(S_by_m.get(TARGET_UID, 0.0) or 0.0)
+
+    CURRENT_WINNER.set(winner_uid)
+    VALIDATOR_WINNER_SCORE.set(final_score)
 
     if winner_uid == TARGET_UID:
         return [TARGET_UID], [1.0]
