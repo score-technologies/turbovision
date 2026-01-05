@@ -8,12 +8,6 @@ Image:
 NodeSelector:
   gpu_count: 1
   min_vram_gb_per_gpu: 16
-  include:
-    - a100
-    - a100_40gb
-    - "3090"
-    - a40
-    - a6000
   exclude:
     - "5090"
     - b200
