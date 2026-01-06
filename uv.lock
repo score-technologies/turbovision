@@ -3285,7 +3285,7 @@ ml = [
 requires-dist = [
     { name = "aiobotocore", specifier = "==2.13.1" },
     { name = "aiohttp", specifier = ">=3.9" },
-    { name = "bittensor", specifier = ">=9.12.0" },
+    { name = "bittensor", specifier = "==9.12.0" },
     { name = "boto3" },
     { name = "chutes", specifier = ">=0.3.47" },
     { name = "click", specifier = ">=8.0.0" },
