@@ -206,6 +206,43 @@ def extract_mask_of_ground_lines_in_image(
         )
     return (image_edges_on_ground > 0).astype(uint8)
 
+blacklists = [
+    [23, 24, 27, 28],
+    [7, 8, 3, 4],
+    [2, 10, 1, 14],
+    [18, 26, 14, 25],
+    [5, 13, 6, 17],
+    [21, 29, 17, 30],
+    [10, 11, 2, 3],
+    [10, 11, 2, 7],
+    [12, 13, 4, 5],
+    [12, 13, 5, 8],
+    [18, 19, 26, 27],
+    [18, 19, 26, 23],
+    [20, 21, 24, 29],
+    [20, 21, 28, 29]
+]
+
+def near_edges(x, y, W, H, t=50):
+    edges = set()
+    if x <= t:
+        edges.add("left")
+    if x >= W - t:
+        edges.add("right")
+    if y <= t:
+        edges.add("top")
+    if y >= H - t:
+        edges.add("bottom")
+    return edges
+
+def both_points_same_direction(A, B, W, H, t=10):
+    edges_A = near_edges(A[0], A[1], W, H, t)
+    edges_B = near_edges(B[0], B[1], W, H, t)
+
+    if not edges_A or not edges_B:
+        return False
+
+    return not edges_A.isdisjoint(edges_B)
 
 def evaluate_keypoints_for_frame(
     template_keypoints: list[tuple[int, int]],
@@ -216,10 +253,22 @@ def evaluate_keypoints_for_frame(
     try:
         frame_height, frame_width = frame.shape[:2]
 
+        non_idxs = []
         frame_keypoints = [
             (0, 0) if (x, y) != (0, 0) and (x < 0 or y < 0 or x >= frame_width or y >= frame_height) else (x, y)
             for (x, y) in frame_keypoints
         ]
+
+        for idx, kpts in enumerate(frame_keypoints):
+            if kpts[0] != 0 or kpts[1] != 0:
+                non_idxs.append(idx + 1)
+
+        for blacklist in blacklists:
+            is_included = set(non_idxs).issubset(blacklist)
+            if is_included:
+                if both_points_same_direction(frame_keypoints[blacklist[0] - 1], frame_keypoints[blacklist[1] - 1], frame_width, frame_height):
+                    logger.info(f"Suspect keypoints!")
+                    return 0
         
         warped_template = project_image_using_keypoints(
             image=floor_markings_template,
