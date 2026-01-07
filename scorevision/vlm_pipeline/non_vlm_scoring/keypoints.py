@@ -1,6 +1,7 @@
 from logging import getLogger
 from typing import Any
 import numpy as np
+import cv2
 
 from numpy import array, uint8, float32, ndarray
 from cv2 import (
@@ -158,6 +159,16 @@ def extract_masks_for_ground_and_lines(
     _, mask_lines = threshold(gray, 200, 255, THRESH_BINARY)
     mask_ground_binary = (mask_ground > 0).astype(uint8)
     mask_lines_binary = (mask_lines > 0).astype(uint8)
+    if cv2.countNonZero(mask_ground_binary) == 0:
+        raise InvalidMask("No projected ground (empty mask)")
+    pts = cv2.findNonZero(mask_ground_binary)
+    x, y, w, h = cv2.boundingRect(pts)
+    is_rect = cv2.countNonZero(mask_ground_binary) == (w * h)
+
+    if is_rect:
+        raise InvalidMask(
+            f"Projected ground should not be rectangular"
+        )
 
     validate_mask_ground(mask=mask_ground_binary)
     validate_mask_lines(mask=mask_lines_binary)
