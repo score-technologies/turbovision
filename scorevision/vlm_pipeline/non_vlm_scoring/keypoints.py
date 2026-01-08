@@ -220,7 +220,11 @@ blacklists = [
     [18, 19, 26, 27],
     [18, 19, 26, 23],
     [20, 21, 24, 29],
-    [20, 21, 28, 29]
+    [20, 21, 28, 29],
+    [8, 4, 5, 13],
+    [3, 7, 2, 10],
+    [23, 27, 18, 26],
+    [24, 28, 21, 29]
 ]
 
 def near_edges(x, y, W, H, t=50):
@@ -235,7 +239,7 @@ def near_edges(x, y, W, H, t=50):
         edges.add("bottom")
     return edges
 
-def both_points_same_direction(A, B, W, H, t=10):
+def both_points_same_direction(A, B, W, H, t=100):
     edges_A = near_edges(A[0], A[1], W, H, t)
     edges_B = near_edges(B[0], B[1], W, H, t)
 
