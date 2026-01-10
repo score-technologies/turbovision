@@ -282,6 +282,8 @@ async def runner(slug: str | None = None) -> None:
                     slug=m.slug,
                     chute_id=m.chute_id,
                     payload=payload,
+                    expected_model=m.model,
+                    expected_revision=m.revision,
                 )
                 latency_ms = (loop.time() - start) * 1000.0
                 RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(latency_ms)
