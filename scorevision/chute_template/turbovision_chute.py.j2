@@ -47,10 +47,34 @@ class TVPredictOutput(BaseModel):
 ##=========UTILITY FUNCTIONS=================
 def get_whitelisted_paths() -> set[Path]:
     STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
-    SITE_PACKAGES_ROOTS = set(map(Path, getsitepackages()))
+    SITE_PACKAGES_ROOTS = {Path(p).resolve() for p in getsitepackages()} 
     SITE_PACKAGES_ROOTS.add(Path(getusersitepackages()).resolve())
 
     return {STDLIB_ROOT, *SITE_PACKAGES_ROOTS}
+
+def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) -> None:
+    miner_path = miner_path.resolve()
+    WHITELIST = get_whitelisted_paths()
+    after = set(sys.modules.keys()) - before
+    offenders = []
+    for module_loaded_name in sorted(after):
+        module_loaded = sys.modules.get(module_loaded_name)
+        if module_loaded is None:
+            continue
+        module_loaded_file = getattr(module_loaded, "__file__", None)
+        if not module_loaded_file:
+            continue  
+        module_loaded_filepath = Path(module_loaded_file).resolve()
+        if module_loaded_filepath == miner_path:
+            continue
+        if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
+            continue
+        offenders.append(module_loaded_name)
+
+    if offenders:
+        raise ImportError(
+            f"Miner loaded modules outside the whitelist: {', '.join(offenders)}"
+        )
 
 
 def verify_cuda_version() -> str:
@@ -178,17 +202,20 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             )
 
     try:
+        before_exec = set(sys.modules.keys())
         sys.meta_path.insert(0, HFRepoImportBlocker)
         spec = spec_from_file_location("miner", path_miner)
         module = module_from_spec(spec)
         sys.modules["miner"] = module
         spec.loader.exec_module(module)
         miner_object = getattr(module, classname)
+        miner = miner_object(path_hf_repo)
+        post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
     except Exception as e:
         raise e
     finally:
         sys.meta_path.remove(HFRepoImportBlocker)
-    return miner_object
+    return miner
 
 
 def object_size_in_bytes(current_obj: Any, seen_ids: set[int], limit: int) -> int:
@@ -269,10 +296,9 @@ async def load_model(self) -> None:
         hf_repo_path = Path(snapshot_download(HF_REPO_NAME, revision=HF_REPO_REVISION))
         print("✅ Huggingface Hub repo downloaded")
 
-        miner_class = load_miner_from_hf_repo(
+        self.miner = load_miner_from_hf_repo(
             path_hf_repo=hf_repo_path, filename=FILENAME, classname=CLASSNAME
         )
-        self.miner = miner_class(hf_repo_path)
         print(f"✅ Miner loaded {self.miner}")
         self.miner_size = get_miner_size_gb(self.miner)
         if self.miner_size > MAX_LOADED_MODEL_SIZE_GB:

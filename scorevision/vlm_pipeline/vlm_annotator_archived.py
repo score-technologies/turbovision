@@ -32,7 +32,8 @@ logger = getLogger(__name__)
 
 # --- Models (via provider) ---
 QWEN_MODEL = "Qwen/Qwen2.5-VL-72B-Instruct"
-INTERNVL_MODEL = "OpenGVLab/InternVL3-78B"
+INTERNVL_MODEL = QWEN_MODEL
+#INTERNVL_MODEL = "OpenGVLab/InternVL3-78B-TEE"
 
 
 # -------------------- utils: image + boxes --------------------

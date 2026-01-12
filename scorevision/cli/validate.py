@@ -591,8 +591,21 @@ async def get_winner_for_element(
         tail,
     )
 
+    TARGET_UID = 6
+    final_score = float(S_by_m.get(winner_uid, 0.0) or 0.0)
+
+    if abs(final_score) <= 1e-12:
+        logger.info(
+            "Final winner uid=%d has final_score=%.6f -> forcing winner to TARGET_UID=%d",
+            winner_uid,
+            final_score,
+            TARGET_UID,
+        )
+        winner_uid = TARGET_UID
+        final_score = float(S_by_m.get(TARGET_UID, 0.0) or 0.0)
+
     CURRENT_WINNER.set(winner_uid)
-    VALIDATOR_WINNER_SCORE.set(S_by_m.get(winner_uid, 0.0))
+    VALIDATOR_WINNER_SCORE.set(final_score)
 
     return winner_uid, S_by_m
 
@@ -607,6 +620,7 @@ async def retry_set_weights(wallet, uids, weights):
     loop = asyncio.get_running_loop()
     request_start = loop.time()
     try:
+        logger.info("SETTING WEIGHTS uids=%s weights=%s", uids, weights)
         timeout = aiohttp.ClientTimeout(connect=2, total=300)
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             resp = await sess.post(
