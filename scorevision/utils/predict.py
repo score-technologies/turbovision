@@ -77,7 +77,6 @@ async def call_miner_model_on_chutes(
             success=False,
             latency_ms=0.0,
             predictions=None,
-            model=None,
             latency_p50_ms=0.0,
             latency_p95_ms=0.0,
             latency_p99_ms=0.0,
