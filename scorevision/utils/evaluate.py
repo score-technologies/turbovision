@@ -60,9 +60,11 @@ def parse_miner_prediction(
                     except (TypeError, ValueError):
                         object_id = None
 
-                    looked_up = (
-                        object_names[object_id] if object_id is not None else None
-                    )
+                    looked_up = None
+                    if object_id is not None and 0 <= object_id < len(object_names):
+                        looked_up = object_names[object_id]
+                    else:
+                        continue
 
                     bboxes.append(
                         BoundingBox(
@@ -125,6 +127,7 @@ def post_vlm_ranking(
             miner_run=miner_run,
             frame_store=frame_store,
             challenge_type=challenge_type,
+            element_id=element_id,
         )
     else:
         logger.info(
@@ -234,11 +237,19 @@ def get_element_scores(
     miner_run: SVRunOutput,
     frame_store: FrameStore,
     challenge_type: ChallengeType,
+    element_id: str | None = None
 ) -> dict:
     settings = get_settings()
 
+    elements = manifest.elements
+    if element_id:
+        e = manifest.get_element(id=element_id)
+        if e is None:
+            raise ValueError(f"Element {element_id} not found in manifest")
+        elements = [e]
+
     element_scores = {}
-    for element in manifest.elements:
+    for element in elements:
         miner_annotations = parse_miner_prediction(
             miner_run=miner_run, object_names=element.objects or []
         )
