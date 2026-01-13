@@ -51,7 +51,13 @@ from scorevision.utils.cloudflare_helpers import (
     prune_sv,
 )
 
-from scorevision.utils.manifest import get_current_manifest
+from scorevision.utils.manifest import (
+    get_current_manifest,
+    Manifest,
+)
+
+from pathlib import Path
+
 
 logger = logging.getLogger("scorevision.validator")
 shutdown_event = asyncio.Event()
@@ -722,8 +728,17 @@ def _extract_elements_from_manifest(manifest) -> list[tuple[str, float]]:
     return out
 
 
+def _load_manifest_for_block(block: int, *, path_manifest: Path | None = None) -> Manifest:
+    if path_manifest is not None:
+        return Manifest.load_yaml(path_manifest)
 
-async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> None:
+    p = os.getenv("SCOREVISION_MANIFEST_PATH") or os.getenv("SV_MANIFEST_PATH") or os.getenv("SCOREVISION_VALIDATOR_MANIFEST_PATH")
+    if p:
+        return Manifest.load_yaml(Path(p))
+
+    return get_current_manifest(block_number=block)
+
+async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_manifest: Path | None = None) -> None:
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     R2_BUCKET_PUBLIC_URL = settings.R2_BUCKET_PUBLIC_URL
@@ -866,7 +881,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
 
             try:
                 try:
-                    manifest = get_current_manifest(block_number=block)
+                    manifest = _load_manifest_for_block(block, path_manifest=path_manifest)
                 except Exception as e:
                     logger.warning(
                         "[validator] Failed to load manifest for block %d: %s",
@@ -877,6 +892,10 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int) -> Non
                     VALIDATOR_WINNER_SCORE.set(0.0)
                     VALIDATOR_LOOP_TOTAL.labels(outcome="manifest_error").inc()
                     last_done = block
+                    try:
+                        await asyncio.wait_for(st.wait_for_block(), timeout=30.0)
+                    except Exception:
+                        pass
                     continue
 
                 elements = _extract_elements_from_manifest(manifest)
