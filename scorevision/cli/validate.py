@@ -372,7 +372,7 @@ async def get_winner_for_element(
     sums_by_V_m: dict[tuple[str, int], float] = {}
     cnt_by_V_m: dict[tuple[str, int], int] = {}
 
-    async for line in dataset_sv_multi(tail, validator_indexes):
+    async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
         try:
             payload = line.get("payload") or {}
 

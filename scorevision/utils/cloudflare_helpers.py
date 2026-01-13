@@ -632,6 +632,13 @@ def _join_key_to_base(index_url: str, key_or_url: str) -> str:
     base = index_url.rsplit("/", 1)[0] + "/"
     return urljoin(base, key_or_url)
 
+def _safe_element_id_for_path(element_id: str | None) -> str | None:
+    if not element_id:
+        return None
+    s = str(element_id).strip()
+    if not s:
+        return None
+    return s.replace("/", "_")
 
 async def _list_keys_from_remote_index(index_url: str) -> list[str]:
     """ """
@@ -648,7 +655,7 @@ async def _list_keys_from_remote_index(index_url: str) -> list[str]:
 
 
 async def dataset_sv_multi(
-    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2
+    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2, element_id: str | None = None,
 ):
     """ """
     if not validator_indexes:
@@ -656,6 +663,10 @@ async def dataset_sv_multi(
     validator_indexes = {
         hk: normalize_index_url(iurl) for hk, iurl in validator_indexes.items() if iurl
     }
+
+    wanted_elem = _safe_element_id_for_path(element_id)
+    wanted_seg = f"/scorevision/{wanted_elem}/" if wanted_elem else None
+
     all_pairs: list[tuple[int, str, str]] = []
     for idx_hk, idx_url in validator_indexes.items():
         try:
@@ -664,6 +675,16 @@ async def dataset_sv_multi(
             logger.warning(f"[dataset-multi] index fetch failed {idx_url}: {e}")
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="index_fetch").inc()
             continue
+        if wanted_seg:
+            filtered_keys = []
+            for u in keys:
+                try:
+                    if wanted_seg in urlparse(u).path:
+                        filtered_keys.append(u)
+                except Exception:
+                    continue
+            keys = filtered_keys
+
         for u in keys:
             name = Path(u).name
             b = None
@@ -682,7 +703,7 @@ async def dataset_sv_multi(
     min_keep = max_block - int(tail)
     kept = [(b, u, iurl) for (b, u, iurl) in all_pairs if b >= min_keep]
     logger.info(
-        f"[dataset-multi] max_block={max_block} tail={tail} -> kept={len(kept)} shards"
+        f"[dataset-multi] element_id={element_id} max_block={max_block} tail={tail} -> kept={len(kept)} shards"
     )
 
     prefetch = max(1, int(os.getenv("SCOREVISION_DATASET_PREFETCH", str(prefetch))))
