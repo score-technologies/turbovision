@@ -71,6 +71,7 @@ TAIL_BLOCKS_DEFAULT = int(os.getenv("SCOREVISION_VALIDATOR_TAIL", "28800"))
 
 FALLBACK_UID = int(os.getenv("SCOREVISION_FALLBACK_UID", "6"))
 
+BLOCKS_PER_DAY = 7200
 
 @lru_cache(maxsize=1)
 def _validator_hotkey_ss58() -> str:
@@ -116,6 +117,16 @@ def _weighted_median(values: list[float], weights: list[float]) -> float:
             return v
     return pairs[-1][0]
 
+def _days_to_blocks(days: int | float | None) -> int | None:
+    if days is None:
+        return None
+    try:
+        d = float(days)
+    except Exception:
+        return None
+    if d <= 0:
+        return None
+    return max(1, int(d * BLOCKS_PER_DAY))
 
 def _stake_of(hk: str, stake_by_hk: dict[str, float]) -> float:
     try:
@@ -684,15 +695,14 @@ async def retry_set_weights(wallet, uids, weights):
     return False
 
 
-def _extract_elements_from_manifest(manifest) -> list[tuple[str, float]]:
-    """
-    """
+def _extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | float | None]]:
     elements = getattr(manifest, "elements", None) or []
-    out: list[tuple[str, float]] = []
+    out: list[tuple[str, float, int | float | None]] = []
 
     for elem in elements:
         eid = None
         weight = None
+        eval_window = None
 
         if hasattr(elem, "element_id"):
             eid = getattr(elem, "element_id")
@@ -705,6 +715,11 @@ def _extract_elements_from_manifest(manifest) -> list[tuple[str, float]]:
             weight = getattr(elem, "weight")
         elif isinstance(elem, dict):
             weight = elem.get("weight")
+
+        if hasattr(elem, "eval_window"):
+            eval_window = getattr(elem, "eval_window")
+        elif isinstance(elem, dict):
+            eval_window = elem.get("eval_window")
 
         if eid is None:
             continue
@@ -719,9 +734,16 @@ def _extract_elements_from_manifest(manifest) -> list[tuple[str, float]]:
         except Exception:
             w = 0.0
 
-        out.append((eid_str, w))
+        ew = None
+        if eval_window is not None:
+            try:
+                ew = float(eval_window)
+                if ew.is_integer():
+                    ew = int(ew)
+            except Exception:
+                ew = None
 
-    total_w = sum(max(0.0, w) for _eid, w in out)
+        out.append((eid_str, w, ew))
 
     return out
 
@@ -910,19 +932,33 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     continue
 
                 weights_by_uid: dict[int, float] = {}
+                max_tail_used = effective_tail
 
-                total_elem_w = sum(max(0.0, w) for _eid, w in elements)
+                total_elem_w = sum(max(0.0, w) for _eid, w, _ew in elements)
                 if total_elem_w <= 0:
                     logger.warning("[validator] Manifest elements weights sum to 0 -> forcing all weight to FALLBACK_UID=%d", FALLBACK_UID)
                     weights_by_uid = {FALLBACK_UID: 1.0}
                 else:
-                    elements = [(eid, max(0.0, float(w))) for eid, w in elements]
+                    elements = [(eid, max(0.0, float(w)), eval_window_days) for (eid, w, eval_window_days) in elements]
+                    max_tail_used = 0
 
-                    for element_id, elem_weight in elements:
+                    for element_id, elem_weight, eval_window_days in elements:
+                        tail_from_eval = _days_to_blocks(eval_window_days)
+                        tail_for_element = tail_from_eval if tail_from_eval is not None else effective_tail
+                        max_tail_used = max(max_tail_used, tail_for_element)
+
+                        logger.info(
+                            "[validator] element=%s eval_window_days=%s -> tail_blocks=%d (fallback_tail=%d)",
+                            element_id,
+                            str(eval_window_days),
+                            tail_for_element,
+                            effective_tail,
+                        )
+
                         winner_uid, S_by_m = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
-                            tail=effective_tail,
+                            tail=tail_for_element,
                             m_min=m_min,
                         )
 
@@ -1022,7 +1058,8 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     pass
 
                 try:
-                    await asyncio.to_thread(prune_sv, tail)
+                    prune_tail = max(max_tail_used, effective_tail)
+                    await asyncio.to_thread(prune_sv, prune_tail)
                 except Exception as e:
                     logger.warning(f"Cache prune failed: {e}")
 
