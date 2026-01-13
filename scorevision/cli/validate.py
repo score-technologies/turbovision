@@ -722,9 +722,6 @@ def _extract_elements_from_manifest(manifest) -> list[tuple[str, float]]:
         out.append((eid_str, w))
 
     total_w = sum(max(0.0, w) for _eid, w in out)
-    if total_w <= 0 and out:
-        uniform_w = 1.0 / len(out)
-        out = [(eid, uniform_w) for eid, _ in out]
 
     return out
 
@@ -921,37 +918,35 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                 else:
                     elements = [(eid, max(0.0, float(w))) for eid, w in elements]
 
+                    for element_id, elem_weight in elements:
+                        winner_uid, S_by_m = await get_winner_for_element(
+                            element_id=element_id,
+                            current_window_id=current_window_id,
+                            tail=effective_tail,
+                            m_min=m_min,
+                        )
 
+                        if winner_uid is None:
+                            logger.warning(
+                                "[validator] No winner for element_id=%s window_id=%s",
+                                element_id,
+                                current_window_id,
+                            )
+                            continue
 
-                for element_id, elem_weight in elements:
-                    winner_uid, S_by_m = await get_winner_for_element(
-                        element_id=element_id,
-                        current_window_id=current_window_id,
-                        tail=effective_tail,
-                        m_min=m_min,
-                    )
+                        share = float(elem_weight)
+                        weights_by_uid[winner_uid] = weights_by_uid.get(
+                            winner_uid, 0.0
+                        ) + share
 
-                    if winner_uid is None:
-                        logger.warning(
-                            "[validator] No winner for element_id=%s window_id=%s",
+                        logger.info(
+                            "[validator] Element=%s Window=%s winner_uid=%d elem_weight=%.6f share=%.6f",
                             element_id,
                             current_window_id,
+                            winner_uid,
+                            elem_weight,
+                            share,
                         )
-                        continue
-
-                    share = float(elem_weight)
-                    weights_by_uid[winner_uid] = weights_by_uid.get(
-                        winner_uid, 0.0
-                    ) + share
-
-                    logger.info(
-                        "[validator] Element=%s Window=%s winner_uid=%d elem_weight=%.6f share=%.6f",
-                        element_id,
-                        current_window_id,
-                        winner_uid,
-                        elem_weight,
-                        share,
-                    )
 
                 if not weights_by_uid:
                     logger.warning(
