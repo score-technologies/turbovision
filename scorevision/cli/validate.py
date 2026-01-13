@@ -5,6 +5,7 @@ import logging
 import signal
 import traceback
 import gc
+import math
 from collections import defaultdict, deque
 from functools import lru_cache
 from json import loads
@@ -911,16 +912,16 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     last_done = block
                     continue
 
+                weights_by_uid: dict[int, float] = {}
+
                 total_elem_w = sum(max(0.0, w) for _eid, w in elements)
                 if total_elem_w <= 0:
-                    n = len(elements)
-                    elements = [(eid, 1.0 / n) for eid, _ in elements]
+                    logger.warning("[validator] Manifest elements weights sum to 0 -> forcing all weight to FALLBACK_UID=%d", FALLBACK_UID)
+                    weights_by_uid = {FALLBACK_UID: 1.0}
                 else:
-                    elements = [
-                        (eid, max(0.0, w) / total_elem_w) for eid, w in elements
-                    ]
+                    elements = [(eid, max(0.0, float(w))) for eid, w in elements]
 
-                weights_by_uid: dict[int, float] = {}
+
 
                 for element_id, elem_weight in elements:
                     winner_uid, S_by_m = await get_winner_for_element(
@@ -938,13 +939,13 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                         )
                         continue
 
-                    share = float(elem_weight) * 65535.0
+                    share = float(elem_weight)
                     weights_by_uid[winner_uid] = weights_by_uid.get(
                         winner_uid, 0.0
                     ) + share
 
                     logger.info(
-                        "[validator] Element=%s Window=%s winner_uid=%d elem_weight=%.4f share=%.1f",
+                        "[validator] Element=%s Window=%s winner_uid=%d elem_weight=%.6f share=%.6f",
                         element_id,
                         current_window_id,
                         winner_uid,
@@ -964,13 +965,37 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     last_done = block
                     continue
 
+                total_weight = sum(weights_by_uid.values())
+                if not math.isclose(total_weight, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+                    if total_weight > 1.0:
+                        logger.warning(
+                            "[validator] Total weights %.6f > 1.0; normalizing to 1.0 for window_id=%s",
+                            total_weight,
+                            current_window_id,
+                        )
+                        scale = 1.0 / total_weight
+                        for uid in list(weights_by_uid.keys()):
+                            weights_by_uid[uid] *= scale
+                    else:
+                        missing = 1.0 - total_weight
+                        weights_by_uid[FALLBACK_UID] = (
+                            weights_by_uid.get(FALLBACK_UID, 0.0) + missing
+                        )
+                        logger.info(
+                            "[validator] Total weights %.6f < 1.0; adding fallback uid=%d with weight=%.6f for window_id=%s",
+                            total_weight,
+                            FALLBACK_UID,
+                            missing,
+                            current_window_id,
+                        )
+
                 uids = sorted(weights_by_uid.keys())
                 weights = [weights_by_uid[uid] for uid in uids]
 
                 logger.info(
                     "[validator] Final weights for window_id=%s: %s",
                     current_window_id,
-                    ", ".join(f"uid={u}: w={w:.1f}" for u, w in zip(uids, weights)),
+                    ", ".join(f"uid={u}: w={w:.6f}" for u, w in zip(uids, weights)),
                 )
 
                 ok = await retry_set_weights(wallet, uids, weights)
