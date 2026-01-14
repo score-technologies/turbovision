@@ -258,6 +258,7 @@ class Element(BaseModel):
 
     id: str
     window_block: int | None = None
+    eval_window: int | float | None = None
     weight: float | None = None
     clips: list[Clip]
     metrics: Metrics
@@ -440,6 +441,9 @@ class Manifest(BaseModel):
             elements.append(
                 Element(
                     id=e["id"],
+                    window_block=e.get("window_block"),
+                    eval_window=e.get("eval_window"),
+                    weight=e.get("weight"),
                     clips=e.get("clips", []),
                     weights=e.get("weights", []),
                     preproc=preproc,
