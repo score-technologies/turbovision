@@ -787,7 +787,8 @@ async def runner_loop(path_manifest: Path | None = None):
                 for eid, tempo in elems_tempos.items():
                     st_e = element_state.get(eid)
                     if st_e is None:
-                        anchor = get_window_start_block(manifest.window_id, tempo=tempo)
+                        wid = get_current_window_id(block)
+                        anchor = get_window_start_block(wid, tempo=tempo)
                         element_state[eid] = {"tempo": tempo, "anchor": anchor, "task": None}
                         logger.info(
                             "[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)",
