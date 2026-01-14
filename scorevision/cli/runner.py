@@ -787,19 +787,15 @@ async def runner_loop(path_manifest: Path | None = None):
                 for eid, tempo in elems_tempos.items():
                     st_e = element_state.get(eid)
                     if st_e is None:
-                        element_state[eid] = {
-                            "tempo": tempo,
-                            "next_block": block,
-                            "task": None,
-                        }
+                        anchor = get_window_start_block(manifest.window_id, tempo=tempo)
+                        element_state[eid] = {"tempo": tempo, "anchor": anchor, "task": None}
                         logger.info(
-                            "[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (next_block=%s)",
-                            eid,
-                            tempo,
-                            block,
+                            "[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)",
+                            eid, tempo, anchor
                         )
                     else:
                         st_e["tempo"] = tempo
+                        st_e["anchor"] = get_window_start_block(manifest.window_id, tempo=tempo)
 
             else:
                 manifest = new_manifest
@@ -811,38 +807,27 @@ async def runner_loop(path_manifest: Path | None = None):
                 )
             else:
                 for eid, st_e in element_state.items():
-                    tempo = int(st_e.get("tempo") or DEFAULT_ELEMENT_TEMPO)
-                    next_block = st_e.get("next_block")
+                    tempo = max(1, int(st_e["tempo"])) 
+                    anchor = int(st_e["anchor"])
                     task = st_e.get("task")
 
-                    if next_block is None:
-                        st_e["next_block"] = block
-                        next_block = block
+                    delta = block - anchor
+                    should_trigger = (delta >= 0) and (delta % tempo == 0)
 
-                    if block >= next_block:
+                    if should_trigger:
                         if task is not None and not task.done():
-                            logger.debug(
-                                "[RunnerLoop] element_id=%s is still running; skipping trigger at block=%s",
-                                eid,
-                                block,
+                            logger.info(
+                                "[RunnerLoop] element_id=%s still running; skipping aligned trigger at block=%s",
+                                eid, block
                             )
-                            continue
-
-                        logger.info(
-                            "[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s)",
-                            eid,
-                            block,
-                            tempo,
-                        )
-                        new_task = asyncio.create_task(
-                            runner(
-                                block_number=block,
-                                manifest=manifest,
-                                element_id=eid,
+                        else:
+                            logger.info(
+                                "[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)",
+                                eid, block, tempo, anchor
                             )
-                        )
-                        st_e["task"] = new_task
-                        st_e["next_block"] = block + max(1, tempo)
+                            st_e["task"] = asyncio.create_task(
+                                runner(block_number=block, manifest=manifest, element_id=eid)
+                            )
 
             try:
                 await asyncio.wait_for(
