@@ -18,6 +18,7 @@ from chutes.image import Image
 from cv2 import CAP_PROP_FRAME_COUNT, VideoCapture
 from huggingface_hub import snapshot_download
 from numpy import ndarray
+from numpy.random import randint
 from pydantic import BaseModel
 from yaml import safe_load
 
@@ -69,6 +70,8 @@ def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) ->
             continue
         if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
             continue
+        if origin_path.name == "_remote_module_non_scriptable.py":
+            return spec
         offenders.append(module_loaded_name)
 
     if offenders:
@@ -197,6 +200,8 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             origin_path = Path(spec.origin).resolve()
             if any(origin_path.is_relative_to(root) for root in WHITELIST):
                 return spec
+            if origin_path.name == "_remote_module_non_scriptable.py":
+                return spec
             raise ImportError(
                 f"❌ Import blocked: '{fullname}' (file: {origin_path}) is not in the whitelist. All code related to the miner MUST be inside {filename}"
             )
@@ -210,6 +215,15 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         spec.loader.exec_module(module)
         miner_object = getattr(module, classname)
         miner = miner_object(path_hf_repo)
+        miner.predict_batch(
+            batch_images=[randint(
+                0, 256, 
+                (540, 960, 3),
+                dtype="uint8"
+            )], 
+            offset=0, 
+            n_keypoints=32
+        )
         post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
     except Exception as e:
         raise e
