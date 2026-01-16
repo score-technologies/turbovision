@@ -796,7 +796,8 @@ async def runner_loop(path_manifest: Path | None = None):
                         )
                     else:
                         st_e["tempo"] = tempo
-                        st_e["anchor"] = get_window_start_block(manifest.window_id, tempo=tempo)
+                        wid = get_current_window_id(block)
+                        st_e["anchor"] = get_window_start_block(wid, tempo=tempo)
 
             else:
                 manifest = new_manifest
