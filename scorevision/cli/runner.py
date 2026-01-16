@@ -523,7 +523,7 @@ async def runner(
                     expected_model=m.model,
                     expected_revision=m.revision,
                 )
-                latency_ms = (loop.time() - start) * 1000.0
+                latency_ms = miner_output.latency_ms
                 RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(latency_ms)
                 RUNNER_MINER_CALLS_TOTAL.labels(outcome="success").inc()
 

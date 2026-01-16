@@ -136,6 +136,7 @@ async def predict_sv(
     payload_json = payload.model_dump(mode="json")
     for attempt in range(1, retries + 2):
         logger.info(f"Attempt {attempt} to {url}")
+        t0_attempt = monotonic()
         try:
             async with semaphore:
                 async with session.post(
@@ -148,7 +149,7 @@ async def predict_sv(
                         return SVPredictResult(
                             success=bool(data.get("success", True)),
                             model=data.get("model"),
-                            latency_seconds=monotonic() - t0,
+                            latency_seconds=monotonic() - t0_attempt,
                             predictions=data.get("predictions") or data.get("data"),
                             error=data.get("error"),
                             raw=data,
@@ -163,7 +164,7 @@ async def predict_sv(
                         return SVPredictResult(
                             success=False,
                             model=None,
-                            latency_seconds=monotonic() - t0,
+                            latency_seconds=monotonic() - t0_attempt,
                             predictions=None,
                             error=last_err,
                         )
