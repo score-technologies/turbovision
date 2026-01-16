@@ -70,7 +70,7 @@ def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) ->
             continue
         if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
             continue
-        if origin_path.name == "_remote_module_non_scriptable.py":
+        if module_loaded_name == "_remote_module_non_scriptable.py":
             return spec
         offenders.append(module_loaded_name)
 
@@ -190,6 +190,7 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         )
 
     WHITELIST = get_whitelisted_paths()
+    BEFORE_EXEC = set(sys.modules.keys())
 
     class HFRepoImportBlocker(PathFinder):
         @classmethod
@@ -206,16 +207,31 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
                 f"❌ Import blocked: '{fullname}' (file: {origin_path}) is not in the whitelist. All code related to the miner MUST be inside {filename}"
             )
 
+    class MinerWrapper:
+        def __init__(self, miner_instance):
+            self._miner = miner_instance
+
+        def predict_batch(self, *args, **kwargs):
+            result = self._miner.predict_batch(*args, **kwargs)
+            post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+            return result
+
+        def __repr__(self) -> str:
+            return str(self._miner)
+        
+        def __getattr__(self, name):
+            return getattr(self._miner, name)
+
     try:
-        before_exec = set(sys.modules.keys())
         sys.meta_path.insert(0, HFRepoImportBlocker)
         spec = spec_from_file_location("miner", path_miner)
         module = module_from_spec(spec)
         sys.modules["miner"] = module
         spec.loader.exec_module(module)
         miner_object = getattr(module, classname)
-        miner = miner_object(path_hf_repo)
-        miner.predict_batch(
+        miner = miner_object(path_hf_repo)        
+        miner_safe = MinerWrapper(miner)
+        miner_safe.predict_batch(
             batch_images=[randint(
                 0, 256, 
                 (540, 960, 3),
@@ -224,12 +240,13 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             offset=0, 
             n_keypoints=32
         )
-        post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
+        post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+
     except Exception as e:
         raise e
     finally:
         sys.meta_path.remove(HFRepoImportBlocker)
-    return miner
+    return miner_safe
 
 
 def object_size_in_bytes(current_obj: Any, seen_ids: set[int], limit: int) -> int:
