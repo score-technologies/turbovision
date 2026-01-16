@@ -10,6 +10,7 @@ from sysconfig import get_paths
 from tempfile import NamedTemporaryFile
 from typing import Any, Generator
 from urllib.parse import quote
+import random
 
 import torch
 from aiohttp import ClientSession
@@ -215,6 +216,22 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         spec.loader.exec_module(module)
         miner_object = getattr(module, classname)
         miner = miner_object(path_hf_repo)
+
+        post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
+
+        class MinerWrapper:
+            def __init__(self, miner_instance):
+                self._miner = miner_instance
+
+            def predict_batch(self, *args, **kwargs):
+                result = self._miner.predict_batch(*args, **kwargs)
+                post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self._miner, name)
+        
+        miner = MinerWrapper(miner)
         miner.predict_batch(
             batch_images=[randint(
                 0, 256, 
@@ -224,7 +241,6 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             offset=0, 
             n_keypoints=32
         )
-        post_check_files_against_whitelist(before=before_exec, miner_path=path_miner)
     except Exception as e:
         raise e
     finally:
