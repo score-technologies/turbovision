@@ -343,6 +343,7 @@ def evaluate_keypoints_for_frame(
 
 @register_metric(
     (ElementPrefix.PITCH_CALIBRATION, PillarName.IOU),
+    (ElementPrefix.PLAYER_DETECTION, PillarName.KEYPOINTS_IOU),
 )
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],
