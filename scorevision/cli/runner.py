@@ -1,7 +1,6 @@
 import asyncio
 import gc
 import os
-import asyncio
 import random
 import signal
 from logging import getLogger
@@ -17,6 +16,8 @@ from scorevision.utils.challenges import (
     get_challenge_from_scorevision,
     get_challenge_from_scorevision_with_source,
     prepare_challenge_payload,
+    complete_task_assignment,
+    get_ground_truth_from_scorevision,
 )
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.cloudflare_helpers import emit_shard
@@ -42,31 +43,9 @@ from scorevision.utils.prometheus import (
     RUNNER_SHARDS_EMITTED_TOTAL,
     RUNNER_WARMUP_TOTAL,
 )
-from scorevision.utils.windows import get_window_start_block
-from scorevision.utils.miner_registry import get_miners_from_registry, Miner
-from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
-from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
-    filter_low_quality_pseudo_gt_annotations,
-)
-from scorevision.utils.manifest import Manifest, get_current_manifest
-from scorevision.utils.prometheus import (
-    RUNNER_BLOCK_HEIGHT,
-    RUNNER_RUNS_TOTAL,
-    RUNNER_PGT_RETRY_TOTAL,
-    RUNNER_PGT_FRAMES,
-    RUNNER_MINER_CALLS_TOTAL,
-    RUNNER_MINER_LATENCY_MS,
-    RUNNER_EVALUATION_FAIL_TOTAL,
-    RUNNER_SHARDS_EMITTED_TOTAL,
-    RUNNER_ACTIVE_MINERS,
-    RUNNER_LAST_RUN_DURATION_SECONDS,
-    RUNNER_LAST_PGT_DURATION_SECONDS,
-    RUNNER_MINER_LAST_DURATION_SECONDS,
-)
 from scorevision.utils.video_processing import FrameStore
 from scorevision.utils.settings import get_settings
-from scorevision.utils.video_processing import FrameStore
-from scorevision.utils.windows import get_current_window_id, is_window_active
+from scorevision.utils.windows import get_current_window_id, is_window_active, get_window_start_block
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
@@ -482,31 +461,55 @@ async def runner(
         miner_list = list(miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
+        element = manifest.get_element(id=element_id)
+        if element is None:
+            raise ValueError(f"element id {element_id} not found in manifest")
 
-        try:
-            element = manifest.get_element(id=element_id)
-            if element is None:
-                raise ValueError(f"element id {element_id} not found in manifest")
 
+        use_real_gt = bool(getattr(element, "ground_truth", False))
+
+        if use_real_gt:
+            challenge_id = int(chal_api.get("task_id"))
+
+            try:
+                await complete_task_assignment(challenge_id=challenge_id, element_id=element_id)
+
+                gt = await get_ground_truth_from_scorevision(
+                    challenge_id=challenge_id, element_id=element_id
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Runner] (element={element_id}) Ground-truth fetch failed, skipping challenge: {e}"
+                )
+                RUNNER_LAST_PGT_DURATION_SECONDS.set(0.0)
+                run_result = "gt_failed"
+                return
+
+            pseudo_gt_annotations = gt
+            RUNNER_LAST_PGT_DURATION_SECONDS.set(0.0)
+
+        else:
             pgt_build_start = loop.time()
-            challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
-                chal_api=chal_api,
-                required_n_frames=REQUIRED_PGT_FRAMES,
-                max_bbox_retries=MAX_PGT_BBOX_RETRIES,
-                max_quality_retries=MAX_PGT_QUALITY_RETRIES,
-                video_cache=video_cache,
-                element=element,
-            )
+            try:
+                challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
+                    chal_api=chal_api,
+                    required_n_frames=REQUIRED_PGT_FRAMES,
+                    max_bbox_retries=MAX_PGT_BBOX_RETRIES,
+                    max_quality_retries=MAX_PGT_QUALITY_RETRIES,
+                    video_cache=video_cache,
+                    element=element,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Runner] (element={element_id}) PGT quality gating failed after retries, skipping challenge: {e}"
+                )
+                last_pgt_duration = loop.time() - pgt_build_start
+                RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
+                run_result = "pgt_failed"
+                return
+
             last_pgt_duration = loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
-        except Exception as e:
-            logger.warning(
-                f"[Runner] (element={element_id}) PGT quality gating failed after retries, skipping challenge: {e}"
-            )
-            last_pgt_duration = loop.time() - pgt_build_start
-            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
-            run_result = "pgt_failed"
-            return
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))

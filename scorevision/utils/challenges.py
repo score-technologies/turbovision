@@ -301,6 +301,72 @@ async def get_challenge_from_scorevision_with_source(
     )
     return challenge, payload, chal_api, frame_store
 
+async def complete_task_assignment(
+    *,
+    challenge_id: int,
+    element_id: str | None = None,
+) -> None:
+    settings = get_settings()
+    if not settings.SCOREVISION_API:
+        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
+
+    keypair = load_hotkey_keypair(
+        wallet_name=settings.BITTENSOR_WALLET_COLD,
+        hotkey_name=settings.BITTENSOR_WALLET_HOT,
+    )
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
+
+    session = await get_async_client()
+    async with session.post(
+        f"{settings.SCOREVISION_API}/api/tasks/complete",
+        params=params,
+        json={"challenge_id": int(challenge_id)},
+    ) as response:
+        try:
+            response.raise_for_status()
+        except ClientResponseError as e:
+            raise ScoreVisionChallengeError(
+                f"HTTP error while completing task assignment: {e}"
+            )
+        await response.json()
+
+async def get_ground_truth_from_scorevision(
+    *,
+    challenge_id: int,
+    element_id: str | None = None,
+) -> Any:
+    settings = get_settings()
+    if not settings.SCOREVISION_API:
+        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
+
+    keypair = load_hotkey_keypair(
+        wallet_name=settings.BITTENSOR_WALLET_COLD,
+        hotkey_name=settings.BITTENSOR_WALLET_HOT,
+    )
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
+
+    session = await get_async_client()
+    async with session.get(
+        f"{settings.SCOREVISION_API}/api/tasks/{int(challenge_id)}/ground-truth",
+        params=params,
+    ) as response:
+        try:
+            response.raise_for_status()
+        except ClientResponseError as e:
+            if e.status == 403:
+                raise ScoreVisionChallengeError(
+                    "Assignment not completed for this validator (403)."
+                )
+            if e.status == 404:
+                raise ScoreVisionChallengeError("Ground truth not available (404).")
+            raise ScoreVisionChallengeError(f"HTTP error while fetching ground truth: {e}")
+
+        data = await response.json()
+        return data.get("ground_truth")
 
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,

@@ -266,6 +266,10 @@ class Element(BaseModel):
     latency_p95_ms: int
     service_rate_fps: int
     pgt_recipe_hash: str
+    ground_truth: bool = Field(
+        default=False,
+        description="If true, use real ground truth fetched from API instead of SAM3 pseudo-GT",
+    )
     baseline_theta: float = Field(
         ge=0.0, description="Score threshold for emissions (min 0.0)"
     )
