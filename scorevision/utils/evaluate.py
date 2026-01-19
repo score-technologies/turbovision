@@ -293,7 +293,7 @@ def get_element_scores(
     total_weighted_and_gated = sum(
         score["total_weighted_and_gated"] for score in element_score_values
     )
-    n_elements = len(manifest.elements)
+    n_elements = len(elements)
     logger.info(f"Dividing score equally among {n_elements} Elements")
     weighted_mean = total_weighted_and_gated / n_elements if n_elements else 0.0
     element_scores.update(
