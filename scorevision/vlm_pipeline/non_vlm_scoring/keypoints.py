@@ -166,11 +166,6 @@ def extract_masks_for_ground_and_lines(
     x, y, w, h = cv2.boundingRect(pts)
     is_rect = cv2.countNonZero(mask_ground_binary) == (w * h)
 
-    if is_rect:
-        raise InvalidMask(
-            f"Projected ground should not be rectangular"
-        )
-
     validate_mask_ground(mask=mask_ground_binary)
     validate_mask_lines(mask=mask_lines_binary)
     return mask_ground_binary, mask_lines_binary
@@ -269,12 +264,6 @@ def evaluate_keypoints_for_frame(
             if kpts[0] != 0 or kpts[1] != 0:
                 non_idxs.append(idx + 1)
 
-        for blacklist in blacklists:
-            is_included = set(non_idxs).issubset(blacklist)
-            if is_included:
-                if both_points_same_direction(frame_keypoints[blacklist[0] - 1], frame_keypoints[blacklist[1] - 1], frame_width, frame_height):
-                    logger.info(f"Suspect keypoints!")
-                    return 0
         
         warped_template = project_image_using_keypoints(
             image=floor_markings_template,
