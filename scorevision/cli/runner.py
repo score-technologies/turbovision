@@ -566,6 +566,7 @@ async def runner(
                         miner_hotkey_ss58=m.hotkey,
                         window_id=current_window_id,
                         window_start_block=window_start_block,
+                        trigger_block=block_number,
                         element_id=str(element_id) if element_id is not None else None,
                         manifest_hash=manifest_hash,
                         salt_id=0,
