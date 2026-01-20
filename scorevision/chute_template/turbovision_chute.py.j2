@@ -335,22 +335,23 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
 
     try:
         sys.meta_path.insert(0, HFRepoImportBlocker)
-        spec = spec_from_file_location("miner", path_miner)
-        module = module_from_spec(spec)
-        sys.modules["miner"] = module
-        spec.loader.exec_module(module)
-        miner_object = getattr(module, classname)
-        miner = miner_object(path_hf_repo)        
-        miner_safe = MinerWrapper(miner)
-        miner_safe.predict_batch(
-            batch_images=[randint(
-                0, 256, 
-                (540, 960, 3),
-                dtype="uint8"
-            )], 
-            offset=0, 
-            n_keypoints=32
-        )
+        with block_subprocess_only_when_called_from_miner_py(miner_path=path_miner):
+            spec = spec_from_file_location("miner", path_miner)
+            module = module_from_spec(spec)
+            sys.modules["miner"] = module
+            spec.loader.exec_module(module)
+            miner_object = getattr(module, classname)
+            miner = miner_object(path_hf_repo)        
+            miner_safe = MinerWrapper(miner)
+            miner_safe.predict_batch(
+                batch_images=[randint(
+                    0, 256, 
+                    (540, 960, 3),
+                    dtype="uint8"
+                )], 
+                offset=0, 
+                n_keypoints=32
+            )
         post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
 
     except Exception as e:
