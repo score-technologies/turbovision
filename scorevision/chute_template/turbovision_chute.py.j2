@@ -49,7 +49,7 @@ class TVPredictOutput(BaseModel):
 def get_whitelisted_paths() -> set[Path]:
     STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
     SITE_PACKAGES_ROOTS = {Path(p).resolve() for p in getsitepackages()} 
-    SITE_PACKAGES_ROOTS.add(Path(getusersitepackages()).resolve())
+    #SITE_PACKAGES_ROOTS.add(Path(getusersitepackages()).resolve())
 
     return {STDLIB_ROOT, *SITE_PACKAGES_ROOTS}
 
@@ -71,7 +71,7 @@ def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) ->
         if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
             continue
         if module_loaded_name == "_remote_module_non_scriptable.py":
-            return spec
+            continue
         offenders.append(module_loaded_name)
 
     if offenders:
