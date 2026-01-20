@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
+import os
 import sys
+import subprocess
+from contextlib import contextmanager
 from importlib.machinery import PathFinder
 from importlib.util import module_from_spec, spec_from_file_location
 from inspect import signature
@@ -45,34 +48,111 @@ class TVPredictOutput(BaseModel):
     error: str | None = None
 
 
-##=========SEC UTILITY FUNCTIONS=================
-_AUDIT_SUBPROC_INSTALLED = False
+##=========SECURITY UTILITY FUNCTIONS=================
+###---------SUBPROCESSING UTILS----------------------
 
-def install_repo_scoped_subprocess_blocker(*, repo_root: Path) -> None:
-    global _AUDIT_SUBPROC_INSTALLED
-    if _AUDIT_SUBPROC_INSTALLED:
-        return
+def _allowed_miner_filenames(miner_path: Path) -> set[Path]:
+    p1 = Path(miner_path)
+    out = set()
+    try:
+        out.add(p1.absolute())
+    except Exception:
+        pass
+    try:
+        out.add(p1.resolve())
+    except Exception:
+        pass
+    out.add(p1)
+    return {p for p in out if isinstance(p, Path)}
 
-    repo_root = repo_root.resolve().parent.parent
+def _callsite_is_exactly_miner_py(allowed_paths: set[Path]) -> bool:
+    """
+    True only if the immediate Python caller of subprocess.* is miner.py itself.
+    Not "somewhere in the stack".
+    """
+    f = sys._getframe(2)  # 0=this func, 1=wrapper, 2=actual caller of subprocess.Popen/run/etc
+    fname = f.f_code.co_filename
+    if not fname or fname.startswith("<"):
+        return False
+    try:
+        p = Path(fname)
+        return (p in allowed_paths) or (p.absolute() in allowed_paths) or (p.resolve() in allowed_paths)
+    except Exception:
+        return False
 
-    def _originates_from_repo() -> None:
-        f = sys._getframe()
-        while f is not None:
-            fname = f.f_code.co_filename
-            if fname and not fname.startswith("<"):
-                p = Path(fname).resolve()
-                if p.is_relative_to(repo_root):
-                    raise RuntimeError(f"❌ Blocked: miner code may not spawn subprocesses: {p}")
-            f = f.f_back
+@contextmanager
+def block_subprocess_only_when_called_from_miner_py(*, miner_path: Path):
+    allowed_paths = _allowed_miner_filenames(miner_path)
 
-    def _audit_hook(event: str, args) -> None:
-        if event != "subprocess.Popen":
-            return
-        _originates_from_repo()
+    real_popen = subprocess.Popen
+    real_run = subprocess.run
+    real_call = subprocess.call
+    real_check_call = subprocess.check_call
+    real_check_output = subprocess.check_output
 
-    sys.addaudithook(_audit_hook)
-    _AUDIT_SUBPROC_INSTALLED = True
+    real_os_system = os.system
+    real_os_popen = getattr(os, "popen", None)
 
+    def _blocked(*a, **k):
+        raise RuntimeError("❌ Blocked: miner.py may not spawn subprocesses")
+
+    def guarded_popen(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_popen(*a, **k)
+
+    def guarded_run(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_run(*a, **k)
+
+    def guarded_call(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_call(*a, **k)
+
+    def guarded_check_call(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_check_call(*a, **k)
+
+    def guarded_check_output(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_check_output(*a, **k)
+
+    def guarded_os_system(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_os_system(*a, **k)
+
+    def guarded_os_popen(*a, **k):
+        if _callsite_is_exactly_miner_py(allowed_paths):
+            return _blocked(*a, **k)
+        return real_os_popen(*a, **k)
+
+    subprocess.Popen = guarded_popen
+    subprocess.run = guarded_run
+    subprocess.call = guarded_call
+    subprocess.check_call = guarded_check_call
+    subprocess.check_output = guarded_check_output
+    os.system = guarded_os_system
+    if real_os_popen is not None:
+        os.popen = guarded_os_popen
+
+    try:
+        yield
+    finally:
+        subprocess.Popen = real_popen
+        subprocess.run = real_run
+        subprocess.call = real_call
+        subprocess.check_call = real_check_call
+        subprocess.check_output = real_check_output
+        os.system = real_os_system
+        if real_os_popen is not None:
+            os.popen = real_os_popen
+
+###---------FILE IMPORT UTILS----------------------
 
 def get_whitelisted_paths() -> set[Path]:
     STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
@@ -109,7 +189,7 @@ def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) ->
         )
 
 
-##=========UTILITY FUNCTIONS=================
+##=========GENERAL UTILITY FUNCTIONS=================
 def verify_cuda_version() -> str:
     min_version = (12, 8)
     if not torch.cuda.is_available():
@@ -213,8 +293,6 @@ def load_chute(
 
 
 def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
-    install_repo_scoped_subprocess_blocker(repo_root=path_hf_repo)
-
     path_hf_repo = path_hf_repo.resolve()
     path_miner = path_hf_repo / filename
     if not path_miner.is_file():
