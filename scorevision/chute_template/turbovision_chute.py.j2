@@ -55,24 +55,20 @@ def install_repo_scoped_subprocess_blocker(*, repo_root: Path) -> None:
 
     repo_root = repo_root.resolve().parent.parent
 
-    def _originates_from_repo() -> bool:
+    def _originates_from_repo() -> None:
         f = sys._getframe()
         while f is not None:
             fname = f.f_code.co_filename
             if fname and not fname.startswith("<"):
-                try:
-                    if Path(fname).resolve().is_relative_to(repo_root):
-                        return True
-                except Exception:
-                    pass
+                p = Path(fname).resolve()
+                if p.is_relative_to(repo_root):
+                    raise RuntimeError(f"❌ Blocked: miner code may not spawn subprocesses: {p}")
             f = f.f_back
-        return False
 
     def _audit_hook(event: str, args) -> None:
         if event != "subprocess.Popen":
             return
-        if _originates_from_repo():
-            raise RuntimeError("❌ Blocked: miner code may not spawn subprocesses")
+        _originates_from_repo()
 
     sys.addaudithook(_audit_hook)
     _AUDIT_SUBPROC_INSTALLED = True
