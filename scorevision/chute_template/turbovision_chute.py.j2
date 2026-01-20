@@ -53,7 +53,7 @@ def install_repo_scoped_subprocess_blocker(*, repo_root: Path) -> None:
     if _AUDIT_SUBPROC_INSTALLED:
         return
 
-    repo_root = repo_root.resolve()
+    repo_root = repo_root.resolve().parent.parent
 
     def _originates_from_repo() -> bool:
         f = sys._getframe()
