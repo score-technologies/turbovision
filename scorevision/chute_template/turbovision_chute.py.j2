@@ -47,22 +47,14 @@ class TVPredictOutput(BaseModel):
     error: str | None = None
 
 
-##=========UTILITY FUNCTIONS=================
-_AUDIT_HOOK_INSTALLED = False
-def install_audit_hook_block_subprocess() -> None:
-    global _AUDIT_HOOK_INSTALLED
-    if _AUDIT_HOOK_INSTALLED:
-        return
+##=========SEC UTILITY FUNCTIONS=================
+def snapshot_modules() -> dict[str, Any]:
+    # store object identity + file path (if any)
+    snap = {}
+    for k, m in sys.modules.items():
+        snap[k] = (id(m), getattr(m, "__file__", None))
+    return snap
 
-    def _audit_hook(event: str, args) -> None:
-        if event == "subprocess.Popen":
-            raise RuntimeError("❌ Blocked: subprocess execution is not allowed in miner")
-
-        if event in ("os.system", "os.execve", "os.posix_spawn"):
-            raise RuntimeError(f"❌ Blocked: process execution is not allowed in miner ({event})")
-
-    sys.addaudithook(_audit_hook)
-    _AUDIT_HOOK_INSTALLED = True
 
 def get_whitelisted_paths() -> set[Path]:
     STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
@@ -71,33 +63,61 @@ def get_whitelisted_paths() -> set[Path]:
 
     return {STDLIB_ROOT, *SITE_PACKAGES_ROOTS}
 
-def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) -> None:
+def post_check_files_against_whitelist(*, before: dict[str, tuple[int, str | None]], miner_path: Path, repo_root: Path) -> None:
     miner_path = miner_path.resolve()
+    repo_root = repo_root.resolve()
     WHITELIST = get_whitelisted_paths()
-    after = set(sys.modules.keys()) - before
+
+    for name, (old_id, _) in before.items():
+        if name not in sys.modules:
+            raise ImportError(f"❌ Miner deleted sys.modules entry: {name}")
+        if id(sys.modules[name]) != old_id:
+            raise ImportError(f"❌ Miner replaced sys.modules entry: {name}")
+
     offenders = []
-    for module_loaded_name in sorted(after):
-        module_loaded = sys.modules.get(module_loaded_name)
-        if module_loaded is None:
+    for name, mod in sys.modules.items():
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file:
             continue
-        module_loaded_file = getattr(module_loaded, "__file__", None)
-        if not module_loaded_file:
-            continue  
-        module_loaded_filepath = Path(module_loaded_file).resolve()
-        if module_loaded_filepath == miner_path:
+        p = Path(mod_file).resolve()
+        if p == miner_path:
             continue
-        if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
+        if p.is_relative_to(repo_root):
+            offenders.append(f"{name} -> {p}")
             continue
-        if module_loaded_name == "_remote_module_non_scriptable":
+        if any(p.is_relative_to(root) for root in WHITELIST):
             continue
-        offenders.append(module_loaded_name)
-
     if offenders:
-        raise ImportError(
-            f"Miner loaded modules outside the whitelist: {', '.join(offenders)}"
-        )
+        raise ImportError("❌ Miner loaded modules outside the whitelist: \n" + "\n".join(offenders))
 
 
+# def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) -> None:
+#     miner_path = miner_path.resolve()
+#     WHITELIST = get_whitelisted_paths()
+#     after = set(sys.modules.keys()) - before
+#     offenders = []
+#     for module_loaded_name in sorted(after):
+#         module_loaded = sys.modules.get(module_loaded_name)
+#         if module_loaded is None:
+#             continue
+#         module_loaded_file = getattr(module_loaded, "__file__", None)
+#         if not module_loaded_file:
+#             continue  
+#         module_loaded_filepath = Path(module_loaded_file).resolve()
+#         if module_loaded_filepath == miner_path:
+#             continue
+#         if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
+#             continue
+#         if module_loaded_name == "_remote_module_non_scriptable":
+#             continue
+#         offenders.append(module_loaded_name)
+
+#     if offenders:
+#         raise ImportError(
+#             f"Miner loaded modules outside the whitelist: {', '.join(offenders)}"
+#         )
+
+##=========UTILITY FUNCTIONS=================
 def verify_cuda_version() -> str:
     min_version = (12, 8)
     if not torch.cuda.is_available():
@@ -208,7 +228,7 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         print(e)
         pass
 
-    install_audit_hook_block_subprocess()
+    #install_audit_hook_block_subprocess()
 
     path_hf_repo = path_hf_repo.resolve()
     path_miner = path_hf_repo / filename
@@ -218,7 +238,8 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
         )
 
     WHITELIST = get_whitelisted_paths()
-    BEFORE_EXEC = set(sys.modules.keys())
+    BEFORE_EXEC = snapshot_modules()
+    #BEFORE_EXEC = set(sys.modules.keys())
 
     class HFRepoImportBlocker(PathFinder):
         @classmethod
@@ -241,7 +262,8 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
 
         def predict_batch(self, *args, **kwargs):
             result = self._miner.predict_batch(*args, **kwargs)
-            post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+            #post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+            post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner, repo_root=path_hf_repo)
             return result
 
         def __repr__(self) -> str:
@@ -268,7 +290,8 @@ def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
             offset=0, 
             n_keypoints=32
         )
-        post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+        #post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner)
+        post_check_files_against_whitelist(before=BEFORE_EXEC, miner_path=path_miner, repo_root=path_hf_repo)
 
     except Exception as e:
         raise e
