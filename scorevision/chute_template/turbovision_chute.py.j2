@@ -88,7 +88,7 @@ def post_check_files_against_whitelist(*, before: set[str], miner_path: Path) ->
             continue
         if any(module_loaded_filepath.is_relative_to(root) for root in WHITELIST):
             continue
-        if module_loaded_name == "_remote_module_non_scriptable.py":
+        if module_loaded_name == "_remote_module_non_scriptable":
             continue
         offenders.append(module_loaded_name)
 
