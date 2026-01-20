@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import os
 import sys
+import site
 from importlib.machinery import PathFinder
 from importlib.util import module_from_spec, spec_from_file_location
 from inspect import signature
@@ -46,6 +48,22 @@ class TVPredictOutput(BaseModel):
 
 
 ##=========UTILITY FUNCTIONS=================
+_AUDIT_HOOK_INSTALLED = False
+def install_audit_hook_block_subprocess() -> None:
+    global _AUDIT_HOOK_INSTALLED
+    if _AUDIT_HOOK_INSTALLED:
+        return
+
+    def _audit_hook(event: str, args) -> None:
+        if event == "subprocess.Popen":
+            raise RuntimeError("❌ Blocked: subprocess execution is not allowed in miner")
+
+        if event in ("os.system", "os.execve", "os.posix_spawn"):
+            raise RuntimeError(f"❌ Blocked: process execution is not allowed in miner ({event})")
+
+    sys.addaudithook(_audit_hook)
+    _AUDIT_HOOK_INSTALLED = True
+
 def get_whitelisted_paths() -> set[Path]:
     STDLIB_ROOT = Path(get_paths()["stdlib"]).resolve()
     SITE_PACKAGES_ROOTS = {Path(p).resolve() for p in getsitepackages()} 
@@ -181,7 +199,17 @@ def load_chute(
     return chute
 
 
+
 def load_miner_from_hf_repo(path_hf_repo: Path, filename: str, classname: str):
+    os.environ["PYTHONNOUSERSITE"] = "1"
+    try:
+        site.ENABLE_USER_SITE = False
+    except Exception as e:
+        print(e)
+        pass
+
+    install_audit_hook_block_subprocess()
+
     path_hf_repo = path_hf_repo.resolve()
     path_miner = path_hf_repo / filename
     if not path_miner.is_file():
