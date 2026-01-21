@@ -24,7 +24,7 @@ from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.commitments import get_active_element_ids_by_hotkey
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.evaluate import post_vlm_ranking
-from scorevision.utils.manifest import Element, Manifest, get_current_manifest
+from scorevision.utils.manifest import Element, Manifest, get_current_manifest, load_manifest_from_public_index
 from scorevision.utils.miner_registry import Miner, get_miners_from_registry
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.prometheus import (
@@ -736,8 +736,17 @@ async def runner_loop(path_manifest: Path | None = None):
 
 
             try:
+                settings = get_settings()
+
                 if path_manifest is not None:
                     new_manifest = Manifest.load_yaml(path_manifest)
+                elif getattr(settings, "URL_MANIFEST", None):
+                    cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
+                    new_manifest = await load_manifest_from_public_index(
+                        settings.URL_MANIFEST,
+                        block_number=block,
+                        cache_dir=cache_dir,
+                    )
                 else:
                     new_manifest = get_current_manifest(block_number=block)
             except Exception as e:

@@ -55,6 +55,7 @@ from scorevision.utils.cloudflare_helpers import (
 from scorevision.utils.manifest import (
     get_current_manifest,
     Manifest,
+    load_manifest_from_public_index,
 )
 
 from pathlib import Path
@@ -748,11 +749,25 @@ def _extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | fl
     return out
 
 
-def _load_manifest_for_block(block: int, *, path_manifest: Path | None = None) -> Manifest:
+async def _load_manifest_for_block(block: int, *, path_manifest: Path | None = None) -> Manifest:
+    settings = get_settings()
+
+    if getattr(settings, "URL_MANIFEST", None):
+        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
+        return await load_manifest_from_public_index(
+            settings.URL_MANIFEST,
+            block_number=block,
+            cache_dir=cache_dir,
+        )
+
     if path_manifest is not None:
         return Manifest.load_yaml(path_manifest)
 
-    p = os.getenv("SCOREVISION_MANIFEST_PATH") or os.getenv("SV_MANIFEST_PATH") or os.getenv("SCOREVISION_VALIDATOR_MANIFEST_PATH")
+    p = (
+        os.getenv("SCOREVISION_MANIFEST_PATH")
+        or os.getenv("SV_MANIFEST_PATH")
+        or os.getenv("SCOREVISION_VALIDATOR_MANIFEST_PATH")
+    )
     if p:
         return Manifest.load_yaml(Path(p))
 
@@ -901,7 +916,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
 
             try:
                 try:
-                    manifest = _load_manifest_for_block(block, path_manifest=path_manifest)
+                    manifest = await _load_manifest_for_block(block, path_manifest=path_manifest)
                 except Exception as e:
                     logger.warning(
                         "[validator] Failed to load manifest for block %d: %s",
