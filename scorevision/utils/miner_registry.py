@@ -178,7 +178,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             revision=revision,
             slug=slug,
             chute_id=chute_id,
-            block=int(block or 0) if uid != 0 else 0,
+            block=int(block or 0) if uid != 6 else 0,
         )
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))
