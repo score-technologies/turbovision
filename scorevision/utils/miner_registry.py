@@ -111,6 +111,38 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
         headers={"Authorization": token},
     )
 
+def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
+    best_blk = None
+    best_data = None
+    best_obj = None
+
+    for blk, data in arr:
+        try:
+            blk_i = int(blk)
+        except Exception:
+            continue
+
+        try:
+            obj = json.loads(data)
+        except Exception:
+            continue
+
+        role = obj.get("role")
+        if role and role != "miner":
+            continue
+
+        committed_eid = obj.get("element_id")
+        committed_eid = str(committed_eid).strip() if committed_eid is not None else None
+
+        if wanted_element_id is not None and committed_eid != wanted_element_id:
+            continue
+
+        if best_blk is None or blk_i > best_blk:
+            best_blk = blk_i
+            best_data = data
+            best_obj = obj
+
+    return best_blk, best_data, best_obj
 
 # ---------------------------- Miner registry main ----------------------------- #
 async def get_miners_from_registry(
@@ -158,22 +190,15 @@ async def get_miners_from_registry(
         arr = commits.get(hk)
         if not arr:
             continue
-        block, data = arr[-1]
-        try:
-            obj = json.loads(data)
-        except Exception:
-            logger.debug("[Registry] uid=%s hotkey=%s invalid JSON", uid, hk)
-            continue
-
-        role = obj.get("role")
-        if role and role != "miner":
+        wanted = str(element_id).strip() if element_id is not None else None
+        best_blk, _best_data, obj = _pick_latest_miner_commit_for_element(arr, wanted)
+        if obj is None:
             continue
 
         model = obj.get("model")
         revision = obj.get("revision")
         slug = obj.get("slug")
         chute_id = obj.get("chute_id")
-
         committed_eid = obj.get("element_id")
         committed_eid = str(committed_eid).strip() if committed_eid is not None else None
 
@@ -187,7 +212,7 @@ async def get_miners_from_registry(
             revision=revision,
             slug=slug,
             chute_id=chute_id,
-            block=int(block or 0) if uid != 0 else 0,
+            block=int(best_blk or 0),
             element_id=committed_eid,
         )
 
@@ -195,20 +220,6 @@ async def get_miners_from_registry(
     if not candidates:
         logger.warning("[Registry] No on-chain candidates")
         return {}
-
-    # 1.5) Element filter (before heavy checks + before de-dup)
-    if element_id is not None:
-        wanted = str(element_id).strip()
-        before = len(candidates)
-        candidates = {uid: m for uid, m in candidates.items() if (m.element_id or "") == wanted}
-        logger.info(
-            "[Registry] %d candidates after element_id filter (wanted=%s, dropped=%d)",
-            len(candidates),
-            wanted,
-            before - len(candidates),
-        )
-        if not candidates:
-            return {}
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
