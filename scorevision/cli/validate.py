@@ -507,48 +507,41 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
-            mu_recent_by_V_m, n_total_recent_by_m = await _collect_recent_mu_by_V_m(
+            challenge_scores_by_V_m = await _collect_recent_challenge_scores_by_V_m(
                 tail=tail,
                 validator_indexes=validator_indexes,
                 hk_to_uid=hk_to_uid,
                 K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
             )
 
-            if mu_recent_by_V_m:
-                S_recent = _aggregate_recent_S_by_m(
-                    mu_recent_by_V_m,
-                    stake_by_hk=stake_by_hk,
-                    a_final=a_final,
-                    b_final=b_final,
-                )
+            challenge_scores_by_m = _aggregate_challenge_scores_by_m(
+                challenge_scores_by_V_m
+            )
 
-                uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
-                first_commit_block_by_hk = await _first_commit_block_by_miner(NETUID)
+            uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
+            first_commit_block_by_hk = await _first_commit_block_by_miner(NETUID)
 
-                final_uid = _pick_winner_with_window_tiebreak(
-                    winner_uid,
-                    hk_to_uid=hk_to_uid,
-                    uid_to_hk=uid_to_hk,
-                    S_recent=S_recent,
-                    delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
-                    delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
-                    first_commit_block_by_hk=first_commit_block_by_hk,
-                )
+            candidate_uids = set(S_by_m.keys())
 
-                if final_uid != winner_uid:
-                    logger.info(
-                        "[window-tiebreak] Provisional winner=%d (S_recent=%.6f) -> "
-                        "Final winner=%d (S_recent=%.6f) via earliest on-chain commit",
-                        winner_uid,
-                        S_recent.get(winner_uid, float("nan")),
-                        final_uid,
-                        S_recent.get(final_uid, float("nan")),
-                    )
-                    winner_uid = final_uid
-            else:
+            final_uid = _pick_winner_with_window_tiebreak(
+                winner_uid,
+                hk_to_uid=hk_to_uid,
+                uid_to_hk=uid_to_hk,
+                challenge_scores_by_m=challenge_scores_by_m,
+                candidate_uids=candidate_uids,
+                delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
+                delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
+                first_commit_block_by_hk=first_commit_block_by_hk,
+            )
+
+            if final_uid != winner_uid:
                 logger.info(
-                    "[window-tiebreak] No recent data available; keeping provisional winner."
+                    "[window-tiebreak] Provisional winner=%d -> "
+                    "Final winner=%d via challenge-by-challenge comparison",
+                    winner_uid,
+                    final_uid,
                 )
+                winner_uid = final_uid
 
         except Exception as e:
             logger.warning(
@@ -689,6 +682,60 @@ async def _collect_recent_mu_by_V_m(
     return mu_recent_by_V_m, n_total_recent_by_m
 
 
+async def _collect_recent_challenge_scores_by_V_m(
+    tail: int,
+    validator_indexes: dict[str, str],
+    hk_to_uid: dict[str, int],
+    *,
+    K: int = 25,
+) -> dict[tuple[str, int], deque]:
+
+    challenge_scores_by_V_m: dict[tuple[str, int], deque] = defaultdict(
+        lambda: deque(maxlen=K)
+    )
+
+    async for line in dataset_sv_multi(tail, validator_indexes):
+        try:
+            payload = line.get("payload") or {}
+            miner = payload.get("miner") or {}
+            miner_hk = (miner.get("hotkey") or "").strip()
+            if not miner_hk or miner_hk not in hk_to_uid:
+                continue
+            m = hk_to_uid[miner_hk]
+            V = (line.get("hotkey") or "").strip()
+            if not V:
+                continue
+            score = float(((payload.get("evaluation") or {}).get("score")) or 0.0)
+
+            meta = payload.get("meta") or {}
+            task_id = meta.get("task_id")
+            if not task_id:
+                continue
+
+            challenge_id = str(task_id)
+            challenge_scores_by_V_m[(V, m)].append((challenge_id, score))
+        except Exception:
+            continue
+
+    return challenge_scores_by_V_m
+
+
+def _aggregate_challenge_scores_by_m(
+    challenge_scores_by_V_m: dict[tuple[str, int], deque],
+) -> dict[int, dict[str, float]]:
+
+    result: dict[int, dict[str, float]] = {}
+
+    for (V, m), dq in challenge_scores_by_V_m.items():
+        if m not in result:
+            result[m] = {}
+
+        for challenge_id, score in dq:
+            result[m][challenge_id] = score
+
+    return result
+
+
 def _stake_of(hk: str, stake_by_hk: dict[str, float]) -> float:
     try:
         return max(0.0, float(stake_by_hk.get(hk, 0.0)))
@@ -720,35 +767,93 @@ def _aggregate_recent_S_by_m(
     return S_recent
 
 
+def _are_similar_by_challenges(
+    challenge_scores1: dict[str, float],
+    challenge_scores2: dict[str, float],
+    *,
+    delta_abs: float,
+    delta_rel: float,
+    min_common_challenges: int = 5,
+) -> bool:
+
+    common_challenges = set()
+    all_challenges = set(challenge_scores1.keys()) | set(challenge_scores2.keys())
+    
+    for challenge_id in all_challenges:
+        score1 = challenge_scores1.get(challenge_id, 0.0)
+        score2 = challenge_scores2.get(challenge_id, 0.0)
+        if abs(score1) > 1e-9 and abs(score2) > 1e-9:
+            common_challenges.add(challenge_id)
+    
+    if len(common_challenges) < min_common_challenges:
+        return False
+    
+    for challenge_id in common_challenges:
+        score1 = challenge_scores1[challenge_id]
+        score2 = challenge_scores2[challenge_id]
+        
+        max_score = max(abs(score1), abs(score2))
+        threshold = max(delta_abs, delta_rel * max_score)
+        
+        if abs(score1 - score2) > threshold:
+            return False
+    
+    return True
+
+
 def _pick_winner_with_window_tiebreak(
     winner_uid: int,
     hk_to_uid: dict[str, int],
     uid_to_hk: dict[int, str],
-    S_recent: dict[int, float],
+    challenge_scores_by_m: dict[int, dict[str, float]],
+    candidate_uids: set[int],
     *,
     delta_abs: float,
     delta_rel: float,
     first_commit_block_by_hk: dict[str, int],
 ) -> int:
-    """ """
-    if winner_uid not in S_recent:
+    if winner_uid not in challenge_scores_by_m:
         return winner_uid
-
-    s_win = S_recent[winner_uid]
-    window_hi = s_win + max(delta_abs, delta_rel * abs(s_win))
-    window_lo = s_win - max(delta_abs, delta_rel * abs(s_win))
-
-    close_uids = [m for m, s in S_recent.items() if window_lo <= s <= window_hi]
-    if winner_uid not in close_uids:
-        close_uids.append(winner_uid)
-
-    if len(close_uids) == 1:
+    
+    winner_scores = challenge_scores_by_m[winner_uid]
+    
+    similar_uids = [winner_uid]
+    
+    for m in candidate_uids:
+        if m == winner_uid:
+            continue
+        
+        challenge_scores = challenge_scores_by_m.get(m)
+        if not challenge_scores:
+            continue
+        
+        if _are_similar_by_challenges(
+            winner_scores,
+            challenge_scores,
+            delta_abs=delta_abs,
+            delta_rel=delta_rel,
+            min_common_challenges=5,
+        ):
+            similar_uids.append(m)
+            logger.debug(
+                f"[window-tiebreak] Miner {m} is similar to provisional winner {winner_uid} "
+                f"by challenge comparison"
+            )
+    
+    if len(similar_uids) == 1:
+        logger.debug(
+            f"[window-tiebreak] No similar miners found; provisional winner {winner_uid} wins"
+        )
         return winner_uid
-
+    
+    logger.info(
+        f"[window-tiebreak] Found {len(similar_uids)} similar miners: {similar_uids}"
+    )
+    
     best_uid = winner_uid
     best_blk = None
 
-    for m in close_uids:
+    for m in similar_uids:
         hk = uid_to_hk.get(m)
         if not hk:
             continue
