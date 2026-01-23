@@ -125,6 +125,10 @@ async def prepare_challenge_payload(
     else:
         frame_store = cached_store
 
+    total_frames = frame_store.get_frame_count()
+    if total_frames <= 0:
+        raise ScoreVisionChallengeError("Could not determine video frame count")
+
     select_frames: list[ndarray] = []
     flow_frames: list[ndarray] = []
     for fn in selected_frame_numbers:
@@ -153,6 +157,7 @@ async def prepare_challenge_payload(
         ),
         "task_id": challenge.get("task_id"),
         "challenge_type": challenge.get("challenge_type"),
+        "n_frames_total": total_frames,   
     }
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]

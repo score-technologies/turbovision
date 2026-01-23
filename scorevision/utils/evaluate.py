@@ -133,9 +133,16 @@ def post_vlm_ranking(
     if challenge_type is None:
         challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
+    expected_total = int(payload.meta.get("n_frames_total") or 0)
+
+    logger.info(
+        "Frame check: miner_unique=%s expected_total=%s",
+        len(miner_annotations),
+        expected_total,
+    )
     if (
         miner_run.success
-        and len(miner_annotations) == settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        and len(miner_annotations) == expected_total
         and challenge_type is not None
     ):
         score_breakdown.keypoints.floor_markings_alignment = evaluate_keypoints(
