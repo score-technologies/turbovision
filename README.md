@@ -2,7 +2,7 @@
 
 Turbo Vision is Score's decentralized intelligence layer for live video and imagery. The network pairs expert models with a global community of validators and miners so raw footage becomes structured, decision-ready data in real time, with our first deployments concentrated in professional sports. 
 
-## Why Score built Turbo Vision
+## Why Score built Turbo Vision 
 
 - Turbo Vision adapts to any high-volume visual stream—sports broadcasts, CCTV, aerial feeds, and more—so organizations can act on live signals instead of static reports. 
 - Traditional pipelines are slow and costly; generic foundation models are too expensive to run continuously. Turbo Vision closes the gap with specialist, fast models that run at scale.
