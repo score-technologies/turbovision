@@ -105,6 +105,8 @@ def post_vlm_ranking(
     if challenge_type is None:
         challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
+    expected_total = int(payload.meta.get("n_frames_total") or 0)
+
     predicted_frames = (
         ((miner_run.predictions or {}).get("frames") or [])
         if miner_run.predictions
@@ -112,12 +114,19 @@ def post_vlm_ranking(
     )
     frame_count = len(predicted_frames)
 
+    logger.info(
+        "Frame check: miner_unique=%s expected_total=%s",
+        frame_count,
+        expected_total,
+    )
+
+
     breakdown_dict = {}
 
     if (
         miner_run.success
         and frame_count >= settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER
-        and frame_count <= settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        and frame_count <= expected_total
         and challenge_type is not None
         and manifest is not None
     ):

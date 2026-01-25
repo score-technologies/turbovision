@@ -90,25 +90,6 @@ async def prepare_challenge_payload(
     if not video_url:
         raise ScoreVisionChallengeError("Challenge missing video_url/asset_url")
 
-    frame_numbers = list(
-        range(
-            settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER,
-            settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER,
-        )
-    )
-    # shuffle(frame_numbers)
-    start_frame_number = randint(
-        1,
-        settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
-        - settings.SCOREVISION_VLM_SELECT_N_FRAMES
-        - 1,
-    )
-    selected_frame_numbers = frame_numbers[
-        start_frame_number : start_frame_number
-        + settings.SCOREVISION_VLM_SELECT_N_FRAMES
-    ]
-    logger.info(f"Selected Frames for Testing: {selected_frame_numbers}")
-
     cached_store: FrameStore | None = None
     cached_path: Path | None = None
     if video_cache is not None:
@@ -116,9 +97,9 @@ async def prepare_challenge_payload(
         cached_path = video_cache.get("path")
 
     if cached_store is None:
-        video_name, frame_store = await download_video_cached(
+        _, frame_store = await download_video_cached(
             url=video_url,
-            _frame_numbers=selected_frame_numbers,
+            _frame_numbers=[],
             cached_path=cached_path,
         )
         if video_cache is not None:
@@ -126,6 +107,29 @@ async def prepare_challenge_payload(
             video_cache["path"] = frame_store.video_path
     else:
         frame_store = cached_store
+
+    total_frames = frame_store.get_frame_count()
+    if total_frames <= 1:
+        raise ScoreVisionChallengeError("Could not determine video frame count")
+
+    min_frame = max(1, int(settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER))
+    max_frame_setting = int(settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER)
+
+    max_frame = min(max_frame_setting, total_frames)
+
+    n_select = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
+
+    if (max_frame - min_frame) < n_select:
+        raise ScoreVisionChallengeError(
+            f"Not enough frames to select {n_select} frames "
+            f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+        )
+    start = randint(min_frame, max_frame - n_select)
+    selected_frame_numbers = list(range(start, start + n_select))
+    logger.info(
+        f"Selected Frames (dynamic): {selected_frame_numbers} "
+        f"(min={min_frame}, max={max_frame}, total={total_frames})"
+    )
 
     select_frames: list[ndarray] = []
     flow_frames: list[ndarray] = []
@@ -136,33 +140,29 @@ async def prepare_challenge_payload(
         flow_frames.append(flow)
 
     logger.info(f"frames {selected_frame_numbers} successful")
+
     if not select_frames:
-        raise ScoreVisionChallengeError(
-            "No Frames were successfully extracted from Video"
-        )
+        raise ScoreVisionChallengeError("No Frames were successfully extracted from Video")
     if not flow_frames:
-        raise ScoreVisionChallengeError(
-            "No Dense Optical Flows were successfully computed from Video"
-        )
+        raise ScoreVisionChallengeError("No Dense Optical Flows were successfully computed from Video")
 
     height, width = select_frames[0].shape[:2]
     meta = {
         "version": 1,
         "width": width or 0,
         "height": height or 0,
-        "fps": int(
-            challenge.get("fps") or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
-        ),
+        "fps": int(challenge.get("fps") or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND),
         "task_id": challenge.get("task_id"),
         "challenge_type": challenge.get("challenge_type"),
+        "n_frames_total": total_frames,
+        "batch_size": batch_size,
+        "n_keypoints": 32,  # TODO: update based on challenge type
     }
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]
-    meta["batch_size"] = batch_size
-    meta["n_keypoints"] = (
-        32  # TODO: update n_keypoints based on challenge type (32 is for football)
-    )
+
     payload = TVPredictInput(url=video_url, meta=meta)
+
     return (
         payload,
         selected_frame_numbers,
