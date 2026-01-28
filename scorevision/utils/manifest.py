@@ -162,10 +162,10 @@ KEYPOINT_TEMPLATES: dict[ChallengeType, KeypointTemplate] = {
             (175, 120),  # 13
             (175, 1275),  # 14
         ],
-        keypoint_index_bottom_left=24,
-        keypoint_index_bottom_right=27,
+        keypoint_index_bottom_left=10,
+        keypoint_index_bottom_right=11,
         keypoint_index_top_left=0,
-        keypoint_index_top_right=3,
+        keypoint_index_top_right=1,
     ),
     ChallengeType.FOOTBALL: KeypointTemplate(
         filename="football_pitch_template.png",
