@@ -13,7 +13,6 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.challenges import (
     ScoreVisionChallengeError,
     build_svchallenge_from_parts,
-    get_challenge_from_scorevision,
     get_challenge_from_scorevision_with_source,
     prepare_challenge_payload,
     complete_task_assignment,
@@ -324,11 +323,6 @@ async def runner(
     frame_store: FrameStore | None = None
     run_result = "success"
 
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
-        "0",
-        "false",
-        "False",
-    )
     manifest_hash: str | None = None
     current_window_id: str | None = None
     logger.info("[Runner] START element_id=%s block=%s", element_id, block_number)
@@ -336,82 +330,61 @@ async def runner(
     try:
         chal_api: dict
 
-        if use_v3:
-            if manifest is None:
-                logger.error(
-                    "[Runner] SCOREVISION_USE_CHALLENGE_V3=1 but no Manifest provided to runner()"
+        if manifest is None:
+            logger.error("[Runner] No Manifest provided to runner()")
+            run_result = "manifest_error"
+            return
+        if element_id is None:
+            logger.error("[Runner] No element_id provided to runner()")
+            run_result = "no_element_id"
+            return
+
+        manifest_hash = manifest.hash
+
+        try:
+            challenge, payload, chal_api, frame_store = (
+                await get_challenge_from_scorevision_with_source(
+                    video_cache=video_cache,
+                    manifest_hash=manifest_hash,
+                    element_id=element_id,
                 )
-                run_result = "manifest_error"
-                return
-            if element_id is None:
-                logger.error(
-                    "[Runner] SCOREVISION_USE_CHALLENGE_V3=1 but no element_id provided to runner()"
-                )
-                run_result = "no_element_id"
-                return
-
-            manifest_hash = manifest.hash
-
-            try:
-                challenge, payload, chal_api, frame_store = (
-                    await get_challenge_from_scorevision_with_source(
-                        video_cache=video_cache,
-                        manifest_hash=manifest_hash,
-                        element_id=element_id,
-                    )
-                )
-            except ScoreVisionChallengeError as ce:
-                msg = str(ce)
-                if "No active evaluation window" in msg:
-                    logger.warning(
-                        "[Runner] (element=%s) No active evaluation window (404) from challenge API v3. Skipping run.",
-                        element_id,
-                    )
-                    run_result = "no_window"
-                elif "Rate limited by /api/challenge/v3" in msg:
-                    logger.warning(
-                        "[Runner] (element=%s) Rate limited by challenge API v3 (409). Backing off this run.",
-                        element_id,
-                    )
-                    run_result = "rate_limited"
-                elif "Manifest expired or rejected" in msg:
-                    logger.warning(
-                        "[Runner] (element=%s) Manifest expired or rejected (410). Operator action required.",
-                        element_id,
-                    )
-                    run_result = "manifest_expired"
-                else:
-                    logger.error("[Runner] Challenge API error: %s", msg)
-                    run_result = "challenge_error"
-                return
-
-            chal_wid = chal_api.get("window_id")
-            current_window_id = chal_wid
-
-            eid_from_chal = _extract_element_id_from_chal_api(chal_api)
-            if eid_from_chal and str(eid_from_chal) != str(element_id):
+            )
+        except ScoreVisionChallengeError as ce:
+            msg = str(ce)
+            if "No active evaluation window" in msg:
                 logger.warning(
-                    "[Runner] (element=%s) element_id mismatch between requested (%s) and challenge (%s).",
+                    "[Runner] (element=%s) No active evaluation window (404) from challenge API v3. Skipping run.",
                     element_id,
+                )
+                run_result = "no_window"
+            elif "Rate limited by /api/challenge/v3" in msg:
+                logger.warning(
+                    "[Runner] (element=%s) Rate limited by challenge API v3 (409). Backing off this run.",
                     element_id,
-                    eid_from_chal,
                 )
-        else:
-            try:
-                challenge, payload, chal_api, frame_store = (
-                    await get_challenge_from_scorevision_with_source(
-                        video_cache=video_cache
-                    )
+                run_result = "rate_limited"
+            elif "Manifest expired or rejected" in msg:
+                logger.warning(
+                    "[Runner] (element=%s) Manifest expired or rejected (410). Operator action required.",
+                    element_id,
                 )
-            except ScoreVisionChallengeError as ce:
-                msg = str(ce)
-                logger.error("[Runner] Challenge API error (V2): %s", msg)
+                run_result = "manifest_expired"
+            else:
+                logger.error("[Runner] Challenge API error: %s", msg)
                 run_result = "challenge_error"
-                return
+            return
 
-            eid_from_chal = _extract_element_id_from_chal_api(chal_api)
-            element_id = element_id or eid_from_chal
-            current_window_id = chal_api.get("window_id") or None
+        chal_wid = chal_api.get("window_id")
+        current_window_id = chal_wid
+
+        eid_from_chal = _extract_element_id_from_chal_api(chal_api)
+        if eid_from_chal and str(eid_from_chal) != str(element_id):
+            logger.warning(
+                "[Runner] (element=%s) element_id mismatch between requested (%s) and challenge (%s).",
+                element_id,
+                element_id,
+                eid_from_chal,
+            )
 
         if not element_id:
             logger.warning(
@@ -646,12 +619,6 @@ async def runner_loop(path_manifest: Path | None = None):
         os.getenv("SV_DEFAULT_ELEMENT_TEMPO_BLOCKS", "300")
     )
 
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
-        "0",
-        "false",
-        "False",
-    )
-
     def signal_handler():
         logger.warning("Received shutdown signal, stopping runner...")
         shutdown_event.set()
@@ -667,7 +634,7 @@ async def runner_loop(path_manifest: Path | None = None):
     manifest: Optional[Manifest] = None
     manifest_hash: Optional[str] = None
 
-    logger.warning("[RunnerLoop] starting (per-element scheduling, use_v3=%s)", use_v3)
+    logger.warning("[RunnerLoop] starting (per-element scheduling)")
 
     while not shutdown_event.is_set():
         try:
@@ -711,29 +678,6 @@ async def runner_loop(path_manifest: Path | None = None):
                 continue
 
             RUNNER_BLOCK_HEIGHT.set(block)
-
-            if not use_v3:
-                logger.info(
-                    "[RunnerLoop] V2 mode active (no manifest), launching generic runner at block %s",
-                    block,
-                )
-                await runner(block_number=block, manifest=None, element_id=None)
-                try:
-                    await asyncio.wait_for(
-                        st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    continue
-                except (KeyError, ConnectionError, RuntimeError) as err:
-                    logger.warning(
-                        "[RunnerLoop] wait_for_block error (%s); resetting subtensor",
-                        err,
-                    )
-                    reset_subtensor()
-                    st = None
-                    await asyncio.sleep(2.0)
-                continue
-
 
             try:
                 settings = get_settings()

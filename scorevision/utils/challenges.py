@@ -6,7 +6,6 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
-import os
 
 from aiohttp import ClientResponseError
 from numpy import ndarray
@@ -33,49 +32,6 @@ class ScoreVisionChallengeError(Exception):
     pass
 
 
-async def get_challenge_from_scorevision() -> tuple[SVChallenge, TVPredictInput]:
-    try:
-        chal_api = await get_next_challenge()
-    except ClientResponseError as e:
-        raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
-    except ScoreVisionChallengeError as e:
-        raise e
-    except Exception as e:
-        raise Exception(f"Unexpected error while fetching challenge: {e}")
-
-    payload, frame_numbers, frames, flows, frame_store = (
-        await prepare_challenge_payload(challenge=chal_api)
-    )
-    if not payload:
-        if frame_store:
-            frame_store.unlink()
-        raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")
-
-    # SVChallenge
-    prompt = f"ScoreVision video task {chal_api.get('task_id')}"
-    meta = payload.meta | {"seed": chal_api.get("seed", 0)}
-    canonical = {
-        "env": "SVEnv",
-        "prompt": prompt,
-        "extra": {"meta": meta, "n_frames": len(frames)},
-    }
-
-    cid = sha256(
-        dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    challenge = SVChallenge(
-        env="SVEnv",
-        payload=payload,
-        meta=meta,
-        prompt=prompt,
-        challenge_id=cid,
-        frame_numbers=frame_numbers,
-        frames=frames,
-        dense_optical_flow_frames=flows,
-    )
-    if frame_store:
-        frame_store.unlink()
-    return challenge, payload
 
 
 async def prepare_challenge_payload(
@@ -172,48 +128,6 @@ async def prepare_challenge_payload(
     )
 
 
-async def get_next_challenge() -> dict:
-    """
-    Fetches the next video challenge from ScoreVision API (legacy v2).
-    """
-    settings = get_settings()
-
-    if not settings.SCOREVISION_API:
-        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
-
-    keypair = load_hotkey_keypair(
-        wallet_name=settings.BITTENSOR_WALLET_COLD,
-        hotkey_name=settings.BITTENSOR_WALLET_HOT,
-    )
-
-    # Build query parameters required to authenticate with the validator API
-    params = build_validator_query_params(keypair)
-
-    session = await get_async_client()
-    async with session.get(
-        f"{settings.SCOREVISION_API}/api/tasks/next/v2", params=params
-    ) as response:
-        response.raise_for_status()
-        challenge = await response.json() or None
-        if not challenge:
-            raise ScoreVisionChallengeError("No challenge available from API")
-
-        if "id" in challenge and "task_id" not in challenge:
-            challenge["task_id"] = challenge.pop("id")
-
-        if not (challenge.get("video_url") or challenge.get("asset_url")):
-            raise ScoreVisionChallengeError("Challenge missing video url.")
-
-        ct = (
-            parse_challenge_type(challenge.get("challenge_type"))
-            or ChallengeType.FOOTBALL
-        )
-        challenge["challenge_type"] = ct.value
-
-        logger.info(f"Fetched challenge: task_id={challenge.get('task_id')}")
-        return challenge
-
-
 def build_svchallenge_from_parts(
     chal_api: dict,
     payload: TVPredictInput,
@@ -257,25 +171,15 @@ async def get_challenge_from_scorevision_with_source(
     manifest_hash: str | None = None,
     element_id: str | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
-        "0",
-        "false",
-        "False",
-    )
-
     try:
-        if use_v3:
-            if manifest_hash is None:
-                raise ScoreVisionChallengeError(
-                    "SCOREVISION_USE_CHALLENGE_V3=1 but no manifest_hash provided "
-                    "to get_challenge_from_scorevision_with_source()."
-                )
-            chal_api = await get_next_challenge_v3(
-                manifest_hash=manifest_hash,
-                element_id=element_id,
+        if manifest_hash is None:
+            raise ScoreVisionChallengeError(
+                "get_challenge_from_scorevision_with_source() requires manifest_hash."
             )
-        else:
-            chal_api = await get_next_challenge()
+        chal_api = await get_next_challenge_v3(
+            manifest_hash=manifest_hash,
+            element_id=element_id,
+        )
     except ClientResponseError as e:
         raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
     except ScoreVisionChallengeError as e:
