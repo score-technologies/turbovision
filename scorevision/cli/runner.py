@@ -394,11 +394,18 @@ async def runner(
             return
 
         if not current_window_id:
+            if block_number is None:
+                logger.warning(
+                    "[Runner] No window_id associated with challenge and no block_number; refusing to run."
+                )
+                run_result = "no_window_id"
+                return
+            current_window_id = get_current_window_id(block_number)
             logger.warning(
-                "[Runner] No window_id associated with challenge; refusing to run."
+                "[Runner] No window_id in challenge; using window_id=%s from block=%s",
+                current_window_id,
+                block_number,
             )
-            run_result = "no_window_id"
-            return
 
         logger.info(
             "[Runner] Using window_id=%s for this run (element_id=%s)",
