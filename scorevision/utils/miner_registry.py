@@ -8,6 +8,7 @@ import aiohttp
 from huggingface_hub import HfApi
 
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
+from scorevision.utils.blacklist import load_blacklisted_hotkeys
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -157,6 +158,10 @@ async def get_miners_from_registry(
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
 
+    blacklisted_hotkeys = load_blacklisted_hotkeys()
+    if blacklisted_hotkeys:
+        logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
+
     try:
         st = await get_subtensor()
     except Exception as e:
@@ -187,6 +192,9 @@ async def get_miners_from_registry(
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
     for uid, hk in enumerate(meta.hotkeys):
+        if hk in blacklisted_hotkeys:
+            logger.debug("[Registry] skipping blacklisted hotkey=%s", hk)
+            continue
         arr = commits.get(hk)
         if not arr:
             continue

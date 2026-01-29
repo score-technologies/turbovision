@@ -44,6 +44,7 @@ from scorevision.utils.bittensor_helpers import (
     _already_committed_same_index,
     _first_commit_block_by_miner,
 )
+from scorevision.utils.blacklist import load_blacklisted_hotkeys
 from scorevision.utils.cloudflare_helpers import (
     dataset_sv,
     dataset_sv_multi,
@@ -370,6 +371,7 @@ async def get_winner_for_element(
     current_window_id: str,
     tail: int,
     m_min: int,
+    blacklisted_hotkeys: set[str] | None = None,
 ) -> tuple[int | None, dict[int, float]]:
     """
     """
@@ -379,7 +381,11 @@ async def get_winner_for_element(
     MECHID = settings.SCOREVISION_MECHID
 
     meta = await st.metagraph(NETUID, mechid=MECHID)
-    hk_to_uid = {hk: i for i, hk in enumerate(meta.hotkeys)}
+    if blacklisted_hotkeys is None:
+        blacklisted_hotkeys = set()
+    hk_to_uid = {
+        hk: i for i, hk in enumerate(meta.hotkeys) if hk not in blacklisted_hotkeys
+    }
 
     stake_tensor = getattr(meta, "S", None)
     if stake_tensor is None:
@@ -902,6 +908,12 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
 
     while not shutdown_event.is_set():
         try:
+            blacklisted_hotkeys = load_blacklisted_hotkeys()
+            if blacklisted_hotkeys:
+                logger.info(
+                    "[validator] loaded %d blacklisted hotkeys",
+                    len(blacklisted_hotkeys),
+                )
             if st is None:
                 st = await get_subtensor()
             block = await st.get_current_block()
@@ -996,6 +1008,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                             current_window_id=current_window_id,
                             tail=tail_for_element,
                             m_min=m_min,
+                            blacklisted_hotkeys=blacklisted_hotkeys,
                         )
 
                         if winner_uid is None:
@@ -1018,6 +1031,26 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                             winner_uid,
                             elem_weight,
                             share,
+                        )
+
+                if blacklisted_hotkeys:
+                    try:
+                        meta = await st.metagraph(
+                            NETUID, mechid=settings.SCOREVISION_MECHID
+                        )
+                        uid_to_hk = {i: hk for i, hk in enumerate(meta.hotkeys)}
+                        for uid in list(weights_by_uid.keys()):
+                            hk = uid_to_hk.get(uid)
+                            if hk and hk in blacklisted_hotkeys:
+                                logger.info(
+                                    "[validator] Removing blacklisted uid=%d hotkey=%s from weights",
+                                    uid,
+                                    hk,
+                                )
+                                weights_by_uid.pop(uid, None)
+                    except Exception as e:
+                        logger.warning(
+                            "[validator] Failed to apply blacklist to weights: %s", e
                         )
 
                 if not weights_by_uid:
