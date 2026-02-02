@@ -60,9 +60,11 @@ def parse_miner_prediction(
                     except (TypeError, ValueError):
                         object_id = None
 
-                    looked_up = (
-                        object_names[object_id] if object_id is not None else None
-                    )
+                    looked_up = None
+                    if object_id is not None and 0 <= object_id < len(object_names):
+                        looked_up = object_names[object_id]
+                    else:
+                        continue
 
                     bboxes.append(
                         BoundingBox(
@@ -103,6 +105,8 @@ def post_vlm_ranking(
     if challenge_type is None:
         challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
+    expected_total = int(payload.meta.get("n_frames_total") or 0)
+
     predicted_frames = (
         ((miner_run.predictions or {}).get("frames") or [])
         if miner_run.predictions
@@ -110,12 +114,19 @@ def post_vlm_ranking(
     )
     frame_count = len(predicted_frames)
 
+    logger.info(
+        "Frame check: miner_unique=%s expected_total=%s",
+        frame_count,
+        expected_total,
+    )
+
+
     breakdown_dict = {}
 
     if (
         miner_run.success
         and frame_count >= settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER
-        and frame_count <= settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
+        and frame_count <= expected_total
         and challenge_type is not None
         and manifest is not None
     ):
@@ -125,6 +136,7 @@ def post_vlm_ranking(
             miner_run=miner_run,
             frame_store=frame_store,
             challenge_type=challenge_type,
+            element_id=element_id,
         )
     else:
         logger.info(
@@ -234,11 +246,19 @@ def get_element_scores(
     miner_run: SVRunOutput,
     frame_store: FrameStore,
     challenge_type: ChallengeType,
+    element_id: str | None = None
 ) -> dict:
     settings = get_settings()
 
+    elements = manifest.elements
+    if element_id:
+        e = manifest.get_element(id=element_id)
+        if e is None:
+            raise ValueError(f"Element {element_id} not found in manifest")
+        elements = [e]
+
     element_scores = {}
-    for element in manifest.elements:
+    for element in elements:
         miner_annotations = parse_miner_prediction(
             miner_run=miner_run, object_names=element.objects or []
         )
@@ -282,7 +302,7 @@ def get_element_scores(
     total_weighted_and_gated = sum(
         score["total_weighted_and_gated"] for score in element_score_values
     )
-    n_elements = len(manifest.elements)
+    n_elements = len(elements)
     logger.info(f"Dividing score equally among {n_elements} Elements")
     weighted_mean = total_weighted_and_gated / n_elements if n_elements else 0.0
     element_scores.update(

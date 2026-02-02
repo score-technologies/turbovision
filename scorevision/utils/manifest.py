@@ -19,6 +19,8 @@ from functools import cached_property
 from hashlib import sha256
 from json import dumps, loads
 from pathlib import Path
+import aiohttp
+import hashlib
 
 from cv2 import imread
 from nacl.exceptions import BadSignatureError
@@ -26,6 +28,7 @@ from nacl.signing import SigningKey, VerifyKey
 from numpy import ndarray
 from pydantic import BaseModel, Field, model_validator
 from ruamel.yaml import YAML
+from urllib.parse import urlparse, urljoin
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -54,6 +57,7 @@ class PillarName(str, Enum):
     PALETTE = "palette"
     SMOOTHNESS = "smoothness"
     ROLE = "role"
+    KEYPOINTS_IOU = "keypoints_iou" 
 
 
 class ElementPrefix(str, Enum):
@@ -286,12 +290,19 @@ class Element(BaseModel):
     """
 
     id: str
+    window_block: int | None = None
+    eval_window: int | float | None = None
+    weight: float | None = None
     clips: list[Clip]
     metrics: Metrics
     preproc: Preproc
     latency_p95_ms: int
     service_rate_fps: int
     pgt_recipe_hash: str
+    ground_truth: bool = Field(
+        default=False,
+        description="If true, use real ground truth fetched from API instead of SAM3 pseudo-GT",
+    )
     baseline_theta: float = Field(
         ge=0.0, description="Score threshold for emissions (min 0.0)"
     )
@@ -467,6 +478,9 @@ class Manifest(BaseModel):
             elements.append(
                 Element(
                     id=e["id"],
+                    window_block=e.get("window_block"),
+                    eval_window=e.get("eval_window"),
+                    weight=e.get("weight"),
                     clips=e.get("clips", []),
                     weights=e.get("weights", []),
                     preproc=preproc,
@@ -516,6 +530,126 @@ def get_current_manifest(block_number: int | None = None) -> Manifest:
         )
 
     manifest = Manifest.load_yaml(path=Path(path))
+
+    if (
+        block_number is not None
+        and manifest.expiry_block is not None
+        and block_number > manifest.expiry_block
+    ):
+        raise RuntimeError(
+            f"Manifest expired at block {manifest.expiry_block}, current block={block_number}."
+        )
+
+    return manifest
+
+def _bucket_base(index_url: str) -> str:
+    u = urlparse(index_url)
+    return f"{u.scheme}://{u.netloc}/"
+
+def _join_key_to_base(index_url: str, key_or_url: str) -> str:
+    if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
+        return key_or_url
+
+    if key_or_url.startswith("scorevision/"):
+        return _bucket_base(index_url) + key_or_url
+
+    if key_or_url.startswith("/"):
+        return _bucket_base(index_url) + key_or_url.lstrip("/")
+
+    base = index_url.rsplit("/", 1)[0] + "/"
+    return urljoin(base, key_or_url)
+
+async def _http_get_json(url: str, timeout_s: int = 20):
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(url) as r:
+            if r.status != 200:
+                raise RuntimeError(f"GET {url} -> {r.status}")
+            return await r.json()
+
+async def _http_get_text(url: str, timeout_s: int = 30) -> str:
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(url) as r:
+            if r.status != 200:
+                raise RuntimeError(f"GET {url} -> {r.status}")
+            return await r.text()
+
+async def _http_head_meta(url: str, timeout_s: int = 10) -> tuple[str | None, str | None]:
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.head(url) as r:
+            if r.status >= 400:
+                return None, None
+            return (r.headers.get("ETag"), r.headers.get("Last-Modified"))
+
+def _cache_path_for_url(cache_dir: Path, url: str, suffix: str) -> Path:
+    h = hashlib.sha256(url.encode()).hexdigest()[:16]
+    name = Path(urlparse(url).path).name or "manifest"
+    return cache_dir / f"{name}.{h}.{suffix}"
+
+def _extract_manifest_urls_from_index(index_url: str, idx) -> list[str]:
+    keys: list[str] = []
+    if isinstance(idx, list):
+        keys = [k for k in idx if isinstance(k, str)]
+    elif isinstance(idx, dict) and isinstance(idx.get("entries"), list):
+        for e in idx["entries"]:
+            p = e.get("path")
+            if isinstance(p, str):
+                keys.append(p)
+    return [_join_key_to_base(index_url, k) for k in keys]
+
+def _pick_manifest_url_max_block(urls: list[str]) -> tuple[int, str] | None:
+    pairs: list[tuple[int, str]] = []
+    for u in urls:
+        name = Path(urlparse(u).path).name
+        try:
+            b = int(name.split("-", 1)[0])
+        except Exception:
+            continue
+        pairs.append((b, u))
+    if not pairs:
+        return None
+    pairs.sort(key=lambda x: x[0])
+    return pairs[-1]
+
+async def load_manifest_from_public_index(
+    index_url: str,
+    *,
+    block_number: int | None = None,
+    cache_dir: Path | None = None,
+) -> Manifest:
+    idx = await _http_get_json(index_url)
+    urls = _extract_manifest_urls_from_index(index_url, idx)
+    picked = _pick_manifest_url_max_block(urls)
+    if not picked:
+        raise RuntimeError(f"No manifest entries found in index: {index_url}")
+
+    picked_block, manifest_url = picked
+
+    yaml_text: str
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        out = _cache_path_for_url(cache_dir, manifest_url, "yaml")
+        mod = out.with_suffix(".modified")
+
+        etag, lm = await _http_head_meta(manifest_url)
+        tag = (etag or lm or "").strip()
+
+        if tag and out.exists() and mod.exists() and mod.read_text().strip() == tag:
+            yaml_text = out.read_text()
+        else:
+            yaml_text = await _http_get_text(manifest_url)
+            tmp = out.with_suffix(".tmp")
+            tmp.write_text(yaml_text)
+            os.replace(tmp, out)
+            if tag:
+                mod.write_text(tag)
+    else:
+        yaml_text = await _http_get_text(manifest_url)
+
+    data = yaml.load(yaml_text)
+    manifest = Manifest(**data)
 
     if (
         block_number is not None

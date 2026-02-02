@@ -51,6 +51,7 @@ class Settings(BaseModel):
     R2_WRITE_SECRET_ACCESS_KEY: SecretStr
     R2_CONCURRENCY: int
     R2_BUCKET_PUBLIC_URL: str
+    URL_MANIFEST: str
 
     # Signer
     SIGNER_URL: str
@@ -120,6 +121,7 @@ def get_settings() -> Settings:
         R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
         R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
+        URL_MANIFEST=getenv("URL_MANIFEST", ""),
         HUGGINGFACE_USERNAME=getenv("HUGGINGFACE_USERNAME", ""),
         HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
         CHUTES_USERNAME=getenv("CHUTES_USERNAME", ""),

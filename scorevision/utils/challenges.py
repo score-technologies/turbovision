@@ -6,7 +6,6 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
-import os
 
 from aiohttp import ClientResponseError
 from numpy import ndarray
@@ -23,6 +22,7 @@ from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,
+    CHALLENGE_ID_LOOKUP,
 )
 from scorevision.utils.manifest import Manifest
 
@@ -33,49 +33,17 @@ class ScoreVisionChallengeError(Exception):
     pass
 
 
-async def get_challenge_from_scorevision() -> tuple[SVChallenge, TVPredictInput]:
-    try:
-        chal_api = await get_next_challenge()
-    except ClientResponseError as e:
-        raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
-    except ScoreVisionChallengeError as e:
-        raise e
-    except Exception as e:
-        raise Exception(f"Unexpected error while fetching challenge: {e}")
+def _coerce_challenge_type(challenge: dict) -> ChallengeType:
+    ct = parse_challenge_type(challenge.get("challenge_type"))
+    if ct:
+        return ct
+    ct_id = challenge.get("challenge_type_id")
+    if isinstance(ct_id, int):
+        return CHALLENGE_ID_LOOKUP.get(ct_id, ChallengeType.FOOTBALL)
+    if isinstance(ct_id, str) and ct_id.isdigit():
+        return CHALLENGE_ID_LOOKUP.get(int(ct_id), ChallengeType.FOOTBALL)
+    return ChallengeType.FOOTBALL
 
-    payload, frame_numbers, frames, flows, frame_store = (
-        await prepare_challenge_payload(challenge=chal_api)
-    )
-    if not payload:
-        if frame_store:
-            frame_store.unlink()
-        raise ScoreVisionChallengeError("Failed to prepare payload from challenge.")
-
-    # SVChallenge
-    prompt = f"ScoreVision video task {chal_api.get('task_id')}"
-    meta = payload.meta | {"seed": chal_api.get("seed", 0)}
-    canonical = {
-        "env": "SVEnv",
-        "prompt": prompt,
-        "extra": {"meta": meta, "n_frames": len(frames)},
-    }
-
-    cid = sha256(
-        dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    challenge = SVChallenge(
-        env="SVEnv",
-        payload=payload,
-        meta=meta,
-        prompt=prompt,
-        challenge_id=cid,
-        frame_numbers=frame_numbers,
-        frames=frames,
-        dense_optical_flow_frames=flows,
-    )
-    if frame_store:
-        frame_store.unlink()
-    return challenge, payload
 
 
 async def prepare_challenge_payload(
@@ -86,28 +54,15 @@ async def prepare_challenge_payload(
 ) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
     settings = get_settings()
 
-    video_url = challenge.get("video_url") or challenge.get("asset_url")
+    payload = challenge.get("payload") or {}
+    video_url = (
+        challenge.get("video_url")
+        or challenge.get("asset_url")
+        or payload.get("clip_url")
+        or payload.get("video_url")
+    )
     if not video_url:
-        raise ScoreVisionChallengeError("Challenge missing video_url/asset_url")
-
-    frame_numbers = list(
-        range(
-            settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER,
-            settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER,
-        )
-    )
-    # shuffle(frame_numbers)
-    start_frame_number = randint(
-        1,
-        settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER
-        - settings.SCOREVISION_VLM_SELECT_N_FRAMES
-        - 1,
-    )
-    selected_frame_numbers = frame_numbers[
-        start_frame_number : start_frame_number
-        + settings.SCOREVISION_VLM_SELECT_N_FRAMES
-    ]
-    logger.info(f"Selected Frames for Testing: {selected_frame_numbers}")
+        raise ScoreVisionChallengeError("Challenge missing video_url/asset_url/clip_url")
 
     cached_store: FrameStore | None = None
     cached_path: Path | None = None
@@ -116,9 +71,9 @@ async def prepare_challenge_payload(
         cached_path = video_cache.get("path")
 
     if cached_store is None:
-        video_name, frame_store = await download_video_cached(
+        _, frame_store = await download_video_cached(
             url=video_url,
-            _frame_numbers=selected_frame_numbers,
+            _frame_numbers=[],
             cached_path=cached_path,
         )
         if video_cache is not None:
@@ -126,6 +81,29 @@ async def prepare_challenge_payload(
             video_cache["path"] = frame_store.video_path
     else:
         frame_store = cached_store
+
+    total_frames = frame_store.get_frame_count()
+    if total_frames <= 1:
+        raise ScoreVisionChallengeError("Could not determine video frame count")
+
+    min_frame = max(1, int(settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER))
+    max_frame_setting = int(settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER)
+
+    max_frame = min(max_frame_setting, total_frames)
+
+    n_select = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
+
+    if (max_frame - min_frame) < n_select:
+        raise ScoreVisionChallengeError(
+            f"Not enough frames to select {n_select} frames "
+            f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+        )
+    start = randint(min_frame, max_frame - n_select)
+    selected_frame_numbers = list(range(start, start + n_select))
+    logger.info(
+        f"Selected Frames (dynamic): {selected_frame_numbers} "
+        f"(min={min_frame}, max={max_frame}, total={total_frames})"
+    )
 
     select_frames: list[ndarray] = []
     flow_frames: list[ndarray] = []
@@ -136,14 +114,11 @@ async def prepare_challenge_payload(
         flow_frames.append(flow)
 
     logger.info(f"frames {selected_frame_numbers} successful")
+
     if not select_frames:
-        raise ScoreVisionChallengeError(
-            "No Frames were successfully extracted from Video"
-        )
+        raise ScoreVisionChallengeError("No Frames were successfully extracted from Video")
     if not flow_frames:
-        raise ScoreVisionChallengeError(
-            "No Dense Optical Flows were successfully computed from Video"
-        )
+        raise ScoreVisionChallengeError("No Dense Optical Flows were successfully computed from Video")
 
     height, width = select_frames[0].shape[:2]
     meta = {
@@ -151,18 +126,21 @@ async def prepare_challenge_payload(
         "width": width or 0,
         "height": height or 0,
         "fps": int(
-            challenge.get("fps") or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
+            challenge.get("fps")
+            or payload.get("fps")
+            or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
         ),
         "task_id": challenge.get("task_id"),
         "challenge_type": challenge.get("challenge_type"),
+        "n_frames_total": total_frames,
+        "batch_size": batch_size,
+        "n_keypoints": 32,  # TODO: update based on challenge type
     }
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]
-    meta["batch_size"] = batch_size
-    meta["n_keypoints"] = (
-        32  # TODO: update n_keypoints based on challenge type (32 is for football)
-    )
+
     payload = TVPredictInput(url=video_url, meta=meta)
+
     return (
         payload,
         selected_frame_numbers,
@@ -170,56 +148,6 @@ async def prepare_challenge_payload(
         flow_frames,
         frame_store,
     )
-
-
-async def get_next_challenge() -> dict:
-    """
-    Fetches the next video challenge from ScoreVision API.
-    Returns a dict like:
-      {
-        "task_id": "...",     # we will propagate this end-to-end
-        "video_url": "...",   # or "asset_url"
-        "fps": 25|30,         # optional (fallback 30)
-        "seed": <int>,        # optional
-        ...
-      }
-    """
-    settings = get_settings()
-
-    if not settings.SCOREVISION_API:
-        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
-
-    keypair = load_hotkey_keypair(
-        wallet_name=settings.BITTENSOR_WALLET_COLD,
-        hotkey_name=settings.BITTENSOR_WALLET_HOT,
-    )
-
-    # Build query parameters required to authenticate with the validator API
-    params = build_validator_query_params(keypair)
-
-    session = await get_async_client()
-    async with session.get(
-        f"{settings.SCOREVISION_API}/api/tasks/next/v2", params=params
-    ) as response:
-        response.raise_for_status()
-        challenge = await response.json() or None
-        if not challenge:
-            raise ScoreVisionChallengeError("No challenge available from API")
-
-        if "id" in challenge and "task_id" not in challenge:
-            challenge["task_id"] = challenge.pop("id")
-
-        if not (challenge.get("video_url") or challenge.get("asset_url")):
-            raise ScoreVisionChallengeError("Challenge missing video url.")
-
-        ct = (
-            parse_challenge_type(challenge.get("challenge_type"))
-            or ChallengeType.FOOTBALL
-        )
-        challenge["challenge_type"] = ct.value
-
-        logger.info(f"Fetched challenge: task_id={challenge.get('task_id')}")
-        return challenge
 
 
 def build_svchallenge_from_parts(
@@ -263,23 +191,13 @@ async def get_challenge_from_scorevision_with_source(
     *,
     video_cache: dict[str, Any] | None = None,
     manifest_hash: str | None = None,
+    element_id: str | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
-    use_v3 = os.getenv("SCOREVISION_USE_CHALLENGE_V3", "0") not in (
-        "0",
-        "false",
-        "False",
-    )
-
     try:
-        if use_v3:
-            if manifest_hash is None:
-                raise ScoreVisionChallengeError(
-                    "SCOREVISION_USE_CHALLENGE_V3=1 but no manifest_hash provided "
-                    "to get_challenge_from_scorevision_with_source()."
-                )
-            chal_api = await get_next_challenge_v3(manifest_hash=manifest_hash)
-        else:
-            chal_api = await get_next_challenge()
+        chal_api = await get_next_challenge_v3(
+            manifest_hash=manifest_hash,
+            element_id=element_id,
+        )
     except ClientResponseError as e:
         raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
     except ScoreVisionChallengeError as e:
@@ -305,38 +223,88 @@ async def get_challenge_from_scorevision_with_source(
     )
     return challenge, payload, chal_api, frame_store
 
+async def complete_task_assignment(
+    *,
+    challenge_id: int,
+    element_id: str | None = None,
+) -> None:
+    settings = get_settings()
+    if not settings.SCOREVISION_API:
+        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
+
+    keypair = load_hotkey_keypair(
+        wallet_name=settings.BITTENSOR_WALLET_COLD,
+        hotkey_name=settings.BITTENSOR_WALLET_HOT,
+    )
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
+
+    session = await get_async_client()
+    async with session.post(
+        f"{settings.SCOREVISION_API}/api/tasks/complete",
+        params=params,
+        json={"challenge_id": int(challenge_id)},
+    ) as response:
+        try:
+            response.raise_for_status()
+        except ClientResponseError as e:
+            raise ScoreVisionChallengeError(
+                f"HTTP error while completing task assignment: {e}"
+            )
+        await response.json()
+
+async def get_ground_truth_from_scorevision(
+    *,
+    challenge_id: int,
+    element_id: str | None = None,
+) -> Any:
+    settings = get_settings()
+    if not settings.SCOREVISION_API:
+        raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
+
+    keypair = load_hotkey_keypair(
+        wallet_name=settings.BITTENSOR_WALLET_COLD,
+        hotkey_name=settings.BITTENSOR_WALLET_HOT,
+    )
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
+
+    session = await get_async_client()
+    async with session.get(
+        f"{settings.SCOREVISION_API}/api/tasks/{int(challenge_id)}/ground-truth",
+        params=params,
+    ) as response:
+        try:
+            response.raise_for_status()
+        except ClientResponseError as e:
+            if e.status == 403:
+                raise ScoreVisionChallengeError(
+                    "Assignment not completed for this validator (403)."
+                )
+            if e.status == 404:
+                raise ScoreVisionChallengeError("Ground truth not available (404).")
+            raise ScoreVisionChallengeError(f"HTTP error while fetching ground truth: {e}")
+
+        data = await response.json()
+        return data.get("ground_truth")
 
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,
+    element_id: str | None = None,
 ) -> dict:
     """
-    New v3 challenge client using Manifest hash + new schema.
-
-    Request:
-      GET /api/challenge/v3
-        - query params: same auth as /tasks/next/v2
-        - header: X-Manifest-Hash: <manifest_hash>
-
-    Response attendu (exemple simplifié):
-      {
-        "task_id": "...",
-        "video_url": "...",
-        "fps": 25,
-        "seed": 123,
-        "element_id": "PlayerDetect_v1@1.0",
-        "window_id": "block-123456",
-        "manifest_hash": "..."  # idéalement égal à ce qu'on a envoyé
-        ...
-      }
+    Challenge client aligned to the current ScoreVision API (/api/tasks/next).
     """
     settings = get_settings()
 
     if not settings.SCOREVISION_API:
         raise ScoreVisionChallengeError("SCOREVISION_API is not set.")
 
-    if manifest_hash is None:
+    if element_id is None:
         raise ScoreVisionChallengeError(
-            "get_next_challenge_v3() requires a manifest_hash argument for now."
+            "get_next_challenge_v3() requires an element_id argument."
         )
 
     keypair = load_hotkey_keypair(
@@ -344,33 +312,28 @@ async def get_next_challenge_v3(
         hotkey_name=settings.BITTENSOR_WALLET_HOT,
     )
     params = build_validator_query_params(keypair)
-    params["manifest_hash"] = manifest_hash
-
-    headers: dict[str, str] = {
-        "X-Manifest-Hash": manifest_hash,
-    }
+    params["element_id"] = element_id
 
     session = await get_async_client()
     try:
         async with session.get(
-            f"{settings.SCOREVISION_API}/api/challenge/v3",
+            f"{settings.SCOREVISION_API}/api/tasks/next",
             params=params,
-            headers=headers,
         ) as response:
             try:
                 response.raise_for_status()
             except ClientResponseError as e:
                 if e.status == 404:
                     raise ScoreVisionChallengeError(
-                        "No active evaluation window (404 from /api/challenge/v3)."
+                        "No active evaluation window (404 from /api/tasks/next)."
                     )
                 if e.status == 409:
                     raise ScoreVisionChallengeError(
-                        "Rate limited by /api/challenge/v3 (409). Back off before retrying."
+                        "Rate limited by /api/tasks/next (409). Back off before retrying."
                     )
                 if e.status == 410:
                     raise ScoreVisionChallengeError(
-                        "Manifest expired or rejected (410 from /api/challenge/v3)."
+                        "Manifest expired or rejected (410 from /api/tasks/next)."
                     )
                 raise
 
@@ -383,37 +346,23 @@ async def get_next_challenge_v3(
             if "id" in challenge and "task_id" not in challenge:
                 challenge["task_id"] = challenge.pop("id")
 
-            if not (challenge.get("video_url") or challenge.get("asset_url")):
+            payload = challenge.get("payload") or {}
+            if not (
+                challenge.get("video_url")
+                or challenge.get("asset_url")
+                or payload.get("clip_url")
+                or payload.get("video_url")
+            ):
                 raise ScoreVisionChallengeError("Challenge missing video url.")
 
-            ct = (
-                parse_challenge_type(challenge.get("challenge_type"))
-                or ChallengeType.FOOTBALL
-            )
+            ct = _coerce_challenge_type(challenge)
             challenge["challenge_type"] = ct.value
 
-            resp_mh = challenge.get("manifest_hash")
-            if resp_mh is not None and resp_mh != manifest_hash:
-                raise ScoreVisionChallengeError(
-                    f"Manifest hash mismatch in /api/challenge/v3 response "
-                    f"(sent={manifest_hash}, got={resp_mh})."
-                )
-
-            if not challenge.get("element_id"):
-                raise ScoreVisionChallengeError(
-                    "Missing element_id in /api/challenge/v3 response."
-                )
-            if not challenge.get("window_id"):
-                raise ScoreVisionChallengeError(
-                    "Missing window_id in /api/challenge/v3 response."
-                )
-
             logger.info(
-                "Fetched v3 challenge: task_id=%s element_id=%s window_id=%s",
+                "Fetched challenge: task_id=%s element_id=%s",
                 challenge.get("task_id"),
                 challenge.get("element_id"),
-                challenge.get("window_id"),
             )
             return challenge
     except ClientResponseError as e:
-        raise ScoreVisionChallengeError(f"HTTP error while fetching v3 challenge: {e}")
+        raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")

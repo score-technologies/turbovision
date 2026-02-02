@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from random import Random
 from hashlib import sha256
 from re import sub
+import re
 
 from jinja2 import Template
 import petname
@@ -362,13 +363,36 @@ def mask_and_encode(content: bytes) -> str:
     normalised_source_code = ast.dump(source_code_tree, include_attributes=False)
     return sha256(normalised_source_code.encode("utf-8")).hexdigest()
 
+def _extract_hf_repo_info(source: str) -> tuple[str | None, str | None]:
+    """Extract HF_REPO_NAME and HF_REPO_REVISION from the miner source code."""
+    name_match = re.search(
+        r'HF_REPO_NAME\s*=\s*[\'"]([^\'"]+)[\'"]',
+        source,
+    )
+    rev_match = re.search(
+        r'HF_REPO_REVISION\s*=\s*[\'"]([^\'"]+)[\'"]',
+        source,
+    )
+    hf_repo_name = name_match.group(1) if name_match else None
+    hf_repo_revision = rev_match.group(1) if rev_match else None
+    return hf_repo_name, hf_repo_revision
 
-async def validate_chute_integrity(chute_id: str) -> bool:
-    """Check the deployed chute's code has not been modified in any way"""
+
+async def validate_chute_integrity(
+    chute_id: str,
+) -> tuple[bool, str | None, str | None]:
+    """Check the deployed chute's code has not been modified in any way,
+    and extract HF_REPO_NAME / HF_REPO_REVISION from the miner code.
+
+    Returns:
+        (valid_hash, hf_repo_name, hf_repo_revision)
+    """
 
     settings = get_settings()
-    original_hash = mask_and_encode(content=settings.PATH_CHUTE_SCRIPT.read_bytes())
+    original_bytes = settings.PATH_CHUTE_SCRIPT.read_bytes()
+    original_hash = mask_and_encode(content=original_bytes)
     logger.info(f"Original source code: {original_hash[:10]}...")
+
     session = await get_async_client()
     try:
         async with session.get(
@@ -381,7 +405,18 @@ async def validate_chute_integrity(chute_id: str) -> bool:
             logger.info(f"Miner's source code: {miner_hash[:10]}...")
     except Exception as e:
         logger.error(f"❌ Error reading miner's source code: {e}")
-        return False
+        return False, None, None
+
+    remote_text = remote_bytes.decode("utf-8", errors="replace")
+    hf_repo_name, hf_repo_revision = _extract_hf_repo_info(remote_text)
+
+    if hf_repo_name or hf_repo_revision:
+        logger.info(f"HF_REPO_NAME     (miner) = {hf_repo_name}")
+        logger.info(f"HF_REPO_REVISION (miner) = {hf_repo_revision}")
+    else:
+        logger.warning(
+            "⚠️ Could not extract HF_REPO_NAME / HF_REPO_REVISION from miner code"
+        )
 
     valid = original_hash == miner_hash
     if valid:
@@ -390,7 +425,8 @@ async def validate_chute_integrity(chute_id: str) -> bool:
         logger.warning("❌ Miner's source code was modified. Do not trust!")
         logger.warning(
             "Validator:%s",
-            settings.PATH_CHUTE_SCRIPT.read_bytes().decode("utf-8", errors="replace"),
+            original_bytes.decode("utf-8", errors="replace"),
         )
-        logger.warning("Miner:%s", remote_bytes.decode("utf-8", errors="replace"))
-    return valid
+        logger.warning("Miner:%s", remote_text)
+
+    return valid, hf_repo_name, hf_repo_revision

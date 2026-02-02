@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from aiobotocore.session import get_session
 from botocore.config import Config as BotoConfig
 
+from scorevision.utils.windows import get_window_start_block
 from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
@@ -286,6 +287,8 @@ async def emit_shard(
     *,
     element_id: str | None = None,
     manifest_hash: str | None = None,
+    window_start_block: int | None = None,
+    trigger_block: int | None = None,
     pgt_recipe_hash: str | None = None,
     salt_id: int | None = None,
     lane: str = "public",
@@ -295,16 +298,28 @@ async def emit_shard(
     commitment_meta: dict | None = None,
 ) -> None:
 
-    settings = get_settings()
-    rid = f"{challenge.challenge_id[:8]}:{miner_hotkey_ss58[-6:]}"
     st = await get_subtensor()
+    rid = f"{(element_id or 'na')}:{miner_hotkey_ss58[:6]}:{challenge.challenge_id[:8]}:{uuid.uuid4().hex[:6]}"
     current_block, st = await _safe_get_current_block(st, rid)
+    shard_block = int(trigger_block) if trigger_block is not None else int(current_block)
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 
-    ns = None
-    prefix = _results_prefix(ns)
-    eval_key = f"{prefix}{miner_hotkey_ss58}/evaluation/{current_block:09d}-{challenge.challenge_id}.json"
-    resp_key = f"{prefix}{miner_hotkey_ss58}/responses/{current_block:09d}-{challenge.challenge_id}.json"
+    shard_window_id = window_id or getattr(challenge, "window_id", None) or (
+        (challenge.meta or {}).get("window_id") if getattr(challenge, "meta", None) else None
+    )
+
+    if window_start_block is None:
+        window_start_block = current_block
+
+
+    safe_element_id = (element_id or "unknown-element").strip()
+    safe_element_id = safe_element_id.replace("/", "_")
+
+    base_prefix = "scorevision"
+    prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/"
+
+    eval_key = f"{prefix}evaluation/{shard_block:09d}-{challenge.challenge_id}.json"
+    resp_key = f"{prefix}responses/{shard_block:09d}-{challenge.challenge_id}.json"
 
     video_url = None
     try:
@@ -334,7 +349,7 @@ async def emit_shard(
             logger.info(f"[emit:{rid}] responses stored: {resp_key}")
 
     meta_out = (challenge.meta or {}).copy()
-    meta_out["block"] = current_block
+    meta_out["block"] = shard_block
 
     shard_window_id = window_id or meta_out.get("window_id")
     if shard_window_id is not None:
@@ -390,7 +405,7 @@ async def emit_shard(
         "api_task_id": challenge.api_task_id,
         "prompt": challenge.prompt,
         "video_url": video_url,
-        "block": current_block,
+        "block": shard_block,
         "window_id": shard_window_id,
         "source": meta_out.get("source") or "api_v2_video",
         "timestamp": time(),
@@ -416,14 +431,6 @@ async def emit_shard(
         },
     }
 
-    validator_ss58 = getattr(settings, "SCOREVISION_VALIDATOR_HOTKEY_SS58", None)
-    if not validator_ss58:
-        logger.warning(
-            "[emit:%s] SCOREVISION_VALIDATOR_HOTKEY_SS58 not set; 'validator' field "
-            "will be null in shard payload.",
-            rid,
-        )
-
     if pgt_recipe_hash is None:
         pgt_recipe_hash = getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None)
     if pgt_recipe_hash is None:
@@ -433,7 +440,6 @@ async def emit_shard(
 
     shard_payload = {
         "window_id": shard_window_id,
-        "validator": validator_ss58,
         "element_id": element_id,
         "lane": lane,
         "manifest_hash": manifest_hash,
@@ -628,6 +634,13 @@ def _join_key_to_base(index_url: str, key_or_url: str) -> str:
     base = index_url.rsplit("/", 1)[0] + "/"
     return urljoin(base, key_or_url)
 
+def _safe_element_id_for_path(element_id: str | None) -> str | None:
+    if not element_id:
+        return None
+    s = str(element_id).strip()
+    if not s:
+        return None
+    return s.replace("/", "_")
 
 async def _list_keys_from_remote_index(index_url: str) -> list[str]:
     """ """
@@ -644,7 +657,7 @@ async def _list_keys_from_remote_index(index_url: str) -> list[str]:
 
 
 async def dataset_sv_multi(
-    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2
+    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2, element_id: str | None = None,
 ):
     """ """
     if not validator_indexes:
@@ -652,6 +665,10 @@ async def dataset_sv_multi(
     validator_indexes = {
         hk: normalize_index_url(iurl) for hk, iurl in validator_indexes.items() if iurl
     }
+
+    wanted_elem = _safe_element_id_for_path(element_id)
+    wanted_seg = f"/scorevision/{wanted_elem}/" if wanted_elem else None
+
     all_pairs: list[tuple[int, str, str]] = []
     for idx_hk, idx_url in validator_indexes.items():
         try:
@@ -660,6 +677,16 @@ async def dataset_sv_multi(
             logger.warning(f"[dataset-multi] index fetch failed {idx_url}: {e}")
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="index_fetch").inc()
             continue
+        if wanted_seg:
+            filtered_keys = []
+            for u in keys:
+                try:
+                    if wanted_seg in urlparse(u).path:
+                        filtered_keys.append(u)
+                except Exception:
+                    continue
+            keys = filtered_keys
+
         for u in keys:
             name = Path(u).name
             b = None
@@ -678,7 +705,7 @@ async def dataset_sv_multi(
     min_keep = max_block - int(tail)
     kept = [(b, u, iurl) for (b, u, iurl) in all_pairs if b >= min_keep]
     logger.info(
-        f"[dataset-multi] max_block={max_block} tail={tail} -> kept={len(kept)} shards"
+        f"[dataset-multi] element_id={element_id} max_block={max_block} tail={tail} -> kept={len(kept)} shards"
     )
 
     prefetch = max(1, int(os.getenv("SCOREVISION_DATASET_PREFETCH", str(prefetch))))

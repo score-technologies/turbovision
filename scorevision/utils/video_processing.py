@@ -213,6 +213,13 @@ class FrameStore:
             self._flow_cache.move_to_end(frame_number)
             self._evict_if_needed(self._flow_cache, self._max_flows)
             return rgb
+    
+    def get_frame_count(self) -> int:
+        with self._lock:
+            self._ensure_capture()
+            if not self._capture:
+                raise RuntimeError("Video capture not initialised")
+            return int(self._capture.get(CAP_PROP_FRAME_COUNT) or 750)
 
     def close(self) -> None:
         with self._lock:

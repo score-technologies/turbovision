@@ -1,5 +1,7 @@
 from logging import getLogger
 from typing import Any
+import numpy as np
+import cv2
 
 from numpy import array, uint8, float32, ndarray
 from cv2 import (
@@ -158,6 +160,11 @@ def extract_masks_for_ground_and_lines(
     _, mask_lines = threshold(gray, 200, 255, THRESH_BINARY)
     mask_ground_binary = (mask_ground > 0).astype(uint8)
     mask_lines_binary = (mask_lines > 0).astype(uint8)
+    if cv2.countNonZero(mask_ground_binary) == 0:
+        raise InvalidMask("No projected ground (empty mask)")
+    pts = cv2.findNonZero(mask_ground_binary)
+    x, y, w, h = cv2.boundingRect(pts)
+    is_rect = cv2.countNonZero(mask_ground_binary) == (w * h)
 
     validate_mask_ground(mask=mask_ground_binary)
     validate_mask_lines(mask=mask_lines_binary)
@@ -195,6 +202,47 @@ def extract_mask_of_ground_lines_in_image(
         )
     return (image_edges_on_ground > 0).astype(uint8)
 
+blacklists = [
+    [23, 24, 27, 28],
+    [7, 8, 3, 4],
+    [2, 10, 1, 14],
+    [18, 26, 14, 25],
+    [5, 13, 6, 17],
+    [21, 29, 17, 30],
+    [10, 11, 2, 3],
+    [10, 11, 2, 7],
+    [12, 13, 4, 5],
+    [12, 13, 5, 8],
+    [18, 19, 26, 27],
+    [18, 19, 26, 23],
+    [20, 21, 24, 29],
+    [20, 21, 28, 29],
+    [8, 4, 5, 13],
+    [3, 7, 2, 10],
+    [23, 27, 18, 26],
+    [24, 28, 21, 29]
+]
+
+def near_edges(x, y, W, H, t=50):
+    edges = set()
+    if x <= t:
+        edges.add("left")
+    if x >= W - t:
+        edges.add("right")
+    if y <= t:
+        edges.add("top")
+    if y >= H - t:
+        edges.add("bottom")
+    return edges
+
+def both_points_same_direction(A, B, W, H, t=100):
+    edges_A = near_edges(A[0], A[1], W, H, t)
+    edges_B = near_edges(B[0], B[1], W, H, t)
+
+    if not edges_A or not edges_B:
+        return False
+
+    return not edges_A.isdisjoint(edges_B)
 
 def evaluate_keypoints_for_frame(
     template_keypoints: list[tuple[int, int]],
@@ -204,6 +252,19 @@ def evaluate_keypoints_for_frame(
     keypoint_template: KeypointTemplate,
 ) -> float:
     try:
+        frame_height, frame_width = frame.shape[:2]
+
+        non_idxs = []
+        frame_keypoints = [
+            (0, 0) if (x, y) != (0, 0) and (x < 0 or y < 0 or x >= frame_width or y >= frame_height) else (x, y)
+            for (x, y) in frame_keypoints
+        ]
+
+        for idx, kpts in enumerate(frame_keypoints):
+            if kpts[0] != 0 or kpts[1] != 0:
+                non_idxs.append(idx + 1)
+
+        
         warped_template = project_image_using_keypoints(
             image=floor_markings_template,
             source_keypoints=template_keypoints,
@@ -222,6 +283,42 @@ def evaluate_keypoints_for_frame(
         pixels_overlapping_result = bitwise_and(
             mask_lines_expected, mask_lines_predicted
         )
+
+        ys, xs = np.where(mask_lines_expected == 1)
+
+        if len(xs) == 0:
+            bbox = None
+        else:
+            min_x = xs.min()
+            max_x = xs.max()
+            min_y = ys.min()
+            max_y = ys.max()
+
+            bbox = (min_x, min_y, max_x, max_y)
+        bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) if bbox is not None else 1
+        frame_area = frame.shape[0] * frame.shape[1]
+
+        if (bbox_area / frame_area) < 0.2:
+            return 0.0
+
+        valid_keypoints = [
+            (x, y) for x, y in frame_keypoints
+            if not (x == 0 and y == 0)
+        ]
+        if not valid_keypoints:
+            return 0.0
+        xs, ys = zip(* valid_keypoints)
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        if max_x < 0 or max_y < 0 or min_x >= frame_width or min_y >= frame_height:
+            logger.info("All keypoints are outside the frame")
+            return 0.0
+
+        if (max_x - min_x) > 2 * frame_width or (max_y - min_y) > 2 * frame_height:
+            logger.info("Keypoints spread too wide")
+            return 0.0
 
         inv_expected = bitwise_not(mask_lines_expected)
         pixels_rest = bitwise_and(inv_expected, mask_lines_predicted).sum()
@@ -246,6 +343,7 @@ def evaluate_keypoints_for_frame(
 
 @register_metric(
     (ElementPrefix.PITCH_CALIBRATION, PillarName.IOU),
+    (ElementPrefix.PLAYER_DETECTION, PillarName.KEYPOINTS_IOU),
 )
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],

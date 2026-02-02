@@ -21,24 +21,68 @@ from scorevision.utils.chutes_helpers import (
 
 logger = getLogger(__name__)
 
-
 async def call_miner_model_on_chutes(
-    slug: str, chute_id: str, payload: TVPredictInput
+    slug: str,
+    chute_id: str,
+    payload: TVPredictInput,
+    expected_model: str | None = None,
+    expected_revision: str | None = None,
 ) -> SVRunOutput:
     logger.info("Verifying chute model is valid")
-    trustworthy = await validate_chute_integrity(chute_id=chute_id)
-    if not trustworthy:
-        logger.error("Chute integrity check failed")
+
+    trustworthy, hf_repo_name, hf_repo_revision = await validate_chute_integrity(
+        chute_id=chute_id
+    )
+
+    mismatch = False
+    mismatch_reasons: list[str] = []
+
+    if expected_model:
+        if hf_repo_name:
+            if hf_repo_name != expected_model:
+                mismatch = True
+                mismatch_reasons.append(
+                    f"model mismatch (on-chain={expected_model}, miner={hf_repo_name})"
+                )
+        else:
+            mismatch = True
+            mismatch_reasons.append(
+                "missing HF_REPO_NAME in miner code while on-chain model is set"
+            )
+
+    if expected_revision:
+        if hf_repo_revision:
+            if hf_repo_revision != expected_revision:
+                mismatch = True
+                mismatch_reasons.append(
+                    f"revision mismatch (on-chain={expected_revision}, miner={hf_repo_revision})"
+                )
+        else:
+            mismatch = True
+            mismatch_reasons.append(
+                "missing HF_REPO_REVISION in miner code while on-chain revision is set"
+            )
+
+    if not trustworthy or mismatch:
+        reason_parts: list[str] = []
+        if not trustworthy:
+            reason_parts.append("chute integrity hash mismatch")
+        if mismatch_reasons:
+            reason_parts.extend(mismatch_reasons)
+        error_msg = " / ".join(reason_parts) or "Chute integrity check failed"
+
+        logger.error("Chute integrity check failed: %s", error_msg)
+
         return SVRunOutput(
             success=False,
             latency_ms=0.0,
             predictions=None,
-            error="Chute integrity check failed",
-            model=None,
             latency_p50_ms=0.0,
             latency_p95_ms=0.0,
             latency_p99_ms=0.0,
             latency_max_ms=0.0,
+            error=error_msg,
+            model=hf_repo_name or expected_model,
         )
 
     res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
@@ -92,6 +136,7 @@ async def predict_sv(
     payload_json = payload.model_dump(mode="json")
     for attempt in range(1, retries + 2):
         logger.info(f"Attempt {attempt} to {url}")
+        t0_attempt = monotonic()
         try:
             async with semaphore:
                 async with session.post(
@@ -104,7 +149,7 @@ async def predict_sv(
                         return SVPredictResult(
                             success=bool(data.get("success", True)),
                             model=data.get("model"),
-                            latency_seconds=monotonic() - t0,
+                            latency_seconds=monotonic() - t0_attempt,
                             predictions=data.get("predictions") or data.get("data"),
                             error=data.get("error"),
                             raw=data,
@@ -119,7 +164,7 @@ async def predict_sv(
                         return SVPredictResult(
                             success=False,
                             model=None,
-                            latency_seconds=monotonic() - t0,
+                            latency_seconds=monotonic() - t0_attempt,
                             predictions=None,
                             error=last_err,
                         )
