@@ -142,6 +142,35 @@ class KeypointTemplate(BaseModel):
 
 
 KEYPOINT_TEMPLATES: dict[ChallengeType, KeypointTemplate] = {
+    ChallengeType.CRICKET: KeypointTemplate(
+        filename="cricket_pitch_template.png",
+        keypoints_on_template=[
+            (35, 1),  # 1
+            (325, 1),  # 2
+            # -------------
+            (35, 120),  # 3
+            (325, 120),  # 4
+            # -------------
+            (35, 235),  # 5
+            (325, 235),  # 6
+            # ===============
+            (35, 1160),  # 7
+            (325, 1160),  # 8
+            # -------------
+            (35, 1275),  # 9
+            (325, 1275),  # 10
+            # -------------
+            (35, 1392),  # 11
+            (325, 1392),  # 12
+            # ===============
+            (175, 120),  # 13
+            (175, 1275),  # 14
+        ],
+        keypoint_index_bottom_left=10,
+        keypoint_index_bottom_right=11,
+        keypoint_index_top_left=0,
+        keypoint_index_top_right=1,
+    ),
     ChallengeType.FOOTBALL: KeypointTemplate(
         filename="football_pitch_template.png",
         keypoints_on_template=[
@@ -191,7 +220,7 @@ KEYPOINT_TEMPLATES: dict[ChallengeType, KeypointTemplate] = {
         keypoint_index_bottom_right=29,
         keypoint_index_top_left=0,
         keypoint_index_top_right=24,
-    )
+    ),
 }
 
 
