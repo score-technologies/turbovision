@@ -51,6 +51,7 @@ from scorevision.utils.cloudflare_helpers import (
     ensure_index_exists,
     build_public_index_url,
     prune_sv,
+    put_winners_snapshot,
 )
 
 from scorevision.utils.manifest import (
@@ -74,6 +75,7 @@ TAIL_BLOCKS_DEFAULT = int(os.getenv("SCOREVISION_VALIDATOR_TAIL", "28800"))
 FALLBACK_UID = int(os.getenv("SCOREVISION_FALLBACK_UID", "6"))
 
 BLOCKS_PER_DAY = 7200
+WINNERS_EVERY_N = int(os.getenv("SCOREVISION_WINNERS_EVERY", "24"))
 
 @lru_cache(maxsize=1)
 def _validator_hotkey_ss58() -> str:
@@ -105,6 +107,39 @@ def _extract_miner_and_score_from_payload(payload: dict, hk_to_uid: dict[str, in
     except Exception:
         return None, None
 
+
+def _extract_miner_meta_from_payload(payload: dict) -> dict[str, str | None] | None:
+    try:
+        telemetry = payload.get("telemetry") or {}
+        miner_info = telemetry.get("miner") or {}
+        miner_hk = (miner_info.get("hotkey") or "").strip()
+        if not miner_hk:
+            return None
+        return {
+            "hotkey": miner_hk,
+            "chute_id": miner_info.get("chute_id"),
+            "slug": miner_info.get("slug"),
+        }
+    except Exception:
+        return None
+
+
+def _build_winner_meta_from_uid(
+    winner_uid: int | None,
+    uid_to_hk: dict[int, str],
+    miner_meta_by_hk: dict[str, dict[str, str | None]],
+) -> dict[str, str | None] | None:
+    if winner_uid is None:
+        return None
+    winner_hk = uid_to_hk.get(winner_uid)
+    if not winner_hk:
+        return None
+    meta = miner_meta_by_hk.get(winner_hk) or {}
+    return {
+        "hotkey": winner_hk,
+        "chute_id": meta.get("chute_id"),
+        "slug": meta.get("slug"),
+    }
 
 def _weighted_median(values: list[float], weights: list[float]) -> float:
     pairs = sorted(zip(values, weights), key=lambda x: x[0])
@@ -143,11 +178,12 @@ async def _get_local_fallback_winner_for_element(
     tail: int,
     m_min: int,
     hk_to_uid: dict[str, int],
-) -> tuple[int | None, dict[int, float]]:
+) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
     """
     """
     sums: dict[int, float] = {}
     cnt: dict[int, int] = {}
+    miner_meta_by_hk: dict[str, dict[str, str | None]] = {}
 
     async for line in dataset_sv(tail):
         try:
@@ -166,6 +202,9 @@ async def _get_local_fallback_winner_for_element(
             )
             if miner_uid is None:
                 continue
+            miner_meta = _extract_miner_meta_from_payload(payload)
+            if miner_meta:
+                miner_meta_by_hk[miner_meta["hotkey"]] = miner_meta
         except Exception:
             continue
 
@@ -179,7 +218,12 @@ async def _get_local_fallback_winner_for_element(
             current_window_id,
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return FALLBACK_UID, {FALLBACK_UID: 0.0}
+        uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
+        return (
+            FALLBACK_UID,
+            {FALLBACK_UID: 0.0},
+            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+        )
 
     elig = [
         uid
@@ -193,7 +237,12 @@ async def _get_local_fallback_winner_for_element(
             element_id,
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return FALLBACK_UID, {FALLBACK_UID: 0.0}
+        uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
+        return (
+            FALLBACK_UID,
+            {FALLBACK_UID: 0.0},
+            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+        )
 
     avg = {uid: (sums[uid] / cnt[uid]) for uid in elig}
     VALIDATOR_MINERS_CONSIDERED.set(len(elig))
@@ -202,7 +251,10 @@ async def _get_local_fallback_winner_for_element(
     CURRENT_WINNER.set(winner_uid)
     VALIDATOR_WINNER_SCORE.set(avg.get(winner_uid, 0.0))
 
-    return winner_uid, avg
+    uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
+    return winner_uid, avg, _build_winner_meta_from_uid(
+        winner_uid, uid_to_hk, miner_meta_by_hk
+    )
 
 def _extract_challenge_id_from_payload(payload: dict) -> str | None:
     meta = payload.get("meta") or {}
@@ -372,7 +424,7 @@ async def get_winner_for_element(
     tail: int,
     m_min: int,
     blacklisted_hotkeys: set[str] | None = None,
-) -> tuple[int | None, dict[int, float]]:
+) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
     """
     """
     settings = get_settings()
@@ -386,6 +438,7 @@ async def get_winner_for_element(
     hk_to_uid = {
         hk: i for i, hk in enumerate(meta.hotkeys) if hk not in blacklisted_hotkeys
     }
+    uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
 
     stake_tensor = getattr(meta, "S", None)
     if stake_tensor is None:
@@ -423,6 +476,7 @@ async def get_winner_for_element(
 
     sums_by_V_m: dict[tuple[str, int], float] = {}
     cnt_by_V_m: dict[tuple[str, int], int] = {}
+    miner_meta_by_hk: dict[str, dict[str, str | None]] = {}
 
     async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
         try:
@@ -442,6 +496,9 @@ async def get_winner_for_element(
             )
             if miner_uid is None:
                 continue
+            miner_meta = _extract_miner_meta_from_payload(payload)
+            if miner_meta:
+                miner_meta_by_hk[miner_meta["hotkey"]] = miner_meta
 
             validator_hk = (line.get("hotkey") or "").strip()
             if not validator_hk:
@@ -460,7 +517,11 @@ async def get_winner_for_element(
             current_window_id,
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return FALLBACK_UID, {FALLBACK_UID: 0.0}
+        return (
+            FALLBACK_UID,
+            {FALLBACK_UID: 0.0},
+            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+        )
 
     mu_by_V_m: dict[tuple[str, int], tuple[float, int]] = {}
     for key, n in cnt_by_V_m.items():
@@ -566,7 +627,11 @@ async def get_winner_for_element(
             current_window_id,
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
-        return FALLBACK_UID, {FALLBACK_UID: 0.0}
+        return (
+            FALLBACK_UID,
+            {FALLBACK_UID: 0.0},
+            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+        )
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
 
@@ -653,7 +718,9 @@ async def get_winner_for_element(
     CURRENT_WINNER.set(winner_uid)
     VALIDATOR_WINNER_SCORE.set(final_score)
 
-    return winner_uid, S_by_m
+    return winner_uid, S_by_m, _build_winner_meta_from_uid(
+        winner_uid, uid_to_hk, miner_meta_by_hk
+    )
 
 
 async def retry_set_weights(wallet, uids, weights):
@@ -905,6 +972,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
     st = None
     last_done = -1
     effective_tail = max(tail, TAIL_BLOCKS_DEFAULT)
+    set_weights_count = 0
 
     while not shutdown_event.is_set():
         try:
@@ -980,6 +1048,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     continue
 
                 weights_by_uid: dict[int, float] = {}
+                winners_by_element: dict[str, dict[str, str | None]] = {}
                 max_tail_used = effective_tail
 
                 total_elem_w = sum(max(0.0, w) for _eid, w, _ew in elements)
@@ -1003,7 +1072,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                             effective_tail,
                         )
 
-                        winner_uid, S_by_m = await get_winner_for_element(
+                        winner_uid, S_by_m, winner_meta = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
@@ -1032,6 +1101,18 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                             elem_weight,
                             share,
                         )
+                        if winner_meta and winner_meta.get("hotkey"):
+                            winners_by_element[element_id] = {
+                                "winner_hotkey": winner_meta.get("hotkey"),
+                                "chute_id": winner_meta.get("chute_id"),
+                                "slug": winner_meta.get("slug"),
+                            }
+                        else:
+                            logger.info(
+                                "[validator] No miner metadata found for element_id=%s winner_uid=%d",
+                                element_id,
+                                winner_uid,
+                            )
 
                 if blacklisted_hotkeys:
                     try:
@@ -1105,6 +1186,39 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     VALIDATOR_LAST_BLOCK_SUCCESS.set(block)
                     loop_outcome = "success"
                     logger.info("set_weights OK at block %d", block)
+                    set_weights_count += 1
+                    if WINNERS_EVERY_N > 0 and set_weights_count % WINNERS_EVERY_N == 0:
+                        if winners_by_element:
+                            payload = {
+                                "block": block,
+                                "window_id": current_window_id,
+                                "netuid": settings.SCOREVISION_NETUID,
+                                "mechid": settings.SCOREVISION_MECHID,
+                                "winners": winners_by_element,
+                            }
+                            timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+                            try:
+                                key = await asyncio.wait_for(
+                                    put_winners_snapshot(block, payload),
+                                    timeout=timeout_s,
+                                )
+                                logger.info(
+                                    "[validator] winners snapshot stored: %s",
+                                    key,
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "[validator] winners snapshot timed out after %ss",
+                                    timeout_s,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "[validator] winners snapshot failed: %s", e
+                                )
+                        else:
+                            logger.info(
+                                "[validator] winners snapshot skipped (no winners)."
+                            )
                 else:
                     logger.warning("set_weights failed at block %d", block)
                     VALIDATOR_LOOP_TOTAL.labels(outcome="set_weights_failed").inc()

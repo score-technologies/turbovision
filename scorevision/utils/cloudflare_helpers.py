@@ -85,6 +85,16 @@ def _results_prefix(ns: str | None = None) -> str:
     return f"scorevision/{ns}/"
 
 
+def _winners_prefix(ns: str | None = None) -> str:
+    """ """
+    ns = (ns or os.getenv("SCOREVISION_WINNERS_PREFIX") or "winners").strip().strip("/")
+    return f"scorevision/{ns}/"
+
+
+def _winners_index_key(ns: str | None = None) -> str:
+    return f"{_winners_prefix(ns)}index.json"
+
+
 async def _index_list() -> list[str]:
     """ """
     settings = get_settings()
@@ -812,3 +822,62 @@ async def ensure_index_exists() -> None:
             Body="[]",
             ContentType="application/json",
         )
+
+
+async def ensure_winners_index_exists(prefix: str | None = None) -> str:
+    """ """
+    s = get_settings()
+    index_key = _winners_index_key(prefix)
+
+    async with get_s3_client() as c:
+        try:
+            await c.head_object(Bucket=s.R2_BUCKET, Key=index_key)
+            return index_key
+        except c.exceptions.NoSuchKey:
+            pass
+        await c.put_object(
+            Bucket=s.R2_BUCKET,
+            Key=index_key,
+            Body="[]",
+            ContentType="application/json",
+        )
+    return index_key
+
+
+async def _winners_index_add_if_new(index_key: str, key: str) -> None:
+    s = get_settings()
+    async with get_s3_client() as c:
+        try:
+            r = await c.get_object(Bucket=s.R2_BUCKET, Key=index_key)
+            items = set(loads(await r["Body"].read()))
+        except c.exceptions.NoSuchKey:
+            items = set()
+        if key not in items:
+            items.add(key)
+            await c.put_object(
+                Bucket=s.R2_BUCKET,
+                Key=index_key,
+                Body=dumps(sorted(items)),
+                ContentType="application/json",
+            )
+
+
+async def put_winners_snapshot(
+    block: int,
+    payload: dict,
+    *,
+    prefix: str | None = None,
+) -> str:
+    s = get_settings()
+    index_key = await ensure_winners_index_exists(prefix)
+    key = f"{_winners_prefix(prefix)}{block:09d}.json"
+
+    async with get_s3_client() as c:
+        await c.put_object(
+            Bucket=s.R2_BUCKET,
+            Key=key,
+            Body=dumps(payload, separators=(",", ":")),
+            ContentType="application/json",
+        )
+    await _winners_index_add_if_new(index_key, key)
+    return key
