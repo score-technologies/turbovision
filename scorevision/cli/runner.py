@@ -1,11 +1,10 @@
 import asyncio
 import gc
 import os
-import random
 import signal
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict
 
 from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.async_clients import close_http_clients
@@ -18,7 +17,6 @@ from scorevision.utils.challenges import (
     complete_task_assignment,
     get_ground_truth_from_scorevision,
 )
-from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.evaluate import post_vlm_ranking
@@ -29,7 +27,6 @@ from scorevision.utils.prometheus import (
     RUNNER_ACTIVE_MINERS,
     RUNNER_BLOCK_HEIGHT,
     RUNNER_EVALUATION_FAIL_TOTAL,
-    RUNNER_EVALUATION_SCORE,
     RUNNER_LAST_PGT_DURATION_SECONDS,
     RUNNER_LAST_RUN_DURATION_SECONDS,
     RUNNER_MINER_CALLS_TOTAL,
@@ -39,11 +36,10 @@ from scorevision.utils.prometheus import (
     RUNNER_PGT_RETRY_TOTAL,
     RUNNER_RUNS_TOTAL,
     RUNNER_SHARDS_EMITTED_TOTAL,
-    RUNNER_WARMUP_TOTAL,
 )
 from scorevision.utils.video_processing import FrameStore
 from scorevision.utils.settings import get_settings
-from scorevision.utils.windows import get_current_window_id, is_window_active, get_window_start_block
+from scorevision.utils.windows import get_current_window_id, get_window_start_block
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
@@ -307,23 +303,20 @@ async def runner(
     element_id: str | None = None,
 ) -> None:
     settings = get_settings()
-    loop = asyncio.get_running_loop()
-    run_start = loop.time()
-    last_pgt_duration = 0.0
-    NETUID = settings.SCOREVISION_NETUID
-    MAX_MINERS = int(os.getenv("SV_MAX_MINERS_PER_RUN", "60"))
-    REQUIRED_PGT_FRAMES = int(getattr(settings, "SCOREVISION_VLM_SELECT_N_FRAMES", 3))
-    MAX_PGT_BBOX_RETRIES = int(
-        os.getenv("SV_PGT_MAX_BBOX_RETRIES", os.getenv("SV_PGT_MAX_RETRIES", "3"))
-    )
-    MAX_PGT_QUALITY_RETRIES = int(os.getenv("SV_PGT_MAX_QUALITY_RETRIES", "4"))
+    netuid = settings.SCOREVISION_NETUID
+    required_pgt_frames = settings.SCOREVISION_VLM_SELECT_N_FRAMES
+    max_pgt_bbox_retries = settings.RUNNER_PGT_MAX_BBOX_RETRIES
+    max_pgt_quality_retries = settings.RUNNER_PGT_MAX_QUALITY_RETRIES
+    default_element_tempo = settings.RUNNER_DEFAULT_ELEMENT_TEMPO
 
+    event_loop = asyncio.get_running_loop()
+    run_start = event_loop.time()
     video_cache: dict[str, Any] = {}
     frame_store: FrameStore | None = None
     run_result = "success"
-
     manifest_hash: str | None = None
-    current_window_id: str | None = None
+    window_id: str | None = None
+
     logger.info("[Runner] START element_id=%s block=%s", element_id, block_number)
 
     try:
@@ -373,8 +366,7 @@ async def runner(
                 run_result = "challenge_error"
             return
 
-        chal_wid = chal_api.get("window_id")
-        current_window_id = chal_wid
+        window_id = chal_api.get("window_id")
 
         eid_from_chal = _extract_element_id_from_chal_api(chal_api)
         if eid_from_chal and str(eid_from_chal) != str(element_id):
@@ -392,42 +384,26 @@ async def runner(
             run_result = "no_element_id"
             return
 
-        if not current_window_id:
+        if not window_id:
             if block_number is None:
-                logger.warning(
-                    "[Runner] No window_id associated with challenge and no block_number; refusing to run."
-                )
+                logger.warning("[Runner] No window_id and no block_number; refusing to run.")
                 run_result = "no_window_id"
                 return
-            current_window_id = get_current_window_id(block_number)
-            logger.warning(
-                "[Runner] No window_id in challenge; using window_id=%s from block=%s",
-                current_window_id,
-                block_number,
-            )
+            window_id = get_current_window_id(block_number)
+            logger.warning("[Runner] No window_id in challenge; derived window_id=%s from block=%s", window_id, block_number)
 
-        logger.info(
-            "[Runner] Using window_id=%s for this run (element_id=%s)",
-            current_window_id,
-            element_id,
-        )
+        logger.info("[Runner] Using window_id=%s for element_id=%s", window_id, element_id)
 
-
-        DEFAULT_ELEMENT_TEMPO = int(os.getenv("SV_DEFAULT_ELEMENT_TEMPO_BLOCKS", "300"))
-        tempo_by_elem = _extract_element_tempos_from_manifest(manifest, DEFAULT_ELEMENT_TEMPO) if manifest else {}
-        tempo_blocks = int(tempo_by_elem.get(str(element_id), DEFAULT_ELEMENT_TEMPO))
-        window_start_block = None
+        tempo_by_element = _extract_element_tempos_from_manifest(manifest, default_element_tempo) if manifest else {}
+        tempo_blocks = int(tempo_by_element.get(str(element_id), default_element_tempo))
         try:
-            window_start_block = get_window_start_block(current_window_id, tempo=tempo_blocks)
+            window_start_block = get_window_start_block(window_id, tempo=tempo_blocks)
         except Exception:
             window_start_block = block_number or 0
 
-        logger.info(
-            "[Runner] window_start_block=%s (window_id=%s tempo=%s)",
-            window_start_block, current_window_id, tempo_blocks
-        )
+        logger.info("[Runner] window_start_block=%s (window_id=%s tempo=%s)", window_start_block, window_id, tempo_blocks)
 
-        miners = await get_miners_from_registry(NETUID, element_id=element_id)
+        miners = await get_miners_from_registry(netuid, element_id=element_id)
         if not miners:
             logger.warning(
                 "[Runner] No eligible miners found on-chain for element_id=%s.",
@@ -437,7 +413,7 @@ async def runner(
             run_result = "no_miners"
             return
 
-        miner_list = list(miners.values())
+        miner_list = list[Miner](miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
         element = manifest.get_element(id=element_id)
@@ -468,45 +444,41 @@ async def runner(
             RUNNER_LAST_PGT_DURATION_SECONDS.set(0.0)
 
         else:
-            pgt_build_start = loop.time()
+            pgt_build_start = event_loop.time()
             try:
                 challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
                     chal_api=chal_api,
-                    required_n_frames=REQUIRED_PGT_FRAMES,
-                    max_bbox_retries=MAX_PGT_BBOX_RETRIES,
-                    max_quality_retries=MAX_PGT_QUALITY_RETRIES,
+                    required_n_frames=required_pgt_frames,
+                    max_bbox_retries=max_pgt_bbox_retries,
+                    max_quality_retries=max_pgt_quality_retries,
                     video_cache=video_cache,
                     element=element,
                 )
             except Exception as e:
-                logger.warning(
-                    f"[Runner] (element={element_id}) PGT quality gating failed after retries, skipping challenge: {e}"
-                )
-                last_pgt_duration = loop.time() - pgt_build_start
-                RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
+                logger.warning(f"[Runner] (element={element_id}) PGT quality gating failed: {e}")
+                pgt_duration = event_loop.time() - pgt_build_start
+                RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
                 run_result = "pgt_failed"
                 return
 
-            last_pgt_duration = loop.time() - pgt_build_start
-            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
+            pgt_duration = event_loop.time() - pgt_build_start
+            RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
 
-        for m in miner_list:
-            miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
-
+        for miner in miner_list:
+            miner_label = miner.slug or str(getattr(miner, "uid", "?"))
             miner_output = None
             emission_started = False
-            miner_total_start = loop.time()
+            miner_start_time = event_loop.time()
+
             try:
-                start = loop.time()
                 miner_output = await call_miner_model_on_chutes(
-                    slug=m.slug,
-                    chute_id=m.chute_id,
+                    slug=miner.slug,
+                    chute_id=miner.chute_id,
                     payload=payload,
-                    expected_model=m.model,
-                    expected_revision=m.revision,
+                    expected_model=miner.model,
+                    expected_revision=miner.revision,
                 )
-                latency_ms = miner_output.latency_ms
-                RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(latency_ms)
+                RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(miner_output.latency_ms)
                 RUNNER_MINER_CALLS_TOTAL.labels(outcome="success").inc()
 
                 try:
@@ -524,303 +496,249 @@ async def runner(
                     raise
 
                 emission_started = True
-                emit_start = loop.time()
+                emit_start = event_loop.time()
 
                 commitment_meta = {
-                    "element_id": getattr(m, "element_id", None),
-                    "model": m.model,
-                    "revision": m.revision,
-                    "chute_slug": m.slug,
-                    "chute_id": m.chute_id,
-                    "commit_block": m.block,
-                    "window_id": current_window_id,
+                    "element_id": getattr(miner, "element_id", None),
+                    "model": miner.model,
+                    "revision": miner.revision,
+                    "chute_slug": miner.slug,
+                    "chute_id": miner.chute_id,
+                    "commit_block": miner.block,
+                    "window_id": window_id,
                 }
 
                 try:
                     await emit_shard(
-                        slug=m.slug,
+                        slug=miner.slug,
                         challenge=challenge,
                         miner_run=miner_output,
                         evaluation=evaluation,
-                        miner_hotkey_ss58=m.hotkey,
-                        window_id=current_window_id,
+                        miner_hotkey_ss58=miner.hotkey,
+                        window_id=window_id,
                         window_start_block=window_start_block,
                         trigger_block=block_number,
                         element_id=str(element_id) if element_id is not None else None,
                         manifest_hash=manifest_hash,
                         salt_id=0,
-                        pgt_recipe_hash=getattr(
-                            settings, "SCOREVISION_PGT_RECIPE_HASH", None
-                        ),
+                        pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
                         lane="public",
-                        model=m.model,
-                        revision=m.revision,
-                        chute_id=m.chute_id,
+                        model=miner.model,
+                        revision=miner.revision,
+                        chute_id=miner.chute_id,
                         commitment_meta=commitment_meta,
                     )
                 except Exception:
-                    dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.exception(
-                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
-                    )
+                    emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+                    logger.exception("[emit] FAILED for %s in %.1fms", miner_label, emit_duration_ms)
                     raise
                 else:
-                    dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.info("[emit] success for %s in %.1fms", miner_label, dt_emit)
+                    emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+                    logger.info("[emit] success for %s in %.1fms", miner_label, emit_duration_ms)
                     RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
                 finally:
                     emission_started = False
+
             except Exception as e:
-                logger.warning(
-                    "Miner uid=%s slug=%s failed: %s",
-                    getattr(m, "uid", "?"),
-                    getattr(m, "slug", "?"),
-                    e,
-                )
+                logger.warning("Miner uid=%s slug=%s failed: %s", getattr(miner, "uid", "?"), miner.slug, e)
                 if miner_output is None:
                     RUNNER_MINER_CALLS_TOTAL.labels(outcome="exception").inc()
                 if emission_started:
                     RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
+
             finally:
-                duration = loop.time() - miner_total_start
-                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
-                    duration
-                )
+                miner_duration = event_loop.time() - miner_start_time
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(miner_duration)
     except Exception as e:
         logger.error(e)
         run_result = "error"
+
     finally:
-        loop_now = asyncio.get_running_loop()
-        run_duration = loop_now.time() - run_start
+        run_duration = asyncio.get_running_loop().time() - run_start
         RUNNER_LAST_RUN_DURATION_SECONDS.set(run_duration)
-        store_obj = video_cache.get("store") or frame_store
-        if store_obj:
-            try:
-                store_obj.unlink()
-            except Exception as err:
-                logger.debug(
-                    f"Failed to remove cached video {getattr(store_obj, 'video_path', '?')}: {err}"
-                )
-        elif video_cache.get("path"):
-            cached_path = Path(video_cache["path"])
-            try:
-                cached_path.unlink(missing_ok=True)
-            except Exception as err:
-                logger.debug(f"Failed to remove cached video {cached_path}: {err}")
-        video_cache.clear()
+        _cleanup_video_cache(video_cache, frame_store)
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
         gc.collect()
 
 
-async def runner_loop(path_manifest: Path | None = None):
-    """
-    """
-    settings = get_settings()
-    GET_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", "15.0"))
-    WAIT_BLOCK_TIMEOUT = float(os.getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", "15.0"))
-    RECONNECT_DELAY_S = float(os.getenv("SUBTENSOR_RECONNECT_DELAY_S", "5.0"))
-    DEFAULT_ELEMENT_TEMPO = int(
-        os.getenv("SV_DEFAULT_ELEMENT_TEMPO_BLOCKS", "300")
-    )
+def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | None) -> None:
+    store_obj = video_cache.get("store") or frame_store
+    if store_obj:
+        try:
+            store_obj.unlink()
+        except Exception as err:
+            logger.debug(f"Failed to remove cached video {getattr(store_obj, 'video_path', '?')}: {err}")
+    elif video_cache.get("path"):
+        cached_path = Path(video_cache["path"])
+        try:
+            cached_path.unlink(missing_ok=True)
+        except Exception as err:
+            logger.debug(f"Failed to remove cached video {cached_path}: {err}")
+    video_cache.clear()
 
-    def signal_handler():
+
+def _setup_shutdown_handler() -> None:
+    def handler():
         logger.warning("Received shutdown signal, stopping runner...")
         shutdown_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda s, f: signal_handler())
+        signal.signal(sig, lambda s, f: handler())
 
-    st = None
-    loop = asyncio.get_running_loop()
 
+async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
+    if path_manifest is not None:
+        return Manifest.load_yaml(path_manifest)
+    if getattr(settings, "URL_MANIFEST", None):
+        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
+        return await load_manifest_from_public_index(settings.URL_MANIFEST, block_number=block, cache_dir=cache_dir)
+    return get_current_manifest(block_number=block)
+
+
+def _cancel_removed_element_tasks(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int]) -> None:
+    removed = set(element_state.keys()) - set(element_tempos.keys())
+    for element_id in removed:
+        entry = element_state.pop(element_id, None)
+        if entry and entry.get("task") is not None:
+            task = entry["task"]
+            if not task.done():
+                logger.info("[RunnerLoop] Cancelling runner task for removed element_id=%s", element_id)
+                task.cancel()
+
+
+def _update_element_state(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int], block: int) -> None:
+    for element_id, tempo in element_tempos.items():
+        entry = element_state.get(element_id)
+        window_id = get_current_window_id(block)
+        anchor = get_window_start_block(window_id, tempo=tempo)
+
+        if entry is None:
+            element_state[element_id] = {"tempo": tempo, "anchor": anchor, "task": None}
+            logger.info("[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)", element_id, tempo, anchor)
+        else:
+            entry["tempo"] = tempo
+            entry["anchor"] = anchor
+
+
+def _trigger_scheduled_runners(element_state: Dict[str, Dict[str, Any]], block: int, manifest: Manifest) -> None:
+    for element_id, entry in element_state.items():
+        tempo = max(1, int(entry["tempo"]))
+        anchor = int(entry["anchor"])
+        task = entry.get("task")
+        delta = block - anchor
+        should_trigger = (delta >= 0) and (delta % tempo == 0)
+
+        if not should_trigger:
+            continue
+
+        if task is not None and not task.done():
+            logger.info("[RunnerLoop] element_id=%s still running; skipping trigger at block=%s", element_id, block)
+        else:
+            logger.info("[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)", element_id, block, tempo, anchor)
+            entry["task"] = asyncio.create_task(runner(block_number=block, manifest=manifest, element_id=element_id))
+
+
+async def runner_loop(path_manifest: Path | None = None):
+    settings = get_settings()
+    get_block_timeout = settings.RUNNER_GET_BLOCK_TIMEOUT_S
+    wait_block_timeout = settings.RUNNER_WAIT_BLOCK_TIMEOUT_S
+    reconnect_delay = settings.RUNNER_RECONNECT_DELAY_S
+    default_element_tempo = settings.RUNNER_DEFAULT_ELEMENT_TEMPO
+
+    _setup_shutdown_handler()
+
+    subtensor = None
     element_state: Dict[str, Dict[str, Any]] = {}
-
     manifest: Optional[Manifest] = None
     manifest_hash: Optional[str] = None
 
-    logger.warning("[RunnerLoop] starting (per-element scheduling)")
+    logger.info("[RunnerLoop] starting (per-element scheduling)")
 
     while not shutdown_event.is_set():
         try:
-            if st is None:
-                logger.warning("[RunnerLoop] (re)connecting subtensor…")
+            if subtensor is None:
+                logger.info("[RunnerLoop] (re)connecting subtensor...")
                 try:
-                    st = await get_subtensor()
+                    subtensor = await get_subtensor()
                 except Exception as e:
-                    logger.warning(
-                        "[RunnerLoop] subtensor connect failed: %s → retrying in %.1fs",
-                        e,
-                        RECONNECT_DELAY_S,
-                    )
+                    logger.warning("[RunnerLoop] subtensor connect failed: %s → retrying in %.1fs", e, reconnect_delay)
                     reset_subtensor()
-                    st = None
-                    await asyncio.sleep(RECONNECT_DELAY_S)
+                    subtensor = None
+                    await asyncio.sleep(reconnect_delay)
                     continue
 
-            # ------------------- Get current block ------------------- #
             try:
-                block = await asyncio.wait_for(
-                    st.get_current_block(), timeout=GET_BLOCK_TIMEOUT
-                )
+                block = await asyncio.wait_for(subtensor.get_current_block(), timeout=get_block_timeout)
             except asyncio.TimeoutError:
-                logger.warning(
-                    "[RunnerLoop] get_current_block() timed out after %.1fs → resetting subtensor",
-                    GET_BLOCK_TIMEOUT,
-                )
+                logger.warning("[RunnerLoop] get_current_block() timed out after %.1fs → resetting", get_block_timeout)
                 reset_subtensor()
-                st = None
+                subtensor = None
                 await asyncio.sleep(2.0)
                 continue
             except (KeyError, ConnectionError, RuntimeError) as err:
-                logger.warning(
-                    "[RunnerLoop] get_current_block error (%s) → resetting subtensor",
-                    err,
-                )
+                logger.warning("[RunnerLoop] get_current_block error (%s) → resetting subtensor", err)
                 reset_subtensor()
-                st = None
+                subtensor = None
                 await asyncio.sleep(2.0)
                 continue
 
             RUNNER_BLOCK_HEIGHT.set(block)
 
             try:
-                settings = get_settings()
-
-                if path_manifest is not None:
-                    new_manifest = Manifest.load_yaml(path_manifest)
-                elif getattr(settings, "URL_MANIFEST", None):
-                    cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
-                    new_manifest = await load_manifest_from_public_index(
-                        settings.URL_MANIFEST,
-                        block_number=block,
-                        cache_dir=cache_dir,
-                    )
-                else:
-                    new_manifest = get_current_manifest(block_number=block)
+                new_manifest = await _load_manifest(path_manifest, settings, block)
             except Exception as e:
-                logger.error(
-                    "[RunnerLoop] Failed to load Manifest at block %s: %s",
-                    block,
-                    e,
-                )
+                logger.error("[RunnerLoop] Failed to load Manifest at block %s: %s", block, e)
                 try:
-                    await asyncio.wait_for(
-                        st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT
-                    )
+                    await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:
-                    logger.warning(
-                        "[RunnerLoop] wait_for_block error (%s); resetting subtensor",
-                        err,
-                    )
+                    logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
                     reset_subtensor()
-                    st = None
+                    subtensor = None
                     await asyncio.sleep(2.0)
                 continue
 
             new_hash = new_manifest.hash
             if manifest is None or new_hash != manifest_hash:
-                logger.info(
-                    "[RunnerLoop] Manifest hash changed (old=%s new=%s) → rebuilding element_state",
-                    manifest_hash,
-                    new_hash,
-                )
+                logger.info("[RunnerLoop] Manifest hash changed (old=%s new=%s) → rebuilding element_state", manifest_hash, new_hash)
                 manifest = new_manifest
                 manifest_hash = new_hash
 
-                elems_tempos = _extract_element_tempos_from_manifest(
-                    manifest, DEFAULT_ELEMENT_TEMPO
-                )
-
-                removed = set(element_state.keys()) - set(elems_tempos.keys())
-                for eid in removed:
-                    st_e = element_state.pop(eid, None)
-                    if st_e and st_e.get("task") is not None:
-                        task = st_e["task"]
-                        if not task.done():
-                            logger.info(
-                                "[RunnerLoop] Cancelling runner task for removed element_id=%s",
-                                eid,
-                            )
-                            task.cancel()
-
-                for eid, tempo in elems_tempos.items():
-                    st_e = element_state.get(eid)
-                    if st_e is None:
-                        wid = get_current_window_id(block)
-                        anchor = get_window_start_block(wid, tempo=tempo)
-                        element_state[eid] = {"tempo": tempo, "anchor": anchor, "task": None}
-                        logger.info(
-                            "[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)",
-                            eid, tempo, anchor
-                        )
-                    else:
-                        st_e["tempo"] = tempo
-                        wid = get_current_window_id(block)
-                        st_e["anchor"] = get_window_start_block(wid, tempo=tempo)
-
+                element_tempos = _extract_element_tempos_from_manifest(manifest, default_element_tempo)
+                _cancel_removed_element_tasks(element_state, element_tempos)
+                _update_element_state(element_state, element_tempos, block)
             else:
                 manifest = new_manifest
 
             if not element_state:
-                logger.warning(
-                    "[RunnerLoop] Manifest has no elements; nothing to schedule at block=%s",
-                    block,
-                )
+                logger.warning("[RunnerLoop] Manifest has no elements; nothing to schedule at block=%s", block)
             else:
-                for eid, st_e in element_state.items():
-                    tempo = max(1, int(st_e["tempo"])) 
-                    anchor = int(st_e["anchor"])
-                    task = st_e.get("task")
-
-                    delta = block - anchor
-                    should_trigger = (delta >= 0) and (delta % tempo == 0)
-
-                    if should_trigger:
-                        if task is not None and not task.done():
-                            logger.info(
-                                "[RunnerLoop] element_id=%s still running; skipping aligned trigger at block=%s",
-                                eid, block
-                            )
-                        else:
-                            logger.info(
-                                "[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)",
-                                eid, block, tempo, anchor
-                            )
-                            st_e["task"] = asyncio.create_task(
-                                runner(block_number=block, manifest=manifest, element_id=eid)
-                            )
+                _trigger_scheduled_runners(element_state, block, manifest)
 
             try:
-                await asyncio.wait_for(
-                    st.wait_for_block(), timeout=WAIT_BLOCK_TIMEOUT
-                )
+                await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
             except asyncio.TimeoutError:
                 continue
             except (KeyError, ConnectionError, RuntimeError) as err:
-                logger.warning(
-                    "[RunnerLoop] wait_for_block error (%s); resetting subtensor",
-                    err,
-                )
+                logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
                 reset_subtensor()
-                st = None
+                subtensor = None
                 await asyncio.sleep(2.0)
                 continue
 
         except asyncio.CancelledError:
             break
+
         except Exception as e:
-            logger.warning(
-                "[RunnerLoop] Error: %s; resetting subtensor and retrying…", e
-            )
+            logger.warning("[RunnerLoop] Error: %s; resetting subtensor and retrying...", e)
             reset_subtensor()
-            st = None
+            subtensor = None
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
             except asyncio.TimeoutError:
                 pass
 
-    logger.warning("Runner loop shutting down gracefully...")
+    logger.info("Runner loop shutting down gracefully...")

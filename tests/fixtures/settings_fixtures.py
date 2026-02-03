@@ -6,7 +6,6 @@ from pytest import fixture
 
 @fixture
 def fake_settings():
-    """A fake settings object with all R2/CDN credentials"""
     return SimpleNamespace(
         SCOREVISION_BUCKET="scorevision",
         SCOREVISION_ENDPOINT="https://unused",
@@ -16,10 +15,21 @@ def fake_settings():
         SCOREVISION_M_MIN=1,
         SCOREVISION_WINDOW_TIEBREAK_ENABLE=False,
         SCOREVISION_NETUID=44,
+        SCOREVISION_MECHID=1,
         SCOREVISION_WINDOW_DELTA_ABS=0.1,
         SCOREVISION_WINDOW_DELTA_REL=0.1,
+        SCOREVISION_VLM_SELECT_N_FRAMES=3,
         BITTENSOR_WALLET_COLD="cold_wallet_name",
         BITTENSOR_WALLET_HOT="hot_wallet_name",
+        RUNNER_GET_BLOCK_TIMEOUT_S=15.0,
+        RUNNER_WAIT_BLOCK_TIMEOUT_S=15.0,
+        RUNNER_RECONNECT_DELAY_S=5.0,
+        RUNNER_DEFAULT_ELEMENT_TEMPO=300,
+        RUNNER_PGT_MAX_BBOX_RETRIES=3,
+        RUNNER_PGT_MAX_QUALITY_RETRIES=4,
+        VALIDATOR_TAIL_BLOCKS=28800,
+        VALIDATOR_FALLBACK_UID=6,
+        VALIDATOR_WINNERS_EVERY_N=24,
     )
 
 

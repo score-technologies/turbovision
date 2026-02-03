@@ -8,19 +8,16 @@ import gc
 import math
 from collections import defaultdict, deque
 from functools import lru_cache
-from json import loads
-
+from pathlib import Path
+from statistics import median
 import aiohttp
 import bittensor as bt
-from statistics import median
-
 from scorevision.utils.settings import get_settings
 from scorevision.utils.windows import get_current_window_id
 from scorevision.utils.prometheus import (
     LASTSET_GAUGE,
     CACHE_DIR,
     CACHE_FILES,
-    EMA_BY_UID,
     CURRENT_WINNER,
     VALIDATOR_BLOCK_HEIGHT,
     VALIDATOR_LOOP_TOTAL,
@@ -30,12 +27,10 @@ from scorevision.utils.prometheus import (
     VALIDATOR_MINERS_CONSIDERED,
     VALIDATOR_MINERS_SKIPPED_TOTAL,
     VALIDATOR_WINNER_SCORE,
-    VALIDATOR_RECENT_WINDOW_SAMPLES,
     VALIDATOR_COMMIT_TOTAL,
     VALIDATOR_LAST_LOOP_DURATION_SECONDS,
     VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS,
 )
-
 from scorevision.utils.bittensor_helpers import (
     reset_subtensor,
     get_subtensor,
@@ -53,15 +48,11 @@ from scorevision.utils.cloudflare_helpers import (
     prune_sv,
     put_winners_snapshot,
 )
-
 from scorevision.utils.manifest import (
     get_current_manifest,
     Manifest,
     load_manifest_from_public_index,
 )
-
-from pathlib import Path
-
 
 logger = logging.getLogger("scorevision.validator")
 shutdown_event = asyncio.Event()
@@ -69,13 +60,7 @@ shutdown_event = asyncio.Event()
 for noisy in ["websockets", "websockets.client", "substrateinterface", "urllib3"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
-
-TAIL_BLOCKS_DEFAULT = int(os.getenv("SCOREVISION_VALIDATOR_TAIL", "28800"))
-
-FALLBACK_UID = int(os.getenv("SCOREVISION_FALLBACK_UID", "6"))
-
 BLOCKS_PER_DAY = 7200
-WINNERS_EVERY_N = int(os.getenv("SCOREVISION_WINNERS_EVERY", "24"))
 
 @lru_cache(maxsize=1)
 def _validator_hotkey_ss58() -> str:
@@ -87,11 +72,7 @@ def _validator_hotkey_ss58() -> str:
     return wallet.hotkey.ss58_address
 
 
-
-
 def _extract_miner_and_score_from_payload(payload: dict, hk_to_uid: dict[str, int]):
-    """
-    """
     try:
         telemetry = payload.get("telemetry") or {}
         miner_info = telemetry.get("miner") or {}
@@ -179,8 +160,8 @@ async def _get_local_fallback_winner_for_element(
     m_min: int,
     hk_to_uid: dict[str, int],
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
-    """
-    """
+    settings = get_settings()
+    fallback_uid = settings.VALIDATOR_FALLBACK_UID
     sums: dict[int, float] = {}
     cnt: dict[int, int] = {}
     miner_meta_by_hk: dict[str, dict[str, str | None]] = {}
@@ -220,9 +201,9 @@ async def _get_local_fallback_winner_for_element(
         VALIDATOR_MINERS_CONSIDERED.set(0)
         uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
         return (
-            FALLBACK_UID,
-            {FALLBACK_UID: 0.0},
-            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+            fallback_uid,
+            {fallback_uid: 0.0},
+            _build_winner_meta_from_uid(fallback_uid, uid_to_hk, miner_meta_by_hk),
         )
 
     elig = [
@@ -239,9 +220,9 @@ async def _get_local_fallback_winner_for_element(
         VALIDATOR_MINERS_CONSIDERED.set(0)
         uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
         return (
-            FALLBACK_UID,
-            {FALLBACK_UID: 0.0},
-            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+            fallback_uid,
+            {fallback_uid: 0.0},
+            _build_winner_meta_from_uid(fallback_uid, uid_to_hk, miner_meta_by_hk),
         )
 
     avg = {uid: (sums[uid] / cnt[uid]) for uid in elig}
@@ -425,12 +406,11 @@ async def get_winner_for_element(
     m_min: int,
     blacklisted_hotkeys: set[str] | None = None,
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
-    """
-    """
     settings = get_settings()
     st = await get_subtensor()
     NETUID = settings.SCOREVISION_NETUID
     MECHID = settings.SCOREVISION_MECHID
+    fallback_uid = settings.VALIDATOR_FALLBACK_UID
 
     meta = await st.metagraph(NETUID, mechid=MECHID)
     if blacklisted_hotkeys is None:
@@ -518,9 +498,9 @@ async def get_winner_for_element(
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
         return (
-            FALLBACK_UID,
-            {FALLBACK_UID: 0.0},
-            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+            fallback_uid,
+            {fallback_uid: 0.0},
+            _build_winner_meta_from_uid(fallback_uid, uid_to_hk, miner_meta_by_hk),
         )
 
     mu_by_V_m: dict[tuple[str, int], tuple[float, int]] = {}
@@ -628,9 +608,9 @@ async def get_winner_for_element(
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
         return (
-            FALLBACK_UID,
-            {FALLBACK_UID: 0.0},
-            _build_winner_meta_from_uid(FALLBACK_UID, uid_to_hk, miner_meta_by_hk),
+            fallback_uid,
+            {fallback_uid: 0.0},
+            _build_winner_meta_from_uid(fallback_uid, uid_to_hk, miner_meta_by_hk),
         )
 
     VALIDATOR_MINERS_CONSIDERED.set(len(S_by_m))
@@ -871,6 +851,9 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
     settings = get_settings()
     NETUID = settings.SCOREVISION_NETUID
     R2_BUCKET_PUBLIC_URL = settings.R2_BUCKET_PUBLIC_URL
+    fallback_uid = settings.VALIDATOR_FALLBACK_UID
+    tail_blocks_default = settings.VALIDATOR_TAIL_BLOCKS
+    winners_every_n = settings.VALIDATOR_WINNERS_EVERY_N
 
     def signal_handler():
         logger.info("Received shutdown signal, stopping validator...")
@@ -971,7 +954,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
 
     st = None
     last_done = -1
-    effective_tail = max(tail, TAIL_BLOCKS_DEFAULT)
+    effective_tail = max(tail, tail_blocks_default)
     set_weights_count = 0
 
     while not shutdown_event.is_set():
@@ -1053,8 +1036,8 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
 
                 total_elem_w = sum(max(0.0, w) for _eid, w, _ew in elements)
                 if total_elem_w <= 0:
-                    logger.warning("[validator] Manifest elements weights sum to 0 -> forcing all weight to FALLBACK_UID=%d", FALLBACK_UID)
-                    weights_by_uid = {FALLBACK_UID: 1.0}
+                    logger.warning("[validator] Manifest elements weights sum to 0 -> forcing all weight to fallback_uid=%d", fallback_uid)
+                    weights_by_uid = {fallback_uid: 1.0}
                 else:
                     elements = [(eid, max(0.0, float(w)), eval_window_days) for (eid, w, eval_window_days) in elements]
                     max_tail_used = 0
@@ -1159,13 +1142,13 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                             weights_by_uid[uid] *= scale
                     else:
                         missing = 1.0 - total_weight
-                        weights_by_uid[FALLBACK_UID] = (
-                            weights_by_uid.get(FALLBACK_UID, 0.0) + missing
+                        weights_by_uid[fallback_uid] = (
+                            weights_by_uid.get(fallback_uid, 0.0) + missing
                         )
                         logger.info(
                             "[validator] Total weights %.6f < 1.0; adding fallback uid=%d with weight=%.6f for window_id=%s",
                             total_weight,
-                            FALLBACK_UID,
+                            fallback_uid,
                             missing,
                             current_window_id,
                         )
@@ -1187,7 +1170,7 @@ async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_m
                     loop_outcome = "success"
                     logger.info("set_weights OK at block %d", block)
                     set_weights_count += 1
-                    if WINNERS_EVERY_N > 0 and set_weights_count % WINNERS_EVERY_N == 0:
+                    if winners_every_n > 0 and set_weights_count % winners_every_n == 0:
                         if winners_by_element:
                             payload = {
                                 "block": block,
