@@ -20,7 +20,6 @@ from scorevision.utils.challenges import (
 )
 from scorevision.utils.chutes_helpers import warmup_chute
 from scorevision.utils.cloudflare_helpers import emit_shard
-from scorevision.utils.commitments import get_active_element_ids_by_hotkey
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.manifest import Element, Manifest, get_current_manifest, load_manifest_from_public_index

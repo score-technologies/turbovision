@@ -7,7 +7,6 @@ import click
 
 from scorevision.cli.elements import elements_cli
 from scorevision.cli.manifest import manifest_cli
-from scorevision.cli.miner import miner as miner_cli
 from scorevision.cli.push import push_ml_model
 from scorevision.cli.runner import runner_loop
 from scorevision.cli.signer_api import run_signer
@@ -35,8 +34,6 @@ def cli(verbosity: int):
     )
     logger.debug(f"Score Vision started (version={settings.SCOREVISION_VERSION})")
 
-
-cli.add_command(miner_cli)
 
 
 @cli.command("runner")

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, time, requests
+import os, json, time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from logging import getLogger
@@ -31,14 +31,18 @@ _HF_MODEL_GATING_CACHE: Dict[str, Tuple[bool, float]] = {}
 _HF_GATING_TTL = 300  # seconds
 
 
-def _hf_is_gated(model_id: str) -> Optional[bool]:
+async def _hf_is_gated(model_id: str) -> Optional[bool]:
+    url = f"https://huggingface.co/api/models/{model_id}"
     try:
-        r = requests.get(f"https://huggingface.co/api/models/{model_id}", timeout=5)
-        if r.status_code == 200:
-            gated = bool(r.json().get("gated", False))
-            logger.debug("[HF] model=%s gated=%s", model_id, gated)
-            return gated
-        logger.debug("[HF] model=%s status=%s", model_id, r.status_code)
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(url) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    gated = bool(data.get("gated", False))
+                    logger.debug("[HF] model=%s gated=%s", model_id, gated)
+                    return gated
+                logger.debug("[HF] model=%s status=%s", model_id, r.status)
     except Exception as e:
         logger.debug("[HF] is_gated error for %s: %s", model_id, e)
     return None
@@ -60,7 +64,7 @@ def _hf_revision_accessible(model_id: str, revision: Optional[str]) -> bool:
         return False
 
 
-def _hf_gated_or_inaccessible(
+async def _hf_gated_or_inaccessible(
     model_id: Optional[str], revision: Optional[str]
 ) -> Optional[bool]:
     if not model_id:
@@ -72,7 +76,7 @@ def _hf_gated_or_inaccessible(
         gated = cached[0]
         logger.debug("[HF] cache hit model=%s gated=%s", model_id, gated)
     else:
-        gated = _hf_is_gated(model_id)
+        gated = await _hf_is_gated(model_id)
         _HF_MODEL_GATING_CACHE[model_id] = (bool(gated) if gated is not None else False, now)
         logger.debug("[HF] cache set model=%s gated=%s", model_id, gated)
 
@@ -232,7 +236,7 @@ async def get_miners_from_registry(
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
     for uid, m in candidates.items():
-        gated = _hf_gated_or_inaccessible(m.model, m.revision)
+        gated = await _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
             logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
             continue
