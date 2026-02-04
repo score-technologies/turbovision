@@ -263,6 +263,15 @@ def compare_team_labels(
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
 
 
+@register_metric((ElementPrefix.PLAYER_DETECTION, PillarName.PALETTE))
+def compare_palette(
+    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
+) -> float:
+    return compare_team_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    )
+
+
 @register_metric((ElementPrefix.PLAYER_DETECTION, PillarName.ROLE))
 def compare_object_and_team_labels(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
