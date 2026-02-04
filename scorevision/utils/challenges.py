@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging import getLogger
 from time import time
 from typing import Any
@@ -33,6 +34,15 @@ class ScoreVisionChallengeError(Exception):
     pass
 
 
+def _safe_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _coerce_challenge_type(challenge: dict) -> ChallengeType:
     ct = parse_challenge_type(challenge.get("challenge_type"))
     if ct:
@@ -43,6 +53,38 @@ def _coerce_challenge_type(challenge: dict) -> ChallengeType:
     if isinstance(ct_id, str) and ct_id.isdigit():
         return CHALLENGE_ID_LOOKUP.get(int(ct_id), ChallengeType.FOOTBALL)
     return ChallengeType.FOOTBALL
+
+
+def _build_offline_challenge(
+    *,
+    element_id: str,
+    video_url: str,
+    manifest_hash: str | None = None,
+    window_id: str | None = None,
+    task_id: int | None = None,
+    challenge_type: str | ChallengeType | None = None,
+    fps: int | None = None,
+    seed: int | None = None,
+) -> dict:
+    ct = parse_challenge_type(challenge_type) if challenge_type else None
+    ct_value = (ct or ChallengeType.FOOTBALL).value
+    offline_task_id = task_id if task_id is not None else 1
+    task_id_int = int(offline_task_id)
+    payload = {"video_url": video_url}
+    if fps is not None:
+        payload["fps"] = fps
+    return {
+        "id": task_id_int,
+        "task_id": task_id_int,
+        "element_id": element_id,
+        "window_id": window_id or "offline",
+        "manifest_hash": manifest_hash,
+        "challenge_type": ct_value,
+        "seed": seed or 0,
+        "video_url": video_url,
+        "asset_url": video_url,
+        "payload": payload,
+    }
 
 
 
@@ -297,6 +339,23 @@ async def get_next_challenge_v3(
     """
     Challenge client aligned to the current ScoreVision API (/api/tasks/next).
     """
+    offline_url = os.getenv("SV_OFFLINE_CHALLENGE_URL")
+    if offline_url:
+        if element_id is None:
+            raise ScoreVisionChallengeError(
+                "Offline challenge requires an element_id argument."
+            )
+        return _build_offline_challenge(
+            element_id=element_id,
+            video_url=offline_url,
+            manifest_hash=manifest_hash,
+            window_id=os.getenv("SV_OFFLINE_WINDOW_ID", None),
+            task_id=_safe_int(os.getenv("SV_OFFLINE_TASK_ID")),
+            challenge_type=os.getenv("SV_OFFLINE_CHALLENGE_TYPE", "football"),
+            fps=_safe_int(os.getenv("SV_OFFLINE_FPS")),
+            seed=_safe_int(os.getenv("SV_OFFLINE_SEED")) or 0,
+        )
+
     settings = get_settings()
 
     if not settings.SCOREVISION_API:
