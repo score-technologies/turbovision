@@ -30,7 +30,7 @@ def sam3_predictions_to_bounding_boxes(
         object_label_raw = result.echo.text
         if object_label_raw in team_labels:
             object_label = original_team_label
-            team_index = team_labels.index(object_label)
+            team_index = team_labels.index(object_label_raw)
             colour = TEAM_COLOURS[team_index]
         else:
             object_label = object_label_raw
