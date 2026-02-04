@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from logging import getLogger
 from typing import Iterable, List, Tuple
 
 import numpy as np
@@ -18,6 +19,8 @@ from scorevision.vlm_pipeline.utils.response_models import (
 
 AUC_IOU_THRESHOLDS = (0.3, 0.5)
 ENUM_IOU_THRESHOLD = 0.3
+
+logger = getLogger(__name__)
 
 
 # ===============================
@@ -205,6 +208,13 @@ def compare_object_placement(
         val = _auc_f1(
             p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=False
         )
+        logger.info(
+            "[bbox][iou] frame=%s pgt=%s miner=%s score=%.6f",
+            fr,
+            len(p_boxes),
+            len(h_boxes),
+            val,
+        )
         per_frame.append(val)
 
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
@@ -236,6 +246,13 @@ def compare_object_labels(
         val = _auc_f1(
             p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=True
         )
+        logger.info(
+            "[bbox][labels] frame=%s pgt=%s miner=%s score=%.6f",
+            fr,
+            len(p_boxes),
+            len(h_boxes),
+            val,
+        )
         per_frame.append(val)
 
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
@@ -258,6 +275,13 @@ def compare_team_labels(
         miner = miner_predictions.get(fr) or {}
         h_bboxes = miner.get("bboxes") or []
         val = _team_auc_f1(pgt.annotation.bboxes, h_bboxes, AUC_IOU_THRESHOLDS)
+        logger.info(
+            "[bbox][team] frame=%s pgt=%s miner=%s score=%.6f",
+            fr,
+            len(pgt.annotation.bboxes or []),
+            len(h_bboxes),
+            val,
+        )
         per_frame.append(val)
 
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
@@ -317,6 +341,13 @@ def compare_object_counts(
             h_lab,
             iou_thresh=ENUM_IOU_THRESHOLD,
             label_strict=False,
+        )
+        logger.info(
+            "[bbox][count] frame=%s pgt=%s miner=%s score=%.6f",
+            fr,
+            len(p_boxes),
+            len(h_boxes),
+            val,
         )
         per_frame.append(val)
 

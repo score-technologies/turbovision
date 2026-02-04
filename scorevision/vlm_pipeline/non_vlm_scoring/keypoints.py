@@ -313,11 +313,11 @@ def evaluate_keypoints_for_frame(
         min_y, max_y = min(ys), max(ys)
 
         if max_x < 0 or max_y < 0 or min_x >= frame_width or min_y >= frame_height:
-            logger.info("All keypoints are outside the frame")
+            logger.debug("All keypoints are outside the frame")
             return 0.0
 
         if (max_x - min_x) > 2 * frame_width or (max_y - min_y) > 2 * frame_height:
-            logger.info("Keypoints spread too wide")
+            logger.debug("Keypoints spread too wide")
             return 0.0
 
         inv_expected = bitwise_not(mask_lines_expected)
@@ -329,7 +329,7 @@ def evaluate_keypoints_for_frame(
             return 0.0
 
         if (pixels_rest / (total_pixels)) > 0.9:
-            logger.info("threshold exceeded")
+            logger.debug("threshold exceeded")
             return 0.0
 
         pixels_overlapping = pixels_overlapping_result.sum()
@@ -388,6 +388,6 @@ def evaluate_keypoints(
                 floor_markings_template=template_image.copy(),
                 keypoint_template=keypoints_template,
             )
-        logger.info(f"[evaluate_keypoints] Frame {frame_number}: {frame_score}")
+        logger.debug(f"[evaluate_keypoints] Frame {frame_number}: {frame_score}")
         frame_scores.append(frame_score)
     return sum(frame_scores) / len(frame_scores)
