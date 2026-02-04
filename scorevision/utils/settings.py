@@ -98,10 +98,18 @@ class Settings(BaseModel):
     RUNNER_PGT_MAX_BBOX_RETRIES: int
     RUNNER_PGT_MAX_QUALITY_RETRIES: int
 
+    # Bittensor
+    BLOCKS_PER_DAY: int
+
     # Validator
     VALIDATOR_TAIL_BLOCKS: int
     VALIDATOR_FALLBACK_UID: int
     VALIDATOR_WINNERS_EVERY_N: int
+
+    # Audit Validator
+    AUDIT_SPOTCHECK_MIN_INTERVAL_S: int
+    AUDIT_SPOTCHECK_MAX_INTERVAL_S: int
+    AUDIT_SPOTCHECK_THRESHOLD: float
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -252,8 +260,14 @@ def get_settings() -> Settings:
         RUNNER_DEFAULT_ELEMENT_TEMPO=int(getenv("SV_DEFAULT_ELEMENT_TEMPO_BLOCKS", 300)),
         RUNNER_PGT_MAX_BBOX_RETRIES=int(getenv("SV_PGT_MAX_BBOX_RETRIES", 3)),
         RUNNER_PGT_MAX_QUALITY_RETRIES=int(getenv("SV_PGT_MAX_QUALITY_RETRIES", 4)),
+        # Bittensor
+        BLOCKS_PER_DAY=7200,
         # Validator
         VALIDATOR_TAIL_BLOCKS=int(getenv("SCOREVISION_VALIDATOR_TAIL", 28800)),
         VALIDATOR_FALLBACK_UID=int(getenv("SCOREVISION_FALLBACK_UID", 6)),
         VALIDATOR_WINNERS_EVERY_N=int(getenv("SCOREVISION_WINNERS_EVERY", 24)),
+        # Audit Validator
+        AUDIT_SPOTCHECK_MIN_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MIN_INTERVAL_S", 7200)),
+        AUDIT_SPOTCHECK_MAX_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MAX_INTERVAL_S", 14400)),
+        AUDIT_SPOTCHECK_THRESHOLD=float(getenv("AUDIT_SPOTCHECK_THRESHOLD", 0.95)),
     )
