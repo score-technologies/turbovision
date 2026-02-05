@@ -1,11 +1,11 @@
 import asyncio
+import logging
 import multiprocessing
 import signal
-from logging import getLogger
 import click
 from scorevision.utils.settings import get_settings
 
-logger = getLogger(__name__)
+logger = logging.getLogger("scorevision.audit")
 
 shutdown_event = asyncio.Event()
 
@@ -115,28 +115,68 @@ def weights_cmd(tail: int, m_min: int, tempo: int):
 
 
 @audit.command("spotcheck")
-@click.option("--min-interval", default=None, type=int, help="Min interval in seconds")
-@click.option("--max-interval", default=None, type=int, help="Max interval in seconds")
-@click.option("--tail", default=28800, help="Tail blocks for data fetching")
-@click.option("--threshold", default=None, type=float, help="Match threshold (0.0-1.0)")
+@click.option("--min-interval", default=None, type=int)
+@click.option("--max-interval", default=None, type=int)
+@click.option("--tail", default=28800)
+@click.option("--threshold", default=None, type=float)
+@click.option("--element-id", default=None)
+@click.option("--once", is_flag=True)
+@click.option("--mock-data-dir", default=None, type=click.Path(exists=True), help="Load mock data from local directory (testing only)")
 def spotcheck_cmd(
     min_interval: int | None,
     max_interval: int | None,
     tail: int,
     threshold: float | None,
+    element_id: str | None,
+    once: bool,
+    mock_data_dir: str | None,
 ):
-    from scorevision.validator.spotcheck import spotcheck_loop
+    from pathlib import Path
+    from scorevision.validator.spotcheck import spotcheck_loop, run_single_spotcheck
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
+    logging.getLogger("scorevision.spotcheck").setLevel(logging.INFO)
+    logging.getLogger("scorevision.audit").setLevel(logging.INFO)
 
     settings = get_settings()
+
+    mock_path = Path(mock_data_dir) if mock_data_dir else None
+
+    if mock_path is None:
+        public_url = settings.R2_BUCKET_PUBLIC_URL
+        if not public_url:
+            logger.error("R2_BUCKET_PUBLIC_URL is not set")
+            return
+
     if min_interval is None:
         min_interval = settings.AUDIT_SPOTCHECK_MIN_INTERVAL_S
     if max_interval is None:
         max_interval = settings.AUDIT_SPOTCHECK_MAX_INTERVAL_S
+    if threshold is None:
+        threshold = settings.AUDIT_SPOTCHECK_THRESHOLD
 
-    logger.info("Starting spotcheck-only mode (interval=%d-%d seconds)", min_interval, max_interval)
-    asyncio.run(spotcheck_loop(
-        min_interval_seconds=min_interval,
-        max_interval_seconds=max_interval,
-        tail_blocks=tail,
-        threshold=threshold,
-    ))
+    if once or mock_path is not None:
+        if mock_path:
+            logger.info("Running spotcheck with mock data from: %s", mock_path)
+        else:
+            logger.info("Running single spotcheck (tail=%d, element=%s, threshold=%.0f%%)", tail, element_id or "any", threshold * 100)
+        asyncio.run(run_single_spotcheck(
+            tail_blocks=tail,
+            element_id=element_id,
+            threshold=threshold,
+            mock_data_dir=mock_path,
+        ))
+    else:
+        logger.info("Starting spotcheck loop (interval=%d-%d seconds)", min_interval, max_interval)
+        asyncio.run(spotcheck_loop(
+            min_interval_seconds=min_interval,
+            max_interval_seconds=max_interval,
+            tail_blocks=tail,
+            threshold=threshold,
+            element_id=element_id,
+        ))

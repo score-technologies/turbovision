@@ -228,6 +228,8 @@ def post_vlm_ranking(
 
     acc_value = final_score
 
+    scored_frame_numbers = [pgt.frame_number for pgt in pseudo_gt_annotations]
+
     return SVEvaluation(
         acc_breakdown=breakdown_dict,
         latency_ms=miner_run.latency_ms,
@@ -237,6 +239,7 @@ def post_vlm_ranking(
         latency_p95_ms=p95_latency_ms,
         latency_pass=latency_pass,
         rtf=rtf_value,
+        scored_frame_numbers=scored_frame_numbers,
     )
 
 

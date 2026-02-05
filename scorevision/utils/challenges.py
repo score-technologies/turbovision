@@ -7,10 +7,8 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
-
 from aiohttp import ClientResponseError
 from numpy import ndarray
-
 from scorevision.utils.settings import get_settings
 from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.signing import build_validator_query_params
@@ -93,6 +91,7 @@ async def prepare_challenge_payload(
     batch_size: int = 64,
     *,
     video_cache: dict[str, Any] | None = None,
+    frame_numbers: list[int] | None = None,
 ) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
     settings = get_settings()
 
@@ -135,17 +134,24 @@ async def prepare_challenge_payload(
 
     n_select = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
 
-    if (max_frame - min_frame) < n_select:
-        raise ScoreVisionChallengeError(
-            f"Not enough frames to select {n_select} frames "
-            f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+    if frame_numbers is not None and len(frame_numbers) > 0:
+        selected_frame_numbers = frame_numbers
+        logger.info(
+            f"Using provided frame numbers: {selected_frame_numbers} "
+            f"(total_frames={total_frames})"
         )
-    start = randint(min_frame, max_frame - n_select)
-    selected_frame_numbers = list(range(start, start + n_select))
-    logger.info(
-        f"Selected Frames (dynamic): {selected_frame_numbers} "
-        f"(min={min_frame}, max={max_frame}, total={total_frames})"
-    )
+    else:
+        if (max_frame - min_frame) < n_select:
+            raise ScoreVisionChallengeError(
+                f"Not enough frames to select {n_select} frames "
+                f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+            )
+        start = randint(min_frame, max_frame - n_select)
+        selected_frame_numbers = list(range(start, start + n_select))
+        logger.info(
+            f"Selected Frames (dynamic): {selected_frame_numbers} "
+            f"(min={min_frame}, max={max_frame}, total={total_frames})"
+        )
 
     select_frames: list[ndarray] = []
     flow_frames: list[ndarray] = []

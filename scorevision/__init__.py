@@ -24,6 +24,7 @@ def cli(verbosity: int):
         level=DEBUG if verbosity == 2 else INFO if verbosity == 1 else WARNING,
         format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
     )
     logger.debug(f"Score Vision started (version={settings.SCOREVISION_VERSION})")
 

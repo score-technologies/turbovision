@@ -119,3 +119,4 @@ class SVEvaluation:
     latency_p95_ms: float | None = None
     latency_pass: bool | None = None
     rtf: float | None = None
+    scored_frame_numbers: list[int] | None = None

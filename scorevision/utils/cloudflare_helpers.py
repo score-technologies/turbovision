@@ -1,26 +1,27 @@
-from time import time
-from logging import getLogger
-from json import dumps, loads
 import asyncio
-import os
-from pathlib import Path
-import aiohttp
 import hashlib
+import os
+import uuid
+from json import dumps, loads
+from logging import getLogger
+from pathlib import Path
+from time import time
 from urllib.parse import urljoin, urlparse
 
+import aiohttp
 from aiobotocore.session import get_session
+from async_substrate_interface.errors import SubstrateRequestException
 from botocore.config import Config as BotoConfig
+from substrateinterface import Keypair
 
-from scorevision.utils.windows import get_window_start_block
-from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
+from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
+from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
+from scorevision.utils.prometheus import (
+    VALIDATOR_DATASET_FETCH_ERRORS_TOTAL,
+    VALIDATOR_DATASET_LINES_TOTAL,
+)
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
-from async_substrate_interface.errors import SubstrateRequestException
-from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
-from scorevision.utils.prometheus import (
-    VALIDATOR_DATASET_LINES_TOTAL,
-    VALIDATOR_DATASET_FETCH_ERRORS_TOTAL,
-)
 
 logger = getLogger(__name__)
 
@@ -60,13 +61,6 @@ settings = get_settings()
 CACHE_DIR = settings.SCOREVISION_CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-import nacl.signing, nacl.encoding
-
-
-from substrateinterface import Keypair
-import hashlib
-import uuid
-
 
 def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
     try:
@@ -80,13 +74,11 @@ def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
 
 
 def _results_prefix(ns: str | None = None) -> str:
-    """ """
     ns = (ns or os.getenv("SCOREVISION_RESULTS_PREFIX") or "results").strip().strip("/")
     return f"scorevision/{ns}/"
 
 
 def _winners_prefix(ns: str | None = None) -> str:
-    """ """
     ns = (ns or os.getenv("SCOREVISION_WINNERS_PREFIX") or "winners").strip().strip("/")
     return f"scorevision/{ns}/"
 
@@ -96,7 +88,6 @@ def _winners_index_key(ns: str | None = None) -> str:
 
 
 async def _index_list() -> list[str]:
-    """ """
     settings = get_settings()
     index_key = "scorevision/index.json"
 
@@ -121,7 +112,6 @@ async def _put_json_object(key: str, obj) -> None:
 
 
 async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
-    """ """
     settings = get_settings()
     out = CACHE_DIR / (Path(key).name + ".jsonl")
     mod = out.with_suffix(".modified")
@@ -259,7 +249,6 @@ async def sink_sv(block: int, lines: list[dict]) -> tuple[str, list[dict]]:
 
 
 async def sink_sv_at(key: str, lines: list[dict]) -> tuple[str, list[dict]]:
-    """ """
     if not lines:
         return "", []
     payloads = [
@@ -448,6 +437,8 @@ async def emit_shard(
 
     salt_id_val = int(salt_id or 0)
 
+    scored_frame_numbers = getattr(evaluation, "scored_frame_numbers", None)
+
     shard_payload = {
         "window_id": shard_window_id,
         "element_id": element_id,
@@ -460,6 +451,7 @@ async def emit_shard(
         "latency_pass": bool(latency_pass),
         "p95_latency_ms": float(p95_latency_ms),
         "telemetry": telemetry,
+        "scored_frame_numbers": scored_frame_numbers,
     }
 
     shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
@@ -567,9 +559,6 @@ async def dataset_sv(tail: int, *, max_concurrency: int = None):
                     continue
 
 
-# --- HTTP public helpers for cross-validator fetch --------------------------
-
-
 async def _http_get_json(url: str, timeout_s: int = 20) -> any:
     timeout = aiohttp.ClientTimeout(total=timeout_s)
     async with aiohttp.ClientSession(timeout=timeout) as s:
@@ -585,7 +574,6 @@ async def _http_get_json(url: str, timeout_s: int = 20) -> any:
 async def _http_head_meta(
     url: str, timeout_s: int = 10
 ) -> tuple[str | None, str | None]:
-    """ """
     timeout = aiohttp.ClientTimeout(total=timeout_s)
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.head(url) as r:
@@ -606,7 +594,6 @@ def _cache_path_for_url(url: str) -> Path:
 
 
 async def _cache_remote_json_array(url: str, sem: asyncio.Semaphore) -> Path:
-    """ """
     out = _cache_path_for_url(url)
     mod = out.with_suffix(".modified")
     async with sem:
@@ -653,7 +640,6 @@ def _safe_element_id_for_path(element_id: str | None) -> str | None:
     return s.replace("/", "_")
 
 async def _list_keys_from_remote_index(index_url: str) -> list[str]:
-    """ """
     idx = await _http_get_json(index_url)
     keys: list[str] = []
     if isinstance(idx, list):
@@ -669,7 +655,6 @@ async def _list_keys_from_remote_index(index_url: str) -> list[str]:
 async def dataset_sv_multi(
     tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2, element_id: str | None = None,
 ):
-    """ """
     if not validator_indexes:
         return
     validator_indexes = {
@@ -797,7 +782,6 @@ def prune_sv(tail: int):
 
 
 def build_public_index_url() -> str | None:
-    """ """
     s = get_settings()
     if not (s.R2_ACCOUNT_ID.get_secret_value() and s.R2_BUCKET):
         return None
@@ -806,7 +790,6 @@ def build_public_index_url() -> str | None:
 
 
 async def ensure_index_exists() -> None:
-    """ """
     s = get_settings()
     index_key = "scorevision/index.json"
 
@@ -825,7 +808,6 @@ async def ensure_index_exists() -> None:
 
 
 async def ensure_winners_index_exists(prefix: str | None = None) -> str:
-    """ """
     s = get_settings()
     index_key = _winners_index_key(prefix)
 

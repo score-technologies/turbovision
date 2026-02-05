@@ -1,16 +1,18 @@
 import pytest
-from scorevision.validator.weights import (
-    extract_miner_and_score_from_payload,
-    extract_miner_meta_from_payload,
-    build_winner_meta_from_uid,
+from scorevision.validator.payload import (
+    extract_miner_and_score,
+    extract_miner_meta,
+    build_winner_meta,
+    extract_challenge_id,
+    extract_elements_from_manifest,
+)
+from scorevision.validator.scoring import (
     weighted_median,
     days_to_blocks,
     stake_of,
-    extract_challenge_id_from_payload,
-    extract_elements_from_manifest,
     are_similar_by_challenges,
-    WeightsResult,
 )
+from scorevision.validator.models import WeightsResult, MinerMeta
 
 
 def test_extract_miner_and_score_from_payload_valid():
@@ -19,7 +21,7 @@ def test_extract_miner_and_score_from_payload_valid():
         "metrics": {"composite_score": 0.85},
     }
     hk_to_uid = {"hk123": 5}
-    uid, score = extract_miner_and_score_from_payload(payload, hk_to_uid)
+    uid, score = extract_miner_and_score(payload, hk_to_uid)
     assert uid == 5
     assert score == 0.85
 
@@ -30,7 +32,7 @@ def test_extract_miner_and_score_from_payload_unknown_hotkey():
         "metrics": {"composite_score": 0.85},
     }
     hk_to_uid = {"hk123": 5}
-    uid, score = extract_miner_and_score_from_payload(payload, hk_to_uid)
+    uid, score = extract_miner_and_score(payload, hk_to_uid)
     assert uid is None
     assert score is None
 
@@ -41,22 +43,22 @@ def test_extract_miner_meta_from_payload_valid():
             "miner": {"hotkey": "hk123", "chute_id": "chute1", "slug": "slug1"}
         },
     }
-    meta = extract_miner_meta_from_payload(payload)
-    assert meta["hotkey"] == "hk123"
-    assert meta["chute_id"] == "chute1"
-    assert meta["slug"] == "slug1"
+    meta = extract_miner_meta(payload)
+    assert meta.hotkey == "hk123"
+    assert meta.chute_id == "chute1"
+    assert meta.slug == "slug1"
 
 
 def test_build_winner_meta_from_uid_found():
     uid_to_hk = {5: "hk123"}
-    miner_meta_by_hk = {"hk123": {"hotkey": "hk123", "chute_id": "c1", "slug": "s1"}}
-    meta = build_winner_meta_from_uid(5, uid_to_hk, miner_meta_by_hk)
+    miner_meta_by_hk = {"hk123": MinerMeta(hotkey="hk123", chute_id="c1", slug="s1")}
+    meta = build_winner_meta(5, uid_to_hk, miner_meta_by_hk)
     assert meta["hotkey"] == "hk123"
     assert meta["chute_id"] == "c1"
 
 
 def test_build_winner_meta_from_uid_none():
-    meta = build_winner_meta_from_uid(None, {}, {})
+    meta = build_winner_meta(None, {}, {})
     assert meta is None
 
 
@@ -91,17 +93,17 @@ def test_stake_of_negative():
 
 def test_extract_challenge_id_from_payload_task_id():
     payload = {"meta": {"task_id": "task123"}}
-    assert extract_challenge_id_from_payload(payload) == "task123"
+    assert extract_challenge_id(payload) == "task123"
 
 
 def test_extract_challenge_id_from_payload_challenge_id():
     payload = {"challenge_id": "chal456"}
-    assert extract_challenge_id_from_payload(payload) == "chal456"
+    assert extract_challenge_id(payload) == "chal456"
 
 
 def test_extract_challenge_id_from_payload_not_found():
     payload = {"other": "data"}
-    assert extract_challenge_id_from_payload(payload) is None
+    assert extract_challenge_id(payload) is None
 
 
 def test_are_similar_by_challenges_similar():
