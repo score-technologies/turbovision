@@ -1,17 +1,20 @@
-import os, time, socket, asyncio, logging, signal, gc, threading
-from typing import Tuple
-
+import asyncio
+import gc
+import logging
+import os
+import signal
+import socket
+import threading
+import time
 from aiohttp import web
 import bittensor as bt
-
 from scorevision.utils.settings import get_settings
 
-logger = logging.getLogger("sv-signer")
+logger = logging.getLogger(__name__)
 
 NETUID = int(os.getenv("SCOREVISION_NETUID", "44"))
 MECHID = 1
 
-# Global shutdown event
 shutdown_event = asyncio.Event()
 
 _ASYNC_SUBTENSOR: bt.AsyncSubtensor | None = None
@@ -20,7 +23,7 @@ _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
 
 
-async def get_subtensor():
+async def _get_async_subtensor():
     global _ASYNC_SUBTENSOR
     async with _ASYNC_SUBTENSOR_LOCK:
         if _ASYNC_SUBTENSOR is not None:
@@ -100,7 +103,6 @@ def _set_weights(
     wait_for_finalization: bool,
     log_prefix: str = "[signer]",
 ) -> bool:
-    """ """
     try:
         st = _get_sync_subtensor()
     except Exception:
@@ -121,9 +123,7 @@ def _set_weights(
     except Exception as e:
         msg_str = f"{type(e).__name__}: {e}"
         if "SettingWeightsTooFast" in msg_str:
-            logger.error(
-                f"{log_prefix} SettingWeightsTooFast (exception) → treating as success."
-            )
+            logger.error(f"{log_prefix} SettingWeightsTooFast (exception) → treating as success.")
             return True
         logger.warning(f"{log_prefix} set_weights exception: {msg_str}")
         return False
@@ -133,9 +133,7 @@ def _set_weights(
         return True
 
     if "SettingWeightsTooFast" in msg_str:
-        logger.error(
-            f"{log_prefix} SettingWeightsTooFast (return) → treating as success."
-        )
+        logger.error(f"{log_prefix} SettingWeightsTooFast (return) → treating as success.")
         return True
 
     logger.warning(f"{log_prefix} set_weights failed: {msg_str or 'unknown error'}")
@@ -243,11 +241,7 @@ async def run_signer() -> None:
                 log_prefix="[signer]",
             )
             return web.json_response(
-                (
-                    {"success": True}
-                    if ok
-                    else {"success": False, "error": "set_weights failed"}
-                ),
+                {"success": True} if ok else {"success": False, "error": "set_weights failed"},
                 status=200 if ok else 500,
             )
         except Exception as e:
@@ -274,11 +268,8 @@ async def run_signer() -> None:
         ip = socket.gethostbyname(hn)
     except Exception:
         hn, ip = ("?", "?")
-    logger.info(
-        "Signer listening on http://%s:%s hostname=%s ip=%s", host, port, hn, ip
-    )
+    logger.info("Signer listening on http://%s:%s hostname=%s ip=%s", host, port, hn, ip)
 
-    # Wait for shutdown signal instead of infinite loop
     try:
         await shutdown_event.wait()
     except asyncio.CancelledError:
@@ -289,3 +280,4 @@ async def run_signer() -> None:
         await _reset_async_subtensor()
         _reset_sync_subtensor()
         gc.collect()
+

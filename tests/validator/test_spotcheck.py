@@ -1,5 +1,5 @@
 import pytest
-from scorevision.validator.spotcheck import (
+from scorevision.validator.audit import (
     calculate_match_percentage,
     scores_match,
     calculate_next_spotcheck_delay,

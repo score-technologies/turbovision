@@ -10,10 +10,8 @@ from scorevision.utils.data_models import SVRunOutput
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.manifest import Manifest, get_current_manifest, load_manifest_from_public_index
 from scorevision.utils.r2_public import (
-    extract_base_url,
     extract_block_from_key,
     fetch_index_keys,
-    fetch_json_from_url,
     fetch_miner_predictions,
     fetch_responses_data,
     fetch_shard_lines,
@@ -36,24 +34,28 @@ def parse_challenge_record_from_line(line: dict, key: str) -> ChallengeRecord | 
             return None
 
         payload = line.get("payload") or {}
-
-        miner_info = payload.get("miner") or {}
+        telemetry = payload.get("telemetry") or {}
+        miner_info = telemetry.get("miner") or {}
         miner_hotkey = (miner_info.get("hotkey") or "").strip()
         if not miner_hotkey:
             return None
 
-        meta = payload.get("meta") or {}
-        challenge_id = str(meta.get("task_id") or payload.get("task_id") or "").strip()
+        challenge_id = str(
+            telemetry.get("task_id")
+            or telemetry.get("challenge_id")
+            or payload.get("task_id")
+            or ""
+        ).strip()
         if not challenge_id:
             return None
 
         element_id = str(payload.get("element_id") or "").strip()
-        window_id = str(payload.get("window_id") or meta.get("window_id") or "").strip()
+        window_id = str(payload.get("window_id") or telemetry.get("window_id") or "").strip()
 
-        evaluation = payload.get("evaluation") or {}
-        central_score = float(evaluation.get("score", 0.0))
+        metrics = payload.get("metrics") or {}
+        central_score = float(metrics.get("composite_score", payload.get("composite_score", 0.0)))
 
-        run_info = payload.get("run") or {}
+        run_info = telemetry.get("run") or {}
         responses_key = run_info.get("responses_key")
 
         scored_frame_numbers = payload.get("scored_frame_numbers")
@@ -210,10 +212,7 @@ async def regenerate_ground_truth_sam3(
     try:
         scored_frames = challenge_record.scored_frame_numbers
         if scored_frames:
-            logger.info(
-                "Using scored_frame_numbers from shard: %s",
-                scored_frames,
-            )
+            logger.info("Using scored_frame_numbers from shard: %s", scored_frames)
             effective_required = len(scored_frames)
         else:
             logger.info("No scored_frame_numbers in shard - using random frames")
@@ -296,9 +295,7 @@ async def rescore_miner_response(
 
     if not miner_predictions and challenge_record.responses_key:
         public_url = settings.R2_BUCKET_PUBLIC_URL
-        miner_predictions = await fetch_miner_predictions(
-            challenge_record.responses_key, public_url
-        )
+        miner_predictions = await fetch_miner_predictions(challenge_record.responses_key, public_url)
 
     if not miner_predictions:
         logger.warning("No miner predictions found for challenge %s", challenge_record.challenge_id)
@@ -594,3 +591,4 @@ async def run_single_spotcheck(
     )
 
     return result
+

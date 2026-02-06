@@ -8,10 +8,8 @@ import traceback
 from functools import lru_cache
 from logging import getLogger
 from pathlib import Path
-
 import aiohttp
 import bittensor as bt
-
 from scorevision.utils.settings import get_settings
 from scorevision.utils.windows import get_current_window_id
 from scorevision.utils.prometheus import (
@@ -465,3 +463,4 @@ async def weights_loop(
                 continue
 
     logger.info("Weights loop shutting down gracefully...")
+

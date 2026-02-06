@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
-from scorevision.cli.runner import (
+from scorevision.validator.central.runner import (
     _cleanup_video_cache,
     _extract_element_id_from_chal_api,
     _extract_element_tempos_from_manifest,

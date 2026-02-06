@@ -3,7 +3,8 @@ from asyncio import run
 from logging import DEBUG, INFO, WARNING, basicConfig, getLogger
 from pathlib import Path
 import click
-from scorevision.cli.audit import audit
+from scorevision.cli.audit_validator import audit_validator
+from scorevision.cli.central_validator import central_validator
 from scorevision.cli.elements import elements_cli
 from scorevision.cli.manifest import manifest_cli
 from scorevision.utils.settings import get_settings
@@ -31,7 +32,7 @@ def cli(verbosity: int):
 
 @cli.command("runner")
 def runner_cmd():
-    from scorevision.cli.runner import runner_loop
+    from scorevision.validator.central import runner_loop
     from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 
     _start_metrics()
@@ -86,7 +87,7 @@ def push(
 
 @cli.command("signer")
 def signer_cmd():
-    from scorevision.cli.signer_api import run_signer
+    from scorevision.validator.core import run_signer
 
     asyncio.run(run_signer())
 
@@ -94,9 +95,6 @@ def signer_cmd():
 @cli.command("validate")
 @click.option(
     "--tail", type=int, envvar="SCOREVISION_TAIL", default=28800, show_default=True
-)
-@click.option(
-    "--alpha", type=float, envvar="SCOREVISION_ALPHA", default=0.2, show_default=True
 )
 @click.option(
     "--m-min", type=int, envvar="SCOREVISION_M_MIN", default=25, show_default=True
@@ -107,8 +105,8 @@ def signer_cmd():
 @click.option(
     "--manifest-path", type=click.Path(exists=True, dir_okay=False), default=None
 )
-def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int, manifest_path):
-    from scorevision.cli.validate import _validate_main
+def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
+    from scorevision.validator.core import weights_loop
     from scorevision.utils.prometheus import _start_metrics, mark_service_ready
 
     _start_metrics()
@@ -118,9 +116,10 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int, manifest_path)
         root_dir = Path(__file__).parent.parent
         path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
 
-    asyncio.run(_validate_main(tail=tail, alpha=alpha, m_min=m_min, tempo=tempo, path_manifest=path_manifest))
+    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=path_manifest))
 
 
-cli.add_command(audit)
+cli.add_command(audit_validator)
+cli.add_command(central_validator)
 cli.add_command(manifest_cli)
 cli.add_command(elements_cli)

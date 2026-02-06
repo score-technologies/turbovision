@@ -52,10 +52,6 @@ logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
 
 
-def _chute_id_for_miner(m: Miner) -> str | None:
-    return getattr(m, "chute_id", None) or getattr(m, "slug", None)
-
-
 async def _build_pgt_with_retries(
     chal_api: dict,
     element: Element,
@@ -70,27 +66,17 @@ async def _build_pgt_with_retries(
         video_cache = {}
 
     MIN_BBOXES_PER_FRAME = int(os.getenv("SV_MIN_BBOXES_PER_FRAME", "6"))
-    MIN_FRAMES_REQUIRED = int(
-        os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames))
-    )
+    MIN_FRAMES_REQUIRED = int(os.getenv("SV_MIN_BBOX_FRAMES_REQUIRED", str(required_n_frames)))
 
     last_err = None
 
     try:
         for quality_attempt in range(max_quality_retries):
-            logger.info(
-                f"[PGT] Starting quality attempt {quality_attempt + 1}/{max_quality_retries}"
-            )
+            logger.info(f"[PGT] Starting quality attempt {quality_attempt + 1}/{max_quality_retries}")
 
             for bbox_attempt in range(max_bbox_retries):
                 try:
-                    (
-                        payload,
-                        frame_numbers,
-                        frames,
-                        flows,
-                        _frame_store,
-                    ) = await prepare_challenge_payload(
+                    payload, frame_numbers, frames, flows, _frame_store = await prepare_challenge_payload(
                         challenge=chal_api,
                         video_cache=video_cache,
                     )
@@ -100,9 +86,7 @@ async def _build_pgt_with_retries(
                             f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
                             f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries}"
                         )
-                        RUNNER_PGT_RETRY_TOTAL.labels(
-                            reason="insufficient_frames"
-                        ).inc()
+                        RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
                         continue
 
                     challenge = build_svchallenge_from_parts(
@@ -113,14 +97,12 @@ async def _build_pgt_with_retries(
                         flows=flows,
                     )
 
-                    pseudo_gt_annotations = (
-                        await generate_annotations_for_select_frames_sam3(
-                            video_name=challenge.challenge_id,
-                            frames=challenge.frames,
-                            flow_frames=challenge.dense_optical_flow_frames,
-                            frame_numbers=challenge.frame_numbers,
-                            element=element,
-                        )
+                    pseudo_gt_annotations = await generate_annotations_for_select_frames_sam3(
+                        video_name=challenge.challenge_id,
+                        frames=challenge.frames,
+                        flow_frames=challenge.dense_optical_flow_frames,
+                        frame_numbers=challenge.frame_numbers,
+                        element=element,
                     )
                     n_frames = len(pseudo_gt_annotations)
                     logger.info(
@@ -140,9 +122,7 @@ async def _build_pgt_with_retries(
                         RUNNER_PGT_RETRY_TOTAL.labels(reason="too_few_bboxes").inc()
                         continue
 
-                    filtered = filter_low_quality_pseudo_gt_annotations(
-                        annotations=pseudo_gt_annotations
-                    )
+                    filtered = filter_low_quality_pseudo_gt_annotations(annotations=pseudo_gt_annotations)
                     logger.info(f"[PGT] {len(filtered)} filtered annotations kept")
 
                     if _enough_bboxes_per_frame(
@@ -168,9 +148,7 @@ async def _build_pgt_with_retries(
 
                 except Exception as e:
                     last_err = e
-                    logger.warning(
-                        f"[PGT] Exception during bbox attempt {bbox_attempt + 1}/{max_bbox_retries}: {e}"
-                    )
+                    logger.warning(f"[PGT] Exception during bbox attempt {bbox_attempt + 1}/{max_bbox_retries}: {e}")
                     RUNNER_PGT_RETRY_TOTAL.labels(reason="exception").inc()
                     continue
 
@@ -191,12 +169,7 @@ async def _build_pgt_with_retries(
             if cached_path:
                 try:
                     from pathlib import Path as _Path
-
-                    (
-                        _Path(cached_path)
-                        if not hasattr(cached_path, "unlink")
-                        else cached_path
-                    ).unlink(missing_ok=True)
+                    (_Path(cached_path) if not hasattr(cached_path, "unlink") else cached_path).unlink(missing_ok=True)
                 except Exception as e:
                     logger.debug(f"Failed to remove cached video {cached_path}: {e}")
 
@@ -214,13 +187,14 @@ def _enough_bboxes_per_frame(
             ok_frames += 1
     return ok_frames >= min_frames_required
 
+
 def _to_pos_int(x: object) -> int | None:
     try:
         if x is None:
             return None
         if isinstance(x, bool):
             return None
-        if isinstance(x, (int,)):
+        if isinstance(x, int):
             return x if x > 0 else None
         if isinstance(x, float):
             xi = int(x)
@@ -233,6 +207,7 @@ def _to_pos_int(x: object) -> int | None:
     except Exception:
         pass
     return None
+
 
 def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     if not isinstance(chal_api, dict):
@@ -256,10 +231,8 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
 
     return None
 
-def _extract_element_tempos_from_manifest(
-    manifest: Manifest,
-    default_tempo_blocks: int,
-) -> Dict[str, int]:
+
+def _extract_element_tempos_from_manifest(manifest: Manifest, default_tempo_blocks: int) -> Dict[str, int]:
     result: Dict[str, int] = {}
     elems = getattr(manifest, "elements", None)
 
@@ -271,7 +244,6 @@ def _extract_element_tempos_from_manifest(
                 window_block = cfg.get("window_block") or cfg.get("tempo")
             else:
                 window_block = getattr(cfg, "window_block", None) or getattr(cfg, "tempo", None)
-
             tempo = _to_pos_int(window_block) or default_tempo_blocks
             result[eid] = tempo
         return result
@@ -284,7 +256,6 @@ def _extract_element_tempos_from_manifest(
             else:
                 eid = getattr(elem, "element_id", None) or getattr(elem, "id", None)
                 window_block = getattr(elem, "window_block", None) or getattr(elem, "tempo", None)
-
             if not eid:
                 continue
             tempo = _to_pos_int(window_block) or default_tempo_blocks
@@ -293,6 +264,83 @@ def _extract_element_tempos_from_manifest(
 
     logger.warning("[RunnerLoop] Manifest 'elements' is neither dict nor list; no per-element scheduling.")
     return result
+
+
+def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | None) -> None:
+    store_obj = video_cache.get("store") or frame_store
+    if store_obj:
+        try:
+            store_obj.unlink()
+        except Exception as err:
+            logger.debug(f"Failed to remove cached video {getattr(store_obj, 'video_path', '?')}: {err}")
+    elif video_cache.get("path"):
+        cached_path = Path(video_cache["path"])
+        try:
+            cached_path.unlink(missing_ok=True)
+        except Exception as err:
+            logger.debug(f"Failed to remove cached video {cached_path}: {err}")
+    video_cache.clear()
+
+
+def _setup_shutdown_handler() -> None:
+    def handler():
+        logger.warning("Received shutdown signal, stopping runner...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda s, f: handler())
+
+
+async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
+    if path_manifest is not None:
+        return Manifest.load_yaml(path_manifest)
+    if getattr(settings, "URL_MANIFEST", None):
+        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
+        return await load_manifest_from_public_index(settings.URL_MANIFEST, block_number=block, cache_dir=cache_dir)
+    return get_current_manifest(block_number=block)
+
+
+def _cancel_removed_element_tasks(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int]) -> None:
+    removed = set(element_state.keys()) - set(element_tempos.keys())
+    for element_id in removed:
+        entry = element_state.pop(element_id, None)
+        if entry and entry.get("task") is not None:
+            task = entry["task"]
+            if not task.done():
+                logger.info("[RunnerLoop] Cancelling runner task for removed element_id=%s", element_id)
+                task.cancel()
+
+
+def _update_element_state(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int], block: int) -> None:
+    for element_id, tempo in element_tempos.items():
+        entry = element_state.get(element_id)
+        window_id = get_current_window_id(block)
+        anchor = get_window_start_block(window_id, tempo=tempo)
+
+        if entry is None:
+            element_state[element_id] = {"tempo": tempo, "anchor": anchor, "task": None}
+            logger.info("[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)", element_id, tempo, anchor)
+        else:
+            entry["tempo"] = tempo
+            entry["anchor"] = anchor
+
+
+def _trigger_scheduled_runners(element_state: Dict[str, Dict[str, Any]], block: int, manifest: Manifest) -> None:
+    for element_id, entry in element_state.items():
+        tempo = max(1, int(entry["tempo"]))
+        anchor = int(entry["anchor"])
+        task = entry.get("task")
+        delta = block - anchor
+        should_trigger = (delta >= 0) and (delta % tempo == 0)
+
+        if not should_trigger:
+            continue
+
+        if task is not None and not task.done():
+            logger.info("[RunnerLoop] element_id=%s still running; skipping trigger at block=%s", element_id, block)
+        else:
+            logger.info("[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)", element_id, block, tempo, anchor)
+            entry["task"] = asyncio.create_task(runner(block_number=block, manifest=manifest, element_id=element_id))
 
 
 async def runner(
@@ -334,32 +382,21 @@ async def runner(
         manifest_hash = manifest.hash
 
         try:
-            challenge, payload, chal_api, frame_store = (
-                await get_challenge_from_scorevision_with_source(
-                    video_cache=video_cache,
-                    manifest_hash=manifest_hash,
-                    element_id=element_id,
-                )
+            challenge, payload, chal_api, frame_store = await get_challenge_from_scorevision_with_source(
+                video_cache=video_cache,
+                manifest_hash=manifest_hash,
+                element_id=element_id,
             )
         except ScoreVisionChallengeError as ce:
             msg = str(ce)
             if "No active evaluation window" in msg:
-                logger.warning(
-                    "[Runner] (element=%s) No active evaluation window (404) from challenge API v3. Skipping run.",
-                    element_id,
-                )
+                logger.warning("[Runner] (element=%s) No active evaluation window (404). Skipping run.", element_id)
                 run_result = "no_window"
             elif "Rate limited by /api/challenge/v3" in msg:
-                logger.warning(
-                    "[Runner] (element=%s) Rate limited by challenge API v3 (409). Backing off this run.",
-                    element_id,
-                )
+                logger.warning("[Runner] (element=%s) Rate limited by challenge API v3 (409). Backing off.", element_id)
                 run_result = "rate_limited"
             elif "Manifest expired or rejected" in msg:
-                logger.warning(
-                    "[Runner] (element=%s) Manifest expired or rejected (410). Operator action required.",
-                    element_id,
-                )
+                logger.warning("[Runner] (element=%s) Manifest expired or rejected (410). Operator action required.", element_id)
                 run_result = "manifest_expired"
             else:
                 logger.error("[Runner] Challenge API error: %s", msg)
@@ -372,15 +409,11 @@ async def runner(
         if eid_from_chal and str(eid_from_chal) != str(element_id):
             logger.warning(
                 "[Runner] (element=%s) element_id mismatch between requested (%s) and challenge (%s).",
-                element_id,
-                element_id,
-                eid_from_chal,
+                element_id, element_id, eid_from_chal,
             )
 
         if not element_id:
-            logger.warning(
-                "[Runner] Challenge missing element_id and no element_id forced. Refusing to run."
-            )
+            logger.warning("[Runner] Challenge missing element_id and no element_id forced. Refusing to run.")
             run_result = "no_element_id"
             return
 
@@ -405,10 +438,7 @@ async def runner(
 
         miners = await get_miners_from_registry(netuid, element_id=element_id)
         if not miners:
-            logger.warning(
-                "[Runner] No eligible miners found on-chain for element_id=%s.",
-                element_id,
-            )
+            logger.warning("[Runner] No eligible miners found on-chain for element_id=%s.", element_id)
             RUNNER_ACTIVE_MINERS.set(0)
             run_result = "no_miners"
             return
@@ -420,29 +450,20 @@ async def runner(
         if element is None:
             raise ValueError(f"element id {element_id} not found in manifest")
 
-
         use_real_gt = bool(getattr(element, "ground_truth", False))
 
         if use_real_gt:
             challenge_id = int(chal_api.get("task_id"))
-
             try:
                 await complete_task_assignment(challenge_id=challenge_id, element_id=element_id)
-
-                gt = await get_ground_truth_from_scorevision(
-                    challenge_id=challenge_id, element_id=element_id
-                )
+                gt = await get_ground_truth_from_scorevision(challenge_id=challenge_id, element_id=element_id)
             except Exception as e:
-                logger.warning(
-                    f"[Runner] (element={element_id}) Ground-truth fetch failed, skipping challenge: {e}"
-                )
+                logger.warning(f"[Runner] (element={element_id}) Ground-truth fetch failed, skipping challenge: {e}")
                 RUNNER_LAST_PGT_DURATION_SECONDS.set(0.0)
                 run_result = "gt_failed"
                 return
-
             pseudo_gt_annotations = gt
             RUNNER_LAST_PGT_DURATION_SECONDS.set(0.0)
-
         else:
             pgt_build_start = event_loop.time()
             try:
@@ -460,7 +481,6 @@ async def runner(
                 RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
                 run_result = "pgt_failed"
                 return
-
             pgt_duration = event_loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
 
@@ -550,6 +570,7 @@ async def runner(
             finally:
                 miner_duration = event_loop.time() - miner_start_time
                 RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(miner_duration)
+
     except Exception as e:
         logger.error(e)
         run_result = "error"
@@ -561,83 +582,6 @@ async def runner(
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
         close_http_clients()
         gc.collect()
-
-
-def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | None) -> None:
-    store_obj = video_cache.get("store") or frame_store
-    if store_obj:
-        try:
-            store_obj.unlink()
-        except Exception as err:
-            logger.debug(f"Failed to remove cached video {getattr(store_obj, 'video_path', '?')}: {err}")
-    elif video_cache.get("path"):
-        cached_path = Path(video_cache["path"])
-        try:
-            cached_path.unlink(missing_ok=True)
-        except Exception as err:
-            logger.debug(f"Failed to remove cached video {cached_path}: {err}")
-    video_cache.clear()
-
-
-def _setup_shutdown_handler() -> None:
-    def handler():
-        logger.warning("Received shutdown signal, stopping runner...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda s, f: handler())
-
-
-async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
-    if path_manifest is not None:
-        return Manifest.load_yaml(path_manifest)
-    if getattr(settings, "URL_MANIFEST", None):
-        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
-        return await load_manifest_from_public_index(settings.URL_MANIFEST, block_number=block, cache_dir=cache_dir)
-    return get_current_manifest(block_number=block)
-
-
-def _cancel_removed_element_tasks(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int]) -> None:
-    removed = set(element_state.keys()) - set(element_tempos.keys())
-    for element_id in removed:
-        entry = element_state.pop(element_id, None)
-        if entry and entry.get("task") is not None:
-            task = entry["task"]
-            if not task.done():
-                logger.info("[RunnerLoop] Cancelling runner task for removed element_id=%s", element_id)
-                task.cancel()
-
-
-def _update_element_state(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int], block: int) -> None:
-    for element_id, tempo in element_tempos.items():
-        entry = element_state.get(element_id)
-        window_id = get_current_window_id(block)
-        anchor = get_window_start_block(window_id, tempo=tempo)
-
-        if entry is None:
-            element_state[element_id] = {"tempo": tempo, "anchor": anchor, "task": None}
-            logger.info("[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)", element_id, tempo, anchor)
-        else:
-            entry["tempo"] = tempo
-            entry["anchor"] = anchor
-
-
-def _trigger_scheduled_runners(element_state: Dict[str, Dict[str, Any]], block: int, manifest: Manifest) -> None:
-    for element_id, entry in element_state.items():
-        tempo = max(1, int(entry["tempo"]))
-        anchor = int(entry["anchor"])
-        task = entry.get("task")
-        delta = block - anchor
-        should_trigger = (delta >= 0) and (delta % tempo == 0)
-
-        if not should_trigger:
-            continue
-
-        if task is not None and not task.done():
-            logger.info("[RunnerLoop] element_id=%s still running; skipping trigger at block=%s", element_id, block)
-        else:
-            logger.info("[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)", element_id, block, tempo, anchor)
-            entry["task"] = asyncio.create_task(runner(block_number=block, manifest=manifest, element_id=element_id))
 
 
 async def runner_loop(path_manifest: Path | None = None):
@@ -706,7 +650,6 @@ async def runner_loop(path_manifest: Path | None = None):
                 logger.info("[RunnerLoop] Manifest hash changed (old=%s new=%s) → rebuilding element_state", manifest_hash, new_hash)
                 manifest = new_manifest
                 manifest_hash = new_hash
-
                 element_tempos = _extract_element_tempos_from_manifest(manifest, default_element_tempo)
                 _cancel_removed_element_tasks(element_state, element_tempos)
                 _update_element_state(element_state, element_tempos, block)
@@ -742,3 +685,4 @@ async def runner_loop(path_manifest: Path | None = None):
                 pass
 
     logger.info("Runner loop shutting down gracefully...")
+
