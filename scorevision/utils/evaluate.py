@@ -60,7 +60,6 @@ def parse_miner_prediction(
                     except (TypeError, ValueError):
                         object_id = None
 
-                    looked_up = None
                     if object_id is not None and 0 <= object_id < len(object_names):
                         looked_up = object_names[object_id]
                     else:
@@ -105,6 +104,11 @@ def post_vlm_ranking(
     if challenge_type is None:
         challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
 
+    if manifest is not None and element_id:
+        element = manifest.get_element(id=element_id)
+    else:
+        element = None
+
     expected_total = int(payload.meta.get("n_frames_total") or 0)
 
     predicted_frames = (
@@ -144,6 +148,7 @@ def post_vlm_ranking(
             f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
             f"manifest_present={manifest is not None}."
         )
+
     details = {
         "breakdown": breakdown_dict,
         # "group_scores": {

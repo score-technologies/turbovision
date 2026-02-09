@@ -743,7 +743,6 @@ async def dataset_sv_multi(
 
         if not p.exists():
             continue
-        valid_lines = 0
         with p.open("rb") as f:
             for raw in f:
                 try:
@@ -755,7 +754,6 @@ async def dataset_sv_multi(
                     sig = line.get("signature", "")
                     hk = line.get("hotkey", "")
                     if hk and sig and _verify_signature(hk, payload_str, sig):
-                        valid_lines += 1
                         VALIDATOR_DATASET_LINES_TOTAL.labels(
                             source="cross", result="valid"
                         ).inc()

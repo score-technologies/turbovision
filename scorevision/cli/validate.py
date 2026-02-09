@@ -194,8 +194,6 @@ async def _get_local_fallback_winner_for_element(
             payload_window = payload.get("window_id") or (
                 (payload.get("telemetry") or {}).get("window_id")
             )
-            if payload_window != current_window_id:
-                continue
 
             miner_uid, score = _extract_miner_and_score_from_payload(
                 payload, hk_to_uid
@@ -302,8 +300,6 @@ async def _collect_recent_challenge_scores_by_V_m_for_element(
             payload_window = payload.get("window_id") or (
                 (payload.get("telemetry") or {}).get("window_id")
             )
-            if payload_window != current_window_id:
-                continue
 
             miner_uid, score = _extract_miner_and_score_from_payload(payload, hk_to_uid)
             if miner_uid is None:
@@ -488,8 +484,6 @@ async def get_winner_for_element(
             payload_window = payload.get("window_id") or (
                 (payload.get("telemetry") or {}).get("window_id")
             )
-            if payload_window != current_window_id:
-                continue
 
             miner_uid, score = _extract_miner_and_score_from_payload(
                 payload, hk_to_uid
