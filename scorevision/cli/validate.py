@@ -645,6 +645,14 @@ async def get_winner_for_element(
         S_by_m[winner_uid],
         tail,
     )
+    winner_hk_dbg = uid_to_hk.get(winner_uid)
+    if winner_hk_dbg:
+        logger.info(
+            "[validator] Winner uid=%d hotkey=%s blacklisted=%s",
+            winner_uid,
+            winner_hk_dbg,
+            "yes" if winner_hk_dbg in blacklisted_hotkeys else "no",
+        )
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
             challenge_scores_by_V_m = await _collect_recent_challenge_scores_by_V_m_for_element(
