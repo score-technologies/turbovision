@@ -249,7 +249,7 @@ def publish_manifest_cdn_cmd(
     # Update manifest/index.json (list of keys)
     # ----------------------------------------------------------
     index_key = "manifest/index.json"
-    index_bytes, etag = r2_get_object(bucket, index_key)
+    index_bytes, _ = r2_get_object(bucket, index_key)
     index = loads(index_bytes.decode("utf-8")) if index_bytes else []
     if not isinstance(index, list):
         raise click.ClickException("manifest/index.json must be a JSON array.")
@@ -260,7 +260,7 @@ def publish_manifest_cdn_cmd(
 
     try:
         click.echo("📝 Updating manifest/index.json...")
-        r2_put_json(bucket, index_key, index, if_match=etag)
+        r2_put_json(bucket, index_key, index)
     except Exception as e:
         if existing is None:
             click.echo("⚠ Rolling back manifest upload...")

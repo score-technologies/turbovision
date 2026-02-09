@@ -43,7 +43,6 @@ def r2_put_bytes(
     body: bytes,
     *,
     content_type: str = "application/octet-stream",
-    if_match: str | None = None,
 ) -> None:
     client = _r2_client()
     kwargs = {
@@ -52,19 +51,16 @@ def r2_put_bytes(
         "Body": body,
         "ContentType": content_type,
     }
-    if if_match:
-        kwargs["IfMatch"] = if_match
     client.put_object(**kwargs)
 
 
-def r2_put_json(bucket: str, key: str, obj, *, if_match: str | None = None) -> None:
+def r2_put_json(bucket: str, key: str, obj) -> None:
     body = dumps(obj, separators=(",", ":")).encode()
     r2_put_bytes(
         bucket,
         key,
         body,
         content_type="application/json",
-        if_match=if_match,
     )
 
 
