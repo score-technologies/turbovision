@@ -27,8 +27,6 @@ def load_blacklisted_hotkeys(path: Path | str | None = None) -> set[str]:
             continue
         hotkeys.add(s)
 
-    logger.info("[Blacklist] Loaded %d hotkeys from %s", len(hotkeys), blacklist_path)
     if hotkeys:
         sample = list(hotkeys)[:5]
-        logger.info("[Blacklist] Sample hotkeys: %s", ", ".join(sample))
     return hotkeys
