@@ -41,9 +41,7 @@ def runner_cmd():
     """Launches runner every TEMPO blocks."""
     _start_metrics()
     mark_service_ready("runner")
-    root_dir = Path(__file__).parent.parent
-    path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
-    asyncio.run(runner_loop(path_manifest=path_manifest))
+    asyncio.run(runner_loop(path_manifest=None))
 
 @cli.command("push")
 @click.option(
@@ -118,11 +116,15 @@ def validate_cmd(tail: int, alpha: float, m_min: int, tempo: int, manifest_path)
     _start_metrics()
     mark_service_ready("validator")
     path_manifest = Path(manifest_path) if manifest_path else None
-    if path_manifest is None:
-        root_dir = Path(__file__).parent.parent
-        path_manifest = root_dir / "tests/test_data/manifests/example_manifest.yml"
-
-    asyncio.run(_validate_main(tail=tail, alpha=alpha, m_min=m_min, tempo=tempo, path_manifest=path_manifest))
+    asyncio.run(
+        _validate_main(
+            tail=tail,
+            alpha=alpha,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=path_manifest,
+        )
+    )
 
 
 cli.add_command(manifest_cli)
