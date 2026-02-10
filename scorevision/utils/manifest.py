@@ -556,7 +556,12 @@ def _join_key_to_base(index_url: str, key_or_url: str) -> str:
     if key_or_url.startswith("/"):
         return _bucket_base(index_url) + key_or_url.lstrip("/")
 
+    if key_or_url.startswith("manifest/"):
+        return _bucket_base(index_url) + key_or_url
+
     base = index_url.rsplit("/", 1)[0] + "/"
+    if base.endswith("/manifest/") and key_or_url.startswith("manifest/"):
+        return _bucket_base(index_url) + key_or_url
     return urljoin(base, key_or_url)
 
 async def _http_get_json(url: str, timeout_s: int = 20):
