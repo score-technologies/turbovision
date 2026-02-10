@@ -121,7 +121,7 @@ def get_settings() -> Settings:
         R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
         R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
-        URL_MANIFEST=getenv("URL_MANIFEST", ""),
+        URL_MANIFEST=getenv("URL_MANIFEST", "https://pub-90235dd27ef947dbace5293e3e56b910.r2.dev/manifest/index.json"),
         HUGGINGFACE_USERNAME=getenv("HUGGINGFACE_USERNAME", ""),
         HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
         CHUTES_USERNAME=getenv("CHUTES_USERNAME", ""),
