@@ -692,10 +692,6 @@ async def runner_loop(path_manifest: Path | None = None):
                     new_manifest = Manifest.load_yaml(path_manifest)
                 elif getattr(settings, "URL_MANIFEST", None):
                     cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
-                    logger.info(
-                        "[RunnerLoop] Loading manifest from URL_MANIFEST: %s",
-                        settings.URL_MANIFEST,
-                    )
                     new_manifest = await load_manifest_from_public_index(
                         settings.URL_MANIFEST,
                         block_number=block,
