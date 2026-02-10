@@ -858,16 +858,9 @@ async def _load_manifest_for_block(block: int, *, path_manifest: Path | None = N
 
     if path_manifest is not None:
         return Manifest.load_yaml(path_manifest)
-
-    p = (
-        os.getenv("SCOREVISION_MANIFEST_PATH")
-        or os.getenv("SV_MANIFEST_PATH")
-        or os.getenv("SCOREVISION_VALIDATOR_MANIFEST_PATH")
+    raise RuntimeError(
+        "URL_MANIFEST is required when --manifest-path is not provided."
     )
-    if p:
-        return Manifest.load_yaml(Path(p))
-
-    return get_current_manifest(block_number=block)
 
 async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int, path_manifest: Path | None = None) -> None:
     settings = get_settings()
