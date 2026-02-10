@@ -187,7 +187,7 @@ def post_vlm_ranking(
 
     objects_score = _mean_defined(objects_dict.values())
     keypoints_score = _mean_defined(keypoints_dict.values())
-    final_score = 0.5 * objects_score + 0.5 * keypoints_score
+    final_score = 0.85 * objects_score + 0.15 * keypoints_score
 
     details = {
         "breakdown": breakdown_dict,
