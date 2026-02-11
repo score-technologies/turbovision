@@ -167,23 +167,52 @@ async def prepare_challenge_payload(
     payload_frames = _coerce_payload_frames(payload)
 
     if payload_frames:
-        frames = await _load_payload_frames(payload_frames)
-        frame_numbers = [int(entry["frame_id"]) for entry in payload_frames]
+        payload_frames_sorted = sorted(
+            payload_frames, key=lambda entry: int(entry["frame_id"])
+        )
+        all_frames = await _load_payload_frames(payload_frames_sorted)
+        all_frame_numbers = [
+            int(entry["frame_id"]) for entry in payload_frames_sorted
+        ]
+
+        if len(set(all_frame_numbers)) != len(all_frame_numbers):
+            raise ScoreVisionChallengeError("Duplicate frame_id values in payload.frames")
+
         frame_map = {
-            fid: frame for fid, frame in zip(frame_numbers, frames, strict=True)
+            fid: frame for fid, frame in zip(all_frame_numbers, all_frames, strict=True)
         }
         frame_store = InMemoryFrameStore(frame_map)
 
+        total_frames = len(all_frame_numbers)
+        n_select_cfg = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
+        n_select = min(n_select_cfg, total_frames)
+        if n_select <= 0:
+            raise ScoreVisionChallengeError(
+                "SCOREVISION_VLM_SELECT_N_FRAMES must be positive"
+            )
+
+        # Match video behavior: select a contiguous window and vary it across retries.
+        start_idx = randint(0, total_frames - n_select)
+        selected_frame_numbers = all_frame_numbers[start_idx : start_idx + n_select]
+        logger.info(
+            "Selected Payload Frames (dynamic): %s (total=%s, n_select=%s)",
+            selected_frame_numbers,
+            total_frames,
+            n_select,
+        )
+
+        select_frames: list[ndarray] = []
         flow_frames: list[ndarray] = []
-        for fid in frame_numbers:
+        for fid in selected_frame_numbers:
+            frame = await asyncio.to_thread(frame_store.get_frame, fid)
+            select_frames.append(frame)
             flow = await asyncio.to_thread(frame_store.get_flow, fid)
             flow_frames.append(flow)
 
-        if not frames:
+        if not select_frames:
             raise ScoreVisionChallengeError("No frames were successfully loaded from payload")
 
-        height, width = frames[0].shape[:2]
-        total_frames = len(frame_numbers)
+        height, width = select_frames[0].shape[:2]
         meta = {
             "version": 1,
             "width": width or 0,
@@ -198,14 +227,14 @@ async def prepare_challenge_payload(
             "n_frames_total": total_frames,
             "batch_size": batch_size,
             "n_keypoints": 32,  # TODO: update based on challenge type
-            "min_frames_required": total_frames,
+            "min_frames_required": n_select,
             "frames_source": "payload",
         }
         if "seed" in challenge:
             meta["seed"] = challenge["seed"]
 
         payload_out_frames: list[TVFrame] = []
-        for fid, frame in zip(frame_numbers, frames, strict=True):
+        for fid, frame in zip(all_frame_numbers, all_frames, strict=True):
             b64 = image_to_b64string(frame)
             if not b64:
                 raise ScoreVisionChallengeError("Failed to encode frame image data")
@@ -219,8 +248,8 @@ async def prepare_challenge_payload(
 
         return (
             payload_out,
-            frame_numbers,
-            frames,
+            selected_frame_numbers,
+            select_frames,
             flow_frames,
             frame_store,
         )
