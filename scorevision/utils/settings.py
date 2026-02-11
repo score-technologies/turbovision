@@ -44,14 +44,26 @@ class Settings(BaseModel):
     HUGGINGFACE_API_KEY: SecretStr
     HUGGINGFACE_CONCURRENCY: int
 
-    # Cloudflare R2
-    R2_BUCKET: str
-    R2_ACCOUNT_ID: SecretStr
-    R2_WRITE_ACCESS_KEY_ID: SecretStr
-    R2_WRITE_SECRET_ACCESS_KEY: SecretStr
-    R2_CONCURRENCY: int
-    R2_BUCKET_PUBLIC_URL: str
+    # Central and Audit Validator 
     URL_MANIFEST: str
+    SCOREVISION_BUCKET: str
+    SCOREVISION_PUBLIC_RESULTS_URL: str
+
+    # Central Validator Cloudflare R2
+    CENTRAL_R2_ACCOUNT_ID: SecretStr
+    CENTRAL_R2_WRITE_ACCESS_KEY_ID: SecretStr
+    CENTRAL_R2_WRITE_SECRET_ACCESS_KEY: SecretStr
+    CENTRAL_R2_CONCURRENCY: int
+    CENTRAL_R2_RESULTS_PREFIX: str
+
+    # Audit Validator Cloudflare R2
+    AUDIT_R2_BUCKET: str
+    AUDIT_R2_ACCOUNT_ID: SecretStr
+    AUDIT_R2_WRITE_ACCESS_KEY_ID: SecretStr
+    AUDIT_R2_WRITE_SECRET_ACCESS_KEY: SecretStr
+    AUDIT_R2_CONCURRENCY: int
+    AUDIT_R2_BUCKET_PUBLIC_URL: str
+    AUDIT_R2_RESULTS_PREFIX: str
 
     # Signer
     SIGNER_URL: str
@@ -75,7 +87,6 @@ class Settings(BaseModel):
     SCOREVISION_API_TIMEOUT_S: int
     SCOREVISION_API_RETRY_DELAY_S: int
     SCOREVISION_API_N_RETRIES: int
-    SCOREVISION_RESULTS_PREFIX: str
     SCOREVISION_LOCAL_ROOT: Path
     SCOREVISION_WARMUP_CALLS: int
     SCOREVISION_MAX_CONCURRENT_API_CALLS: int
@@ -110,6 +121,8 @@ class Settings(BaseModel):
     AUDIT_SPOTCHECK_MIN_INTERVAL_S: int
     AUDIT_SPOTCHECK_MAX_INTERVAL_S: int
     AUDIT_SPOTCHECK_THRESHOLD: float
+    AUDIT_COMMIT_MAX_RETRIES: int
+    AUDIT_COMMIT_RETRY_DELAY_S: float
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -120,6 +133,7 @@ def _env_bool(name: str, default: bool) -> bool:
 @lru_cache
 def get_settings() -> Settings:
     load_dotenv()
+    central_results_prefix = getenv("CENTRAL_R2_RESULTS_PREFIX", "results_soccer")
     return Settings(
         # Bittensor
         BITTENSOR_WALLET_COLD=getenv("BITTENSOR_WALLET_COLD", "default"),
@@ -182,13 +196,21 @@ def get_settings() -> Settings:
         HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
         HUGGINGFACE_CONCURRENCY=int(getenv("HUGGINGFACE_CONCURRENCY", 2)),
         # Cloudflare R2
-        R2_BUCKET=getenv("R2_BUCKET", ""),
-        R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
-        R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
-        R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
-        R2_CONCURRENCY=int(getenv("R2_CONCURRENCY", 8)),
-        R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
+        SCOREVISION_BUCKET=getenv("SCOREVISION_BUCKET", ""),
+        SCOREVISION_PUBLIC_RESULTS_URL=getenv("SCOREVISION_PUBLIC_RESULTS_URL", ""),
+        CENTRAL_R2_ACCOUNT_ID=getenv("CENTRAL_R2_ACCOUNT_ID", ""),
+        CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("CENTRAL_R2_WRITE_ACCESS_KEY_ID", ""),
+        CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("CENTRAL_R2_WRITE_SECRET_ACCESS_KEY", ""),
+        CENTRAL_R2_CONCURRENCY=int(getenv("CENTRAL_R2_CONCURRENCY", 8)),
         URL_MANIFEST=getenv("URL_MANIFEST", ""),
+        AUDIT_R2_BUCKET=getenv("AUDIT_R2_BUCKET", ""),
+        AUDIT_R2_ACCOUNT_ID=getenv("AUDIT_R2_ACCOUNT_ID", ""),
+        AUDIT_R2_WRITE_ACCESS_KEY_ID=getenv("AUDIT_R2_WRITE_ACCESS_KEY_ID", ""),
+        AUDIT_R2_WRITE_SECRET_ACCESS_KEY=getenv("AUDIT_R2_WRITE_SECRET_ACCESS_KEY", ""),
+        AUDIT_R2_CONCURRENCY=int(getenv("AUDIT_R2_CONCURRENCY", 8)),
+        AUDIT_R2_BUCKET_PUBLIC_URL=getenv("AUDIT_R2_BUCKET_PUBLIC_URL", ""),
+        AUDIT_R2_RESULTS_PREFIX=getenv("AUDIT_R2_RESULTS_PREFIX", "audit_spotcheck"),
+        CENTRAL_R2_RESULTS_PREFIX=central_results_prefix,
         # Signer
         SIGNER_URL=getenv("SIGNER_URL", "http://signer:8080"),
         SIGNER_SEED=getenv("SIGNER_SEED", ""),
@@ -220,9 +242,6 @@ def get_settings() -> Settings:
         SCOREVISION_API_TIMEOUT_S=int(getenv("SCOREVISION_API_TIMEOUT_S", 300)),
         SCOREVISION_API_RETRY_DELAY_S=int(getenv("SCOREVISION_API_RETRY_DELAY_S", 3)),
         SCOREVISION_API_N_RETRIES=int(getenv("SCOREVISION_API_N_RETRIES", 3)),
-        SCOREVISION_RESULTS_PREFIX=getenv(
-            "SCOREVISION_RESULTS_PREFIX", "results_soccer"
-        ),
         SCOREVISION_LOCAL_ROOT=Path(
             getenv(
                 "SCOREVISION_LOCAL_ROOT",
@@ -270,4 +289,6 @@ def get_settings() -> Settings:
         AUDIT_SPOTCHECK_MIN_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MIN_INTERVAL_S", 7200)),
         AUDIT_SPOTCHECK_MAX_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MAX_INTERVAL_S", 14400)),
         AUDIT_SPOTCHECK_THRESHOLD=float(getenv("AUDIT_SPOTCHECK_THRESHOLD", 0.95)),
+        AUDIT_COMMIT_MAX_RETRIES=int(getenv("AUDIT_COMMIT_MAX_RETRIES", 3)),
+        AUDIT_COMMIT_RETRY_DELAY_S=float(getenv("AUDIT_COMMIT_RETRY_DELAY_S", 2.0)),
     )

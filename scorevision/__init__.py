@@ -1,12 +1,13 @@
 import asyncio
 from asyncio import run
-from logging import DEBUG, INFO, WARNING, basicConfig, getLogger
+from logging import getLogger
 from pathlib import Path
 import click
 from scorevision.cli.audit_validator import audit_validator
 from scorevision.cli.central_validator import central_validator
 from scorevision.cli.elements import elements_cli
 from scorevision.cli.manifest import manifest_cli
+from scorevision.utils.logging import setup_logging
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -19,21 +20,16 @@ logger = getLogger(__name__)
     count=True,
     help="Increase verbosity (-v INFO, -vv DEBUG)",
 )
-def cli(verbosity: int):
-    settings = get_settings()
-    basicConfig(
-        level=DEBUG if verbosity == 2 else INFO if verbosity == 1 else WARNING,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
-    logger.debug(f"Score Vision started (version={settings.SCOREVISION_VERSION})")
+def app(verbosity: int):
+    setup_logging(verbosity)
+    logger.debug("Score Vision started (version=%s)", get_settings().SCOREVISION_VERSION)
 
 
-@cli.command("runner")
+@app.command("runner")
 def runner_cmd():
     from scorevision.validator.central import runner_loop
     from scorevision.utils.prometheus import _start_metrics, mark_service_ready
+    setup_logging()
 
     _start_metrics()
     mark_service_ready("runner")
@@ -42,7 +38,7 @@ def runner_cmd():
     asyncio.run(runner_loop(path_manifest=path_manifest))
 
 
-@cli.command("push")
+@app.command("push")
 @click.option(
     "--model-path",
     default=None,
@@ -70,6 +66,7 @@ def push(
     element_id,
 ):
     from scorevision.cli.push import push_ml_model
+    setup_logging()
 
     try:
         run(
@@ -85,14 +82,15 @@ def push(
         click.echo(e)
 
 
-@cli.command("signer")
+@app.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
+    setup_logging()
 
     asyncio.run(run_signer())
 
 
-@cli.command("validate")
+@app.command("validate")
 @click.option(
     "--tail", type=int, envvar="SCOREVISION_TAIL", default=28800, show_default=True
 )
@@ -108,6 +106,7 @@ def signer_cmd():
 def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
     from scorevision.validator.core import weights_loop
     from scorevision.utils.prometheus import _start_metrics, mark_service_ready
+    setup_logging()
 
     _start_metrics()
     mark_service_ready("validator")
@@ -119,7 +118,7 @@ def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
     asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=path_manifest))
 
 
-cli.add_command(audit_validator)
-cli.add_command(central_validator)
-cli.add_command(manifest_cli)
-cli.add_command(elements_cli)
+app.add_command(audit_validator)
+app.add_command(central_validator)
+app.add_command(manifest_cli)
+app.add_command(elements_cli)

@@ -3,9 +3,10 @@ import logging
 import multiprocessing
 import signal
 import click
+from scorevision.utils.logging import setup_logging
 from scorevision.utils.settings import get_settings
 
-logger = logging.getLogger("scorevision.audit_validator")
+logger = logging.getLogger(__name__)
 
 shutdown_event = asyncio.Event()
 
@@ -22,8 +23,18 @@ def setup_signal_handlers():
 def run_weights_process(tail: int, m_min: int, tempo: int, path_manifest: str | None):
     from pathlib import Path
     from scorevision.validator.core import weights_loop
+    setup_logging()
+
     manifest_path = Path(path_manifest) if path_manifest else None
-    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=manifest_path))
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=manifest_path,
+            commit_on_start=False,
+        )
+    )
 
 
 def run_spotcheck_process(
@@ -32,19 +43,25 @@ def run_spotcheck_process(
     tail_blocks: int,
     threshold: float,
     element_id: str | None,
+    commit_on_start: bool,
 ):
     from scorevision.validator.audit import spotcheck_loop
+    setup_logging()
+
     asyncio.run(spotcheck_loop(
         min_interval_seconds=min_interval,
         max_interval_seconds=max_interval,
         tail_blocks=tail_blocks,
         threshold=threshold,
         element_id=element_id,
+        commit_on_start=commit_on_start,
     ))
 
 
 def run_signer_process():
     from scorevision.validator.core import run_signer
+    setup_logging()
+
     asyncio.run(run_signer())
 
 
@@ -62,6 +79,7 @@ def audit_validator():
 @click.option("--spotcheck-max", default=None, type=int, help="Max spotcheck interval in seconds")
 @click.option("--threshold", default=None, type=float, help="Spotcheck match threshold (0.0-1.0)")
 @click.option("--element-id", default=None, help="Filter spotcheck to specific element")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain audit index commitment on startup")
 def start_cmd(
     tail: int,
     m_min: int,
@@ -71,6 +89,7 @@ def start_cmd(
     spotcheck_max: int | None,
     threshold: float | None,
     element_id: str | None,
+    no_commit: bool,
 ):
     settings = get_settings()
 
@@ -87,6 +106,8 @@ def start_cmd(
     logger.info("  Signer service: starting...")
     logger.info("  Weights loop: tempo=%d blocks, tail=%d, m_min=%d", tempo, tail, m_min)
     logger.info("  Spotcheck loop: interval=%d-%d seconds, threshold=%.0f%%", spotcheck_min, spotcheck_max, threshold * 100)
+    if no_commit:
+        logger.info("  Spotcheck startup commitment: disabled (--no-commit)")
 
     signer_proc = multiprocessing.Process(
         target=run_signer_process,
@@ -99,7 +120,7 @@ def start_cmd(
     )
     spotcheck_proc = multiprocessing.Process(
         target=run_spotcheck_process,
-        args=(spotcheck_min, spotcheck_max, tail, threshold, element_id),
+        args=(spotcheck_min, spotcheck_max, tail, threshold, element_id, not no_commit),
         name="audit-spotcheck",
     )
 
@@ -138,17 +159,19 @@ def start_cmd(
 def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     from pathlib import Path
     from scorevision.validator.core import weights_loop
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
+    setup_logging()
 
     manifest_path = Path(manifest) if manifest else None
     logger.info("Starting weights-only mode (tempo=%d blocks)", tempo)
-    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=manifest_path))
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=manifest_path,
+            commit_on_start=False,
+        )
+    )
 
 
 @audit_validator.command("spotcheck")
@@ -159,6 +182,7 @@ def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
 @click.option("--element-id", default=None, help="Filter to specific element")
 @click.option("--once", is_flag=True, help="Run single spotcheck and exit")
 @click.option("--mock-data-dir", default=None, type=click.Path(exists=True), help="Load mock data from local directory (testing only)")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain audit index commitment on startup")
 def spotcheck_cmd(
     min_interval: int | None,
     max_interval: int | None,
@@ -167,30 +191,19 @@ def spotcheck_cmd(
     element_id: str | None,
     once: bool,
     mock_data_dir: str | None,
+    no_commit: bool,
 ):
     from pathlib import Path
     from scorevision.validator.audit import spotcheck_loop, run_single_spotcheck
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
-    # logging.getLogger("scorevision").setLevel(logging.INFO)
-    logging.getLogger("scorevision.spotcheck").setLevel(logging.INFO)
-    logging.getLogger("scorevision.audit_validator").setLevel(logging.INFO)
-    # r2_logger = logging.getLogger("scorevision.utils.r2_public")
-    # r2_logger.setLevel(logging.INFO)
-    # r2_logger.propagate = True
+    setup_logging()
 
     settings = get_settings()
     mock_path = Path(mock_data_dir) if mock_data_dir else None
 
     if mock_path is None:
-        public_url = settings.R2_BUCKET_PUBLIC_URL
+        public_url = settings.SCOREVISION_PUBLIC_RESULTS_URL
         if not public_url:
-            logger.error("R2_BUCKET_PUBLIC_URL is not set")
+            logger.error("SCOREVISION_PUBLIC_RESULTS_URL is not set")
             return
 
     if min_interval is None:
@@ -210,6 +223,7 @@ def spotcheck_cmd(
             element_id=element_id,
             threshold=threshold,
             mock_data_dir=mock_path,
+            commit_on_start=not no_commit,
         ))
     else:
         logger.info("Starting spotcheck loop (interval=%d-%d seconds)", min_interval, max_interval)
@@ -219,20 +233,14 @@ def spotcheck_cmd(
             tail_blocks=tail,
             threshold=threshold,
             element_id=element_id,
+            commit_on_start=not no_commit,
         ))
 
 
 @audit_validator.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
+    setup_logging()
 
     logger.info("Starting signer-only mode")
     asyncio.run(run_signer())
-

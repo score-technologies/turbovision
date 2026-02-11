@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import random
+import traceback
 from json import dumps
 from pathlib import Path
 from typing import Any
@@ -19,10 +21,15 @@ from scorevision.utils.r2_public import (
 )
 from scorevision.utils.settings import get_settings
 from scorevision.validator.models import ChallengeRecord, SpotcheckResult
+from scorevision.validator.audit.storage import (
+    commit_audit_index_on_start,
+    ensure_audit_index_exists,
+    emit_spotcheck_result_shard,
+)
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import filter_low_quality_pseudo_gt_annotations
 from scorevision.vlm_pipeline.vlm_annotator_sam3 import generate_annotations_for_select_frames_sam3
 
-logger = logging.getLogger("scorevision.spotcheck")
+logger = logging.getLogger(__name__)
 
 
 def parse_challenge_record_from_line(line: dict, key: str) -> ChallengeRecord | None:
@@ -86,11 +93,10 @@ async def fetch_random_challenge_record(
     tail_blocks: int,
     element_id: str | None = None,
 ) -> ChallengeRecord | None:
-    settings = get_settings()
-    public_url = settings.R2_BUCKET_PUBLIC_URL
+    public_url = get_settings().SCOREVISION_PUBLIC_RESULTS_URL
 
     if not public_url:
-        logger.error("R2_BUCKET_PUBLIC_URL not set - cannot fetch challenges")
+        logger.error("SCOREVISION_PUBLIC_RESULTS_URL not set - cannot fetch challenges")
         return None
 
     logger.info("Fetching random challenge from R2 (tail=%d blocks, element=%s)", tail_blocks, element_id)
@@ -269,7 +275,6 @@ async def regenerate_ground_truth_sam3(
         return challenge, payload, frame_store, filtered
 
     except Exception as e:
-        import traceback
         logger.error("Failed to regenerate ground truth: %s", e)
         logger.error("Traceback:\n%s", traceback.format_exc())
         return None
@@ -290,11 +295,10 @@ async def rescore_miner_response(
     pseudo_gt_annotations: list,
     manifest: Manifest,
 ) -> float:
-    settings = get_settings()
     miner_predictions = challenge_record.miner_predictions
 
     if not miner_predictions and challenge_record.responses_key:
-        public_url = settings.R2_BUCKET_PUBLIC_URL
+        public_url = get_settings().SCOREVISION_PUBLIC_RESULTS_URL
         miner_predictions = await fetch_miner_predictions(challenge_record.responses_key, public_url)
 
     if not miner_predictions:
@@ -426,12 +430,44 @@ async def run_spotcheck(
     )
 
 
+async def _initialize_audit_storage(commit_on_start: bool) -> None:
+    if not commit_on_start:
+        return
+    await ensure_audit_index_exists()
+    await commit_audit_index_on_start()
+
+
+async def _emit_result_safely(
+    record: ChallengeRecord,
+    result: SpotcheckResult,
+    *,
+    mode: str,
+    source: str,
+    threshold: float | None,
+    tail_blocks: int,
+    mock_data_dir: str | None = None,
+) -> None:
+    try:
+        await emit_spotcheck_result_shard(
+            record=record,
+            result=result,
+            mode=mode,
+            source=source,
+            threshold=threshold,
+            tail_blocks=tail_blocks,
+            mock_data_dir=mock_data_dir,
+        )
+    except Exception as e:
+        logger.warning("Failed to upload spotcheck shard: %s", e)
+
+
 async def spotcheck_loop(
     min_interval_seconds: int | None = None,
     max_interval_seconds: int | None = None,
     tail_blocks: int = 28800,
     threshold: float | None = None,
     element_id: str | None = None,
+    commit_on_start: bool = True,
 ) -> None:
     settings = get_settings()
 
@@ -449,6 +485,7 @@ async def spotcheck_loop(
         threshold * 100,
         element_id or "any",
     )
+    await _initialize_audit_storage(commit_on_start)
 
     manifest = await load_manifest_for_spotcheck()
     first_run = True
@@ -476,6 +513,14 @@ async def spotcheck_loop(
                 result.central_score,
                 result.audit_score,
             )
+            await _emit_result_safely(
+                record=challenge_record,
+                result=result,
+                mode="loop",
+                source="r2",
+                threshold=threshold,
+                tail_blocks=tail_blocks,
+            )
 
         except asyncio.CancelledError:
             logger.info("[SpotcheckLoop] Cancelled, shutting down")
@@ -495,7 +540,6 @@ def load_challenge_record_from_mock_dir(mock_data_dir: Path) -> ChallengeRecord 
     logger.info("Loading mock evaluation from: %s", eval_file)
 
     try:
-        import json
         with open(eval_file) as f:
             eval_data = json.load(f)
 
@@ -556,10 +600,13 @@ async def run_single_spotcheck(
     element_id: str | None = None,
     threshold: float | None = None,
     mock_data_dir: Path | None = None,
+    commit_on_start: bool = True,
 ) -> SpotcheckResult | None:
     settings = get_settings()
     if threshold is None:
         threshold = settings.AUDIT_SPOTCHECK_THRESHOLD
+
+    await _initialize_audit_storage(commit_on_start)
 
     if mock_data_dir is not None:
         logger.info("Using mock data from: %s", mock_data_dir)
@@ -569,7 +616,7 @@ async def run_single_spotcheck(
         challenge_record = await fetch_random_challenge_record(tail_blocks, element_id=element_id)
 
     if challenge_record is None:
-        logger.error("No challenge found - check R2_BUCKET_PUBLIC_URL or mock data dir")
+        logger.error("No challenge found - check SCOREVISION_PUBLIC_RESULTS_URL or mock data dir")
         return None
 
     logger.info("Found challenge: %s", challenge_record.challenge_id)
@@ -589,6 +636,14 @@ async def run_single_spotcheck(
         result.central_score,
         result.audit_score,
     )
+    await _emit_result_safely(
+        record=challenge_record,
+        result=result,
+        mode="once",
+        source="mock" if mock_data_dir is not None else "r2",
+        threshold=threshold,
+        tail_blocks=tail_blocks,
+        mock_data_dir=str(mock_data_dir) if mock_data_dir is not None else None,
+    )
 
     return result
-

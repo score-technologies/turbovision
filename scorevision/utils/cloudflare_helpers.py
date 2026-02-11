@@ -7,23 +7,28 @@ from logging import getLogger
 from pathlib import Path
 from time import time
 from urllib.parse import urljoin, urlparse
-
 import aiohttp
-from aiobotocore.session import get_session
 from async_substrate_interface.errors import SubstrateRequestException
-from botocore.config import Config as BotoConfig
 from substrateinterface import Keypair
-
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.prometheus import (
     VALIDATOR_DATASET_FETCH_ERRORS_TOTAL,
     VALIDATOR_DATASET_LINES_TOTAL,
 )
+from scorevision.utils.r2 import (
+    add_index_key_if_new,
+    build_public_index_url_from_base as _build_index_url_from_public_base,
+    central_r2_config,
+    create_s3_client,
+    ensure_index_exists as _ensure_index_exists,
+    is_configured,
+)
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
 
 logger = getLogger(__name__)
+_cache_dir = None
 
 
 async def _safe_get_current_block(st, rid: str, retries: int = 1):
@@ -56,10 +61,12 @@ def _dumps(o) -> bytes:
     return dumps(o, separators=(",", ":")).encode()
 
 
-settings = get_settings()
-
-CACHE_DIR = settings.SCOREVISION_CACHE_DIR
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def _get_cache_dir():
+    global _cache_dir
+    if _cache_dir is None:
+        _cache_dir = get_settings().SCOREVISION_CACHE_DIR
+        _cache_dir.mkdir(parents=True, exist_ok=True)
+    return _cache_dir
 
 
 def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
@@ -73,8 +80,9 @@ def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
         return False
 
 
-def _results_prefix(ns: str | None = None) -> str:
-    ns = (ns or os.getenv("SCOREVISION_RESULTS_PREFIX") or "results").strip().strip("/")
+def _central_results_prefix(ns: str | None = None) -> str:
+    s = get_settings()
+    ns = (ns if ns is not None else s.CENTRAL_R2_RESULTS_PREFIX).strip().strip("/")
     return f"scorevision/{ns}/"
 
 
@@ -93,7 +101,7 @@ async def _index_list() -> list[str]:
 
     async with get_s3_client() as c:
         try:
-            r = await c.get_object(Bucket=settings.R2_BUCKET, Key=index_key)
+            r = await c.get_object(Bucket=settings.SCOREVISION_BUCKET, Key=index_key)
             body = await r["Body"].read()
             return loads(body)
         except c.exceptions.NoSuchKey:
@@ -105,7 +113,7 @@ async def _put_json_object(key: str, obj) -> None:
     data = dumps(obj, separators=(",", ":")).encode()
     async with get_s3_client() as c:
         await c.put_object(
-            Bucket=s.R2_BUCKET, Key=key, Body=data, ContentType="application/json"
+            Bucket=s.SCOREVISION_BUCKET, Key=key, Body=data, ContentType="application/json"
         )
     if "/evaluation/" in key:
         await _index_add_if_new(key)
@@ -113,12 +121,12 @@ async def _put_json_object(key: str, obj) -> None:
 
 async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
     settings = get_settings()
-    out = CACHE_DIR / (Path(key).name + ".jsonl")
+    out = _get_cache_dir() / (Path(key).name + ".jsonl")
     mod = out.with_suffix(".modified")
 
     async with sem, get_s3_client() as c:
         try:
-            head = await c.head_object(Bucket=settings.R2_BUCKET, Key=key)
+            head = await c.head_object(Bucket=settings.SCOREVISION_BUCKET, Key=key)
             lm = head["LastModified"].isoformat()
         except c.exceptions.NoSuchKey:
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
@@ -129,7 +137,7 @@ async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
         if out.exists() and mod.exists() and mod.read_text().strip() == lm:
             return out
 
-        obj = await c.get_object(Bucket=settings.R2_BUCKET, Key=key)
+        obj = await c.get_object(Bucket=settings.SCOREVISION_BUCKET, Key=key)
         body = await obj["Body"].read()
         arr = _loads(body)
 
@@ -144,15 +152,10 @@ async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
 
 
 def build_public_index_url_from_public_base(public_base: str | None) -> str | None:
-    """Turn a Public Development URL (e.g. https://pub-xxxx.r2.dev)
-    into the scorevision index URL (.../scorevision/index.json)."""
-    if not public_base:
-        return None
-    return public_base.rstrip("/") + "/scorevision/index.json"
+    return _build_index_url_from_public_base(public_base)
 
 
 def normalize_index_url(url: str | None) -> str | None:
-    """Ensure a URL points to the index.json (accepts either a base or a full URL)."""
     if not url:
         return None
     if url.strip().endswith(".json"):
@@ -162,50 +165,24 @@ def normalize_index_url(url: str | None) -> str | None:
 
 def get_s3_client():
     settings = get_settings()
-    if not (
-        settings.R2_ACCOUNT_ID.get_secret_value()
-        and settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value()
-        and settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
-    ):
-        raise RuntimeError("R2 credentials not set")
-    sess = get_session()
-    return sess.create_client(
-        "s3",
-        endpoint_url=f"https://{settings.R2_ACCOUNT_ID.get_secret_value()}.r2.cloudflarestorage.com",
-        aws_access_key_id=settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value(),
-        aws_secret_access_key=settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value(),
-        config=BotoConfig(max_pool_connections=settings.R2_CONCURRENCY),
+    cfg = central_r2_config(settings)
+    return create_s3_client(
+        cfg,
+        error_message="Central R2 credentials not set",
     )
 
 
 def _r2_enabled() -> bool:
-    settings = get_settings()
-    return bool(
-        settings.R2_ACCOUNT_ID.get_secret_value()
-        and settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value()
-        and settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
-    )
+    return is_configured(central_r2_config(get_settings()), require_bucket=True)
 
 
 async def _index_add_if_new(key: str) -> None:
     settings = get_settings()
-    local_index = settings.SCOREVISION_LOCAL_ROOT / "index.json"
-    index_key = "scorevision/index.json"
-
-    async with get_s3_client() as c:
-        try:
-            r = await c.get_object(Bucket=settings.R2_BUCKET, Key=index_key)
-            items = set(loads(await r["Body"].read()))
-        except c.exceptions.NoSuchKey:
-            items = set()
-        if key not in items:
-            items.add(key)
-            await c.put_object(
-                Bucket=settings.R2_BUCKET,
-                Key=index_key,
-                Body=dumps(sorted(items)),
-                ContentType="application/json",
-            )
+    await add_index_key_if_new(
+        client_factory=get_s3_client,
+        bucket=settings.SCOREVISION_BUCKET,
+        key=key,
+    )
 
 
 async def sink_sv(block: int, lines: list[dict]) -> tuple[str, list[dict]]:
@@ -228,17 +205,17 @@ async def sink_sv(block: int, lines: list[dict]) -> tuple[str, list[dict]]:
         rec["hotkey"] = hk
         signed.append(rec)
 
-    key = f"{_results_prefix()}{block:09d}-{hk}.json"
+    key = f"{_central_results_prefix()}{block:09d}-{hk}.json"
 
     async with get_s3_client() as c:
         try:
-            r = await c.get_object(Bucket=settings.R2_BUCKET, Key=key)
+            r = await c.get_object(Bucket=settings.SCOREVISION_BUCKET, Key=key)
             old = loads(await r["Body"].read())
         except c.exceptions.NoSuchKey:
             old = []
         merged = old + signed
         await c.put_object(
-            Bucket=settings.R2_BUCKET,
+            Bucket=settings.SCOREVISION_BUCKET,
             Key=key,
             Body=dumps(merged),
             ContentType="application/json",
@@ -267,7 +244,7 @@ async def sink_sv_at(key: str, lines: list[dict]) -> tuple[str, list[dict]]:
 
     async with get_s3_client() as c:
         await c.put_object(
-            Bucket=s.R2_BUCKET,
+            Bucket=s.SCOREVISION_BUCKET,
             Key=key,
             Body=dumps(signed, separators=(",", ":")),
             ContentType="application/json",
@@ -431,7 +408,7 @@ async def emit_shard(
     }
 
     if pgt_recipe_hash is None:
-        pgt_recipe_hash = getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None)
+        pgt_recipe_hash = getattr(get_settings(), "SCOREVISION_PGT_RECIPE_HASH", None)
     if pgt_recipe_hash is None:
         pgt_recipe_hash = "sha256:unknown"
 
@@ -454,7 +431,7 @@ async def emit_shard(
         "scored_frame_numbers": scored_frame_numbers,
     }
 
-    shard_line = {"version": settings.SCOREVISION_VERSION, "payload": shard_payload}
+    shard_line = {"version": get_settings().SCOREVISION_VERSION, "payload": shard_payload}
 
     try:
         logger.info(f"[emit:{rid}] writing evaluation shard to {eval_key}")
@@ -485,15 +462,9 @@ async def emit_shard(
 
 
 async def dataset_sv(tail: int, *, max_concurrency: int = None):
-    """
-    - read index
-    - filter shards where 'block' >= max_block - tail
-    - concurrent prefetch
-    - stream local JSONL and yield verified lines
-    """
     sem = asyncio.Semaphore(int(os.getenv("SCOREVISION_DATASET_PREFETCH", "8")))
     index = await _index_list()
-    # extract bloc from filename
+
     pairs: list[tuple[int, str]] = []
     for k in index:
         name = Path(k).name
@@ -512,7 +483,7 @@ async def dataset_sv(tail: int, *, max_concurrency: int = None):
     logger.info(
         f"[dataset] max_block={max_block} tail={tail} -> keeping >= {min_keep} | keys_kept={len(keys)}"
     )
-    # prefetch
+
     tasks = [
         asyncio.create_task(_cache_shard(k, sem))
         for k in keys[: (max_concurrency or 8)]
@@ -528,7 +499,6 @@ async def dataset_sv(tail: int, *, max_concurrency: int = None):
             tasks.append(asyncio.create_task(_cache_shard(keys[next_i], sem)))
             next_i += 1
 
-        # stream jsonl
         if not p.exists():
             continue
         with p.open("rb") as f:
@@ -590,7 +560,7 @@ def _cache_path_for_url(url: str) -> Path:
     name = Path(urlparse(url).path).name
     if not name:
         name = "index.json"
-    return CACHE_DIR / f"{name}.{h}.jsonl"
+    return _get_cache_dir() / f"{name}.{h}.jsonl"
 
 
 async def _cache_remote_json_array(url: str, sem: asyncio.Semaphore) -> Path:
@@ -757,8 +727,9 @@ async def dataset_sv_multi(
 
 
 def prune_sv(tail: int):
+    cache_dir = _get_cache_dir()
     blocks = []
-    for f in CACHE_DIR.glob("*.jsonl"):
+    for f in cache_dir.glob("*.jsonl"):
         name = f.name.split("-", 1)[0]
         if name.isdigit():
             blocks.append(int(name))
@@ -766,7 +737,7 @@ def prune_sv(tail: int):
         return
     maxb = max(blocks)
     min_keep = maxb - int(tail)
-    for f in CACHE_DIR.glob("*.jsonl"):
+    for f in cache_dir.glob("*.jsonl"):
         name = f.name.split("-", 1)[0]
         if name.isdigit() and int(name) < min_keep:
             try:
@@ -783,28 +754,15 @@ def prune_sv(tail: int):
 
 def build_public_index_url() -> str | None:
     s = get_settings()
-    if not (s.R2_ACCOUNT_ID.get_secret_value() and s.R2_BUCKET):
-        return None
-    base = f"https://{s.R2_ACCOUNT_ID.get_secret_value()}.r2.cloudflarestorage.com"
-    return f"{base}/{s.R2_BUCKET}/scorevision/index.json"
+    return build_public_index_url_from_public_base(s.SCOREVISION_PUBLIC_RESULTS_URL)
 
 
 async def ensure_index_exists() -> None:
     s = get_settings()
-    index_key = "scorevision/index.json"
-
-    async with get_s3_client() as c:
-        try:
-            await c.head_object(Bucket=s.R2_BUCKET, Key=index_key)
-            return
-        except c.exceptions.NoSuchKey:
-            pass
-        await c.put_object(
-            Bucket=s.R2_BUCKET,
-            Key=index_key,
-            Body="[]",
-            ContentType="application/json",
-        )
+    await _ensure_index_exists(
+        client_factory=get_s3_client,
+        bucket=s.SCOREVISION_BUCKET,
+    )
 
 
 async def ensure_winners_index_exists(prefix: str | None = None) -> str:
@@ -813,12 +771,12 @@ async def ensure_winners_index_exists(prefix: str | None = None) -> str:
 
     async with get_s3_client() as c:
         try:
-            await c.head_object(Bucket=s.R2_BUCKET, Key=index_key)
+            await c.head_object(Bucket=s.SCOREVISION_BUCKET, Key=index_key)
             return index_key
         except c.exceptions.NoSuchKey:
             pass
         await c.put_object(
-            Bucket=s.R2_BUCKET,
+            Bucket=s.SCOREVISION_BUCKET,
             Key=index_key,
             Body="[]",
             ContentType="application/json",
@@ -830,14 +788,14 @@ async def _winners_index_add_if_new(index_key: str, key: str) -> None:
     s = get_settings()
     async with get_s3_client() as c:
         try:
-            r = await c.get_object(Bucket=s.R2_BUCKET, Key=index_key)
+            r = await c.get_object(Bucket=s.SCOREVISION_BUCKET, Key=index_key)
             items = set(loads(await r["Body"].read()))
         except c.exceptions.NoSuchKey:
             items = set()
         if key not in items:
             items.add(key)
             await c.put_object(
-                Bucket=s.R2_BUCKET,
+                Bucket=s.SCOREVISION_BUCKET,
                 Key=index_key,
                 Body=dumps(sorted(items)),
                 ContentType="application/json",
@@ -856,7 +814,7 @@ async def put_winners_snapshot(
 
     async with get_s3_client() as c:
         await c.put_object(
-            Bucket=s.R2_BUCKET,
+            Bucket=s.SCOREVISION_BUCKET,
             Key=key,
             Body=dumps(payload, separators=(",", ":")),
             ContentType="application/json",

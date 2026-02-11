@@ -113,6 +113,7 @@ def post_vlm_ranking(
         else []
     )
     frame_count = len(predicted_frames)
+    frame_count_within_expected = expected_total <= 0 or frame_count <= expected_total
 
     logger.info(
         "Frame check: miner_unique=%s expected_total=%s",
@@ -126,7 +127,7 @@ def post_vlm_ranking(
     if (
         miner_run.success
         and frame_count >= settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER
-        and frame_count <= expected_total
+        and frame_count_within_expected
         and challenge_type is not None
         and manifest is not None
     ):

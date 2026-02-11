@@ -41,7 +41,7 @@ dependencies = [
 ]
  
 [project.scripts]
-sv = "scorevision:cli"
+sv = "scorevision:app"
 
 [project.optional-dependencies]
 # Heavy ML stack used by chute templates; optional to keep base lean.
@@ -55,3 +55,5 @@ ml = [
 [tool.hatch.build.targets.wheel]
 packages = ["scorevision"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]

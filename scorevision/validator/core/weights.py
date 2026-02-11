@@ -36,7 +36,7 @@ from scorevision.utils.bittensor_helpers import (
 from scorevision.utils.blacklist import load_blacklisted_hotkeys
 from scorevision.utils.cloudflare_helpers import (
     ensure_index_exists,
-    build_public_index_url,
+    build_public_index_url_from_public_base,
     prune_sv,
     put_winners_snapshot,
 )
@@ -153,21 +153,16 @@ def setup_signal_handler():
 
 async def commit_validator_on_start(netuid: int):
     settings = get_settings()
-    r2_bucket_public_url = settings.R2_BUCKET_PUBLIC_URL
+    r2_bucket_public_url = settings.SCOREVISION_PUBLIC_RESULTS_URL
 
     if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") in ("0", "false", "False"):
         return
 
     try:
-        index_url = None
-        if r2_bucket_public_url:
-            from scorevision.utils.cloudflare_helpers import build_public_index_url_from_public_base
-            index_url = build_public_index_url_from_public_base(r2_bucket_public_url)
-        if not index_url:
-            index_url = build_public_index_url()
+        index_url = build_public_index_url_from_public_base(r2_bucket_public_url)
 
         if not index_url:
-            logger.warning("[validator-commit] No public index URL configured; skipping.")
+            logger.warning("[validator-commit] SCOREVISION_PUBLIC_RESULTS_URL is not set; skipping.")
             VALIDATOR_COMMIT_TOTAL.labels(result="no_index").inc()
             return
 
@@ -214,6 +209,7 @@ async def weights_loop(
     m_min: int = 25,
     tempo: int = 100,
     path_manifest: Path | None = None,
+    commit_on_start: bool = True,
 ) -> None:
     settings = get_settings()
     netuid = settings.SCOREVISION_NETUID
@@ -222,7 +218,8 @@ async def weights_loop(
     winners_every_n = settings.VALIDATOR_WINNERS_EVERY_N
 
     setup_signal_handler()
-    await commit_validator_on_start(netuid)
+    if commit_on_start:
+        await commit_validator_on_start(netuid)
 
     wallet = bt.wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -463,4 +460,3 @@ async def weights_loop(
                 continue
 
     logger.info("Weights loop shutting down gracefully...")
-

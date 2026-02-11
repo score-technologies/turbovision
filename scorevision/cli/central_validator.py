@@ -3,9 +3,9 @@ import logging
 import multiprocessing
 import signal
 import click
-from scorevision.utils.settings import get_settings
+from scorevision.utils.logging import setup_logging
 
-logger = logging.getLogger("scorevision.central_validator")
+logger = logging.getLogger(__name__)
 
 shutdown_event = asyncio.Event()
 
@@ -22,6 +22,8 @@ def setup_signal_handlers():
 def run_runner_process(path_manifest: str | None):
     from pathlib import Path
     from scorevision.validator.central import runner_loop
+    setup_logging()
+
     manifest_path = Path(path_manifest) if path_manifest else None
     asyncio.run(runner_loop(path_manifest=manifest_path))
 
@@ -29,12 +31,16 @@ def run_runner_process(path_manifest: str | None):
 def run_weights_process(tail: int, m_min: int, tempo: int, path_manifest: str | None):
     from pathlib import Path
     from scorevision.validator.core import weights_loop
+    setup_logging()
+
     manifest_path = Path(path_manifest) if path_manifest else None
     asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=manifest_path))
 
 
 def run_signer_process():
     from scorevision.validator.core import run_signer
+    setup_logging()
+
     asyncio.run(run_signer())
 
 
@@ -103,13 +109,7 @@ def start_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
 def runner_cmd(manifest: str | None):
     from pathlib import Path
     from scorevision.validator.central import runner_loop
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
+    setup_logging()
 
     manifest_path = Path(manifest) if manifest else None
     logger.info("Starting runner-only mode (manifest=%s)", manifest or "auto")
@@ -124,13 +124,7 @@ def runner_cmd(manifest: str | None):
 def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     from pathlib import Path
     from scorevision.validator.core import weights_loop
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
+    setup_logging()
 
     manifest_path = Path(manifest) if manifest else None
     logger.info("Starting weights-only mode (tempo=%d blocks)", tempo)
@@ -140,14 +134,7 @@ def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
 @central_validator.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,
-    )
+    setup_logging()
 
     logger.info("Starting signer-only mode")
     asyncio.run(run_signer())
-

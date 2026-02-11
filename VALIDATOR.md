@@ -9,19 +9,17 @@ Validators keep Turbo Vision honest by benchmarking every submitted model agains
 ## 1. Prepare Cloudflare R2 Storage
 1. Log into the [Cloudflare Dashboard](https://dash.cloudflare.com) and open **R2**.
 2. Create an R2 bucket (e.g. `scorevision-results`) and write down the **Account ID**.
-3. Under **Manage R2 API Tokens**, mint a token with **Read/Write** access. Save the `R2_WRITE_ACCESS_KEY_ID` and `R2_WRITE_SECRET_ACCESS_KEY`.
+3. Under **Manage R2 API Tokens**, mint a token with **Read/Write** access. Save the `CENTRAL_R2_WRITE_ACCESS_KEY_ID` and `CENTRAL_R2_WRITE_SECRET_ACCESS_KEY`.
 4. In the bucket’s **Settings → Public Access**, enable public reads and note the **Public URL** your miners will hit for results.
 
 ## 2. Configure Environment Variables
 Add the following variables to `.env` (or your process manager) on the validator host:
 
 ```bash
-R2_ACCOUNT_ID=<your_r2_account_id>
-R2_WRITE_ACCESS_KEY_ID=<your_access_key_id>
-R2_WRITE_SECRET_ACCESS_KEY=<your_secret_access_key>
-R2_BUCKET=<bucket_name>
-R2_BUCKET_PUBLIC_URL=<public_bucket_url>
-SCOREVISION_RESULTS_PREFIX=results_soccer
+CENTRAL_R2_ACCOUNT_ID=<your_r2_account_id>
+CENTRAL_R2_WRITE_ACCESS_KEY_ID=<your_access_key_id>
+CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=<your_secret_access_key>
+CENTRAL_R2_RESULTS_PREFIX=results_soccer
 SCOREVISION_NETUID=<target_subnet_id>  # e.g. 44 for Turbo Vision
 ```
 
