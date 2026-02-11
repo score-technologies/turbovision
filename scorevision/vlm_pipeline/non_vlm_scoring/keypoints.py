@@ -337,7 +337,7 @@ def evaluate_keypoints_for_frame(
         score = pixels_overlapping / (pixels_on_lines + 1e-8)
         return score
     except Exception as e:
-        logger.error(e)
+        _ = e
     return 0.0
 
 
@@ -366,13 +366,13 @@ def evaluate_keypoints(
                 try:
                     frame_image = frames.get_frame(frame_number)
                 except Exception as e:
-                    logger.error(e)
+                    _ = e
                     frame_image = None
             else:
                 try:
                     frame_image = frames.get(frame_number)  # type: ignore[attr-defined]
                 except Exception as e:
-                    logger.error(e)
+                    _ = e
                     frame_image = None
         if (
             annotations_miner is None
