@@ -9,17 +9,22 @@ from random import randint
 from pathlib import Path
 
 from aiohttp import ClientResponseError
-from numpy import ndarray
+from base64 import b64decode
+from numpy import ndarray, frombuffer, uint8
+from cv2 import imdecode, IMREAD_COLOR
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.async_clients import get_async_client
-from scorevision.utils.video_processing import download_video_cached, FrameStore
-from scorevision.utils.image_processing import image_to_base64, pil_from_array
-from scorevision.chute_template.schemas import SVFrame
-from scorevision.chute_template.schemas import TVPredictInput
+from scorevision.utils.video_processing import (
+    download_video_cached,
+    FrameStore,
+    InMemoryFrameStore,
+)
+from scorevision.utils.image_processing import image_to_b64string
+from scorevision.chute_template.schemas import TVFrame, TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,
@@ -53,6 +58,68 @@ def _coerce_challenge_type(challenge: dict) -> ChallengeType:
     if isinstance(ct_id, str) and ct_id.isdigit():
         return CHALLENGE_ID_LOOKUP.get(int(ct_id), ChallengeType.FOOTBALL)
     return ChallengeType.FOOTBALL
+
+
+def _coerce_payload_frames(payload: dict) -> list[dict[str, object]]:
+    frames = payload.get("frames")
+    if not isinstance(frames, list):
+        return []
+    result: list[dict[str, object]] = []
+    for item in frames:
+        if not isinstance(item, dict):
+            continue
+        frame_id = item.get("frame_id") or item.get("frameid") or item.get("id")
+        url = item.get("url")
+        data = item.get("data")
+        if isinstance(frame_id, str) and frame_id.isdigit():
+            frame_id = int(frame_id)
+        if isinstance(frame_id, int) and (isinstance(url, str) or isinstance(data, str)):
+            result.append({"frame_id": frame_id, "url": url, "data": data})
+    return result
+
+
+def _decode_frame_bytes(data: bytes) -> ndarray:
+    arr = frombuffer(data, dtype=uint8)
+    img = imdecode(arr, IMREAD_COLOR)
+    if img is None:
+        raise ScoreVisionChallengeError("Failed to decode frame image data")
+    return img
+
+
+async def _download_frame_from_url(url: str) -> ndarray:
+    session = await get_async_client()
+    async with session.get(url) as response:
+        if response.status != 200:
+            txt = await response.text()
+            raise ScoreVisionChallengeError(
+                f"Frame download failed {response.status}: {txt[:200]}"
+            )
+        data = await response.read()
+
+    return _decode_frame_bytes(data)
+
+
+async def _load_payload_frames(frame_entries: list[dict[str, object]]) -> list[ndarray]:
+    tasks = []
+    for entry in frame_entries:
+        data = entry.get("data")
+        url = entry.get("url")
+        if isinstance(data, str) and data:
+            try:
+                decoded = b64decode(data)
+            except Exception as e:
+                raise ScoreVisionChallengeError(
+                    f"Failed to decode base64 frame data: {e}"
+                )
+            tasks.append(asyncio.to_thread(_decode_frame_bytes, decoded))
+        elif isinstance(url, str) and url:
+            tasks.append(asyncio.create_task(_download_frame_from_url(url)))
+        else:
+            raise ScoreVisionChallengeError("Frame entry missing url or data")
+    frames = await asyncio.gather(*tasks)
+    if not frames:
+        raise ScoreVisionChallengeError("No frames were downloaded from payload")
+    return frames
 
 
 def _build_offline_challenge(
@@ -93,10 +160,71 @@ async def prepare_challenge_payload(
     batch_size: int = 64,
     *,
     video_cache: dict[str, Any] | None = None,
-) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore]:
+) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore | InMemoryFrameStore]:
     settings = get_settings()
 
     payload = challenge.get("payload") or {}
+    payload_frames = _coerce_payload_frames(payload)
+
+    if payload_frames:
+        frames = await _load_payload_frames(payload_frames)
+        frame_numbers = [int(entry["frame_id"]) for entry in payload_frames]
+        frame_map = {
+            fid: frame for fid, frame in zip(frame_numbers, frames, strict=True)
+        }
+        frame_store = InMemoryFrameStore(frame_map)
+
+        flow_frames: list[ndarray] = []
+        for fid in frame_numbers:
+            flow = await asyncio.to_thread(frame_store.get_flow, fid)
+            flow_frames.append(flow)
+
+        if not frames:
+            raise ScoreVisionChallengeError("No frames were successfully loaded from payload")
+
+        height, width = frames[0].shape[:2]
+        total_frames = len(frame_numbers)
+        meta = {
+            "version": 1,
+            "width": width or 0,
+            "height": height or 0,
+            "fps": int(
+                challenge.get("fps")
+                or payload.get("fps")
+                or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
+            ),
+            "task_id": challenge.get("task_id"),
+            "challenge_type": challenge.get("challenge_type"),
+            "n_frames_total": total_frames,
+            "batch_size": batch_size,
+            "n_keypoints": 32,  # TODO: update based on challenge type
+            "min_frames_required": total_frames,
+            "frames_source": "payload",
+        }
+        if "seed" in challenge:
+            meta["seed"] = challenge["seed"]
+
+        payload_out_frames: list[TVFrame] = []
+        for fid, frame in zip(frame_numbers, frames, strict=True):
+            b64 = image_to_b64string(frame)
+            if not b64:
+                raise ScoreVisionChallengeError("Failed to encode frame image data")
+            payload_out_frames.append(TVFrame(frame_id=fid, data=b64))
+
+        payload_out = TVPredictInput(
+            url=None,
+            frames=payload_out_frames,
+            meta=meta,
+        )
+
+        return (
+            payload_out,
+            frame_numbers,
+            frames,
+            flow_frames,
+            frame_store,
+        )
+
     video_url = (
         challenge.get("video_url")
         or challenge.get("asset_url")
@@ -181,7 +309,7 @@ async def prepare_challenge_payload(
     if "seed" in challenge:
         meta["seed"] = challenge["seed"]
 
-    payload = TVPredictInput(url=video_url, meta=meta)
+    payload = TVPredictInput(url=video_url, frames=None, meta=meta)
 
     return (
         payload,
@@ -406,13 +534,15 @@ async def get_next_challenge_v3(
                 challenge["task_id"] = challenge.pop("id")
 
             payload = challenge.get("payload") or {}
-            if not (
+            has_video_url = (
                 challenge.get("video_url")
                 or challenge.get("asset_url")
                 or payload.get("clip_url")
                 or payload.get("video_url")
-            ):
-                raise ScoreVisionChallengeError("Challenge missing video url.")
+            )
+            has_payload_frames = bool(_coerce_payload_frames(payload))
+            if not (has_video_url or has_payload_frames):
+                raise ScoreVisionChallengeError("Challenge missing video url or payload frames.")
 
             ct = _coerce_challenge_type(challenge)
             challenge["challenge_type"] = ct.value

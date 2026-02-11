@@ -99,9 +99,12 @@ async def _build_pgt_with_retries(
                         video_cache=video_cache,
                     )
 
-                    if len(frames) < required_n_frames:
+                    min_frames_required = int(
+                        payload.meta.get("min_frames_required") or required_n_frames
+                    )
+                    if len(frames) < min_frames_required:
                         logger.warning(
-                            f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
+                            f"[PGT] Not enough frames ({len(frames)}/{min_frames_required}) "
                             f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries}"
                         )
                         RUNNER_PGT_RETRY_TOTAL.labels(
@@ -135,7 +138,7 @@ async def _build_pgt_with_retries(
                     if not _enough_bboxes_per_frame(
                         pseudo_gt_annotations,
                         min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                        min_frames_required=MIN_FRAMES_REQUIRED,
+                        min_frames_required=min_frames_required,
                     ):
                         logger.warning(
                             f"[PGT] Too few bboxes per frame. bbox retry "
@@ -152,7 +155,7 @@ async def _build_pgt_with_retries(
                     if _enough_bboxes_per_frame(
                         filtered,
                         min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                        min_frames_required=required_n_frames,
+                        min_frames_required=min_frames_required,
                     ):
                         RUNNER_PGT_FRAMES.set(len(filtered))
                         logger.info(
