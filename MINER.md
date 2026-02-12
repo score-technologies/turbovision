@@ -30,7 +30,7 @@ Train a model that can process the video frames or features used by the subnet. 
 - Metrics you will monitor to judge live performance.
 
 ## 4. Customize the Chute Template
-Edit the files inside `scorevision/chute_template/` to load and serve your model:
+Edit the files inside `scorevision/miner/open_source/chute_template/` to load and serve your model:
 - `setup.py` – install dependencies and fetch artifacts.
 - `load.py` – initialize model weights and supporting assets.
 - `predict.py` – handle inference requests from the validator runner.
