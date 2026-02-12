@@ -31,7 +31,13 @@ Confirm `CHUTES_API_KEY` is a developer key.
 
 For chute structure and local/live testing flow, use `example_miner/README.md`.
 
-## 4. Push, Deploy, Commit
+## 4. Customize the Chute Template
+Edit the files inside `scorevision/miner/open_source/chute_template/` to load and serve your model:
+- `setup.py` – install dependencies and fetch artifacts.
+- `load.py` – initialize model weights and supporting assets.
+- `predict.py` – handle inference requests from the validator runner.
+
+## 5. Push, Deploy, Commit
 Deploy with the current CLI command:
 
 ```bash
@@ -45,7 +51,7 @@ Useful flags:
 
 If `--element-id` is omitted (and commit is enabled), `sv push` reads the active manifest and prompts you to choose an element.
 
-## 5. Validate Deployment Health
+## 6. Validate Deployment Health
 Use Chutes dashboard and instance logs:
 
 ```bash
@@ -59,7 +65,7 @@ You can also inspect available metric pillars from the CLI:
 sv elements list
 ```
 
-## 6. Iterate Safely
+## 7. Iterate Safely
 - Track scoring behavior and redeploy frequently.
 - Use `--no-commit` for dry-runs before publishing new commitments.
 - Keep model artifacts and revisions reproducible.

@@ -17,12 +17,12 @@ Other files — e.g., model weights, utility scripts, or dependencies — are **
 
 Below is a high-level diagram showing the interaction between Huggingface, Chutes and Turbovision:
 
-![](../images/miner.png)
+![](../../../../images/miner.png)
 
 ## Local Testing
 After editing the `config.yml` and `miner.py` and saving it into your Huggingface Repo, you will want to test it works locally. 
 
-1. Copy the file `scorevision/chute_tmeplate/turbovision_chute.py.j2` as a python file called `my_chute.py` and fill in the missing variables:
+1. Copy the file `scorevision/miner/open_source/chute_template/turbovision_chute.py.j2` as a python file called `my_chute.py` and fill in the missing variables:
 ```python
 HF_REPO_NAME = "{{ huggingface_repository_name }}"
 HF_REPO_REVISION = "{{ huggingface_repository_revision }}"
