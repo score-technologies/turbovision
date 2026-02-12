@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 from aiobotocore.session import get_session
 from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
 
 from scorevision.utils.windows import get_window_start_block
 from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
@@ -53,6 +54,13 @@ def _loads(b):
 
 def _dumps(o) -> bytes:
     return dumps(o, separators=(",", ":")).encode()
+
+
+def _is_missing_key_error(err: Exception) -> bool:
+    if isinstance(err, ClientError):
+        code = (err.response or {}).get("Error", {}).get("Code")
+        return str(code) in {"404", "NoSuchKey", "NotFound"}
+    return False
 
 
 settings = get_settings()
@@ -130,7 +138,9 @@ async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
         try:
             head = await c.head_object(Bucket=settings.R2_BUCKET, Key=key)
             lm = head["LastModified"].isoformat()
-        except c.exceptions.NoSuchKey:
+        except Exception as e:
+            if not _is_missing_key_error(e):
+                raise
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
                 stage="cache_head_missing"
             ).inc()
@@ -817,8 +827,9 @@ async def ensure_index_exists() -> None:
         try:
             await c.head_object(Bucket=s.R2_BUCKET, Key=index_key)
             return
-        except c.exceptions.NoSuchKey:
-            pass
+        except Exception as e:
+            if not _is_missing_key_error(e):
+                raise
         await c.put_object(
             Bucket=s.R2_BUCKET,
             Key=index_key,
@@ -836,8 +847,9 @@ async def ensure_winners_index_exists(prefix: str | None = None) -> str:
         try:
             await c.head_object(Bucket=s.R2_BUCKET, Key=index_key)
             return index_key
-        except c.exceptions.NoSuchKey:
-            pass
+        except Exception as e:
+            if not _is_missing_key_error(e):
+                raise
         await c.put_object(
             Bucket=s.R2_BUCKET,
             Key=index_key,
