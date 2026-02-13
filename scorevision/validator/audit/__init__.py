@@ -1,4 +1,4 @@
-from scorevision.validator.audit.spotcheck import (
+from scorevision.validator.audit.open_source.spotcheck import (
     spotcheck_loop,
     run_single_spotcheck,
     run_spotcheck,
@@ -19,4 +19,3 @@ __all__ = [
     "scores_match",
     "calculate_next_spotcheck_delay",
 ]
-

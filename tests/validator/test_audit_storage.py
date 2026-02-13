@@ -2,7 +2,7 @@ from json import loads
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import pytest
-from scorevision.validator.audit.storage import (
+from scorevision.validator.audit.open_source.storage import (
     commit_audit_index_on_start,
     emit_spotcheck_result_shard,
 )
@@ -79,7 +79,7 @@ async def test_emit_spotcheck_result_shard_skips_without_audit_r2():
         CENTRAL_R2_CONCURRENCY=8,
         AUDIT_R2_RESULTS_PREFIX="audit_spotcheck",
     )
-    with patch("scorevision.validator.audit.storage.get_settings", return_value=settings):
+    with patch("scorevision.validator.audit.open_source.storage.get_settings", return_value=settings):
         key = await emit_spotcheck_result_shard(
             record=_record(),
             result=_result(),
@@ -109,11 +109,11 @@ async def test_emit_spotcheck_result_shard_uploads_payload():
         CENTRAL_R2_CONCURRENCY=8,
         AUDIT_R2_RESULTS_PREFIX="audit_spotcheck",
     )
-    with patch("scorevision.validator.audit.storage.get_settings", return_value=settings), \
-         patch("scorevision.validator.audit.storage.ensure_audit_index_exists", new=AsyncMock(return_value=True)), \
-         patch("scorevision.validator.audit.storage._audit_index_add_if_new", new=AsyncMock()), \
-         patch("scorevision.validator.audit.storage._sign_batch", new=AsyncMock(return_value=("5Audit", ["0xsig"]))), \
-         patch("scorevision.validator.audit.storage._get_audit_s3_client", return_value=_ClientContext(client)):
+    with patch("scorevision.validator.audit.open_source.storage.get_settings", return_value=settings), \
+         patch("scorevision.validator.audit.open_source.storage.ensure_audit_index_exists", new=AsyncMock(return_value=True)), \
+         patch("scorevision.validator.audit.open_source.storage._audit_index_add_if_new", new=AsyncMock()), \
+         patch("scorevision.validator.audit.open_source.storage._sign_batch", new=AsyncMock(return_value=("5Audit", ["0xsig"]))), \
+         patch("scorevision.validator.audit.open_source.storage._get_audit_s3_client", return_value=_ClientContext(client)):
         key = await emit_spotcheck_result_shard(
             record=_record(),
             result=_result(),
@@ -139,7 +139,7 @@ async def test_emit_spotcheck_result_shard_uploads_payload():
 @pytest.mark.asyncio
 async def test_commit_audit_index_on_start_skip_env(monkeypatch):
     monkeypatch.setenv("AUDIT_COMMIT_VALIDATOR_ON_START", "0")
-    with patch("scorevision.validator.audit.storage._commit_audit_index", new=AsyncMock()) as commit_mock:
+    with patch("scorevision.validator.audit.open_source.storage._commit_audit_index", new=AsyncMock()) as commit_mock:
         await commit_audit_index_on_start()
     commit_mock.assert_not_called()
 
@@ -150,8 +150,8 @@ async def test_commit_audit_index_on_start_commits(monkeypatch):
         AUDIT_R2_BUCKET_PUBLIC_URL="https://pub-audit.r2.dev",
     )
     monkeypatch.setenv("AUDIT_COMMIT_VALIDATOR_ON_START", "1")
-    with patch("scorevision.validator.audit.storage.get_settings", return_value=settings), \
-         patch("scorevision.validator.audit.storage._commit_audit_index", new=AsyncMock(return_value=True)) as commit_mock:
+    with patch("scorevision.validator.audit.open_source.storage.get_settings", return_value=settings), \
+         patch("scorevision.validator.audit.open_source.storage._commit_audit_index", new=AsyncMock(return_value=True)) as commit_mock:
         await commit_audit_index_on_start()
     assert commit_mock.await_count == 1
     assert (

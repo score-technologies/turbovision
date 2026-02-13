@@ -39,7 +39,7 @@ class WeightsResult:
 
 
 @dataclass
-class MinerMeta:
+class OpenSourceMinerMeta:
     hotkey: str
     chute_id: str | None = None
     slug: str | None = None
@@ -50,4 +50,27 @@ class MinerMeta:
             "chute_id": self.chute_id,
             "slug": self.slug,
         }
+
+
+@dataclass
+class PrivateEvaluationResult:
+    challenge_id: str
+    miner_hotkey: str
+    miner_uid: int
+    score: float
+    prediction_count: int
+    ground_truth_count: int
+    processing_time: float
+    timestamp: str
+    block: int
+
+
+@dataclass
+class PrivateTrackMinerMeta:
+    hotkey: str
+    uid: int
+    image_repo: str | None = None
+    image_tag: str | None = None
+    ip: str | None = None
+    port: int | None = None
 

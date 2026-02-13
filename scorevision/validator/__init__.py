@@ -1,6 +1,6 @@
 from scorevision.validator.models import (
     ChallengeRecord,
-    MinerMeta,
+    OpenSourceMinerMeta,
     SpotcheckResult,
     WeightsResult,
 )
@@ -46,7 +46,7 @@ from scorevision.validator.audit import (
 
 __all__ = [
     "ChallengeRecord",
-    "MinerMeta",
+    "OpenSourceMinerMeta",
     "SpotcheckResult",
     "WeightsResult",
     "build_winner_meta",

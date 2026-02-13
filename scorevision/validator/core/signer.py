@@ -13,7 +13,6 @@ from scorevision.utils.settings import get_settings
 logger = logging.getLogger(__name__)
 
 NETUID = int(os.getenv("SCOREVISION_NETUID", "44"))
-MECHID = 1
 
 shutdown_event = asyncio.Event()
 
@@ -197,8 +196,7 @@ async def run_signer() -> None:
         try:
             payload = await req.json()
             netuid = int(payload.get("netuid", NETUID))
-            default_mechid = getattr(settings, "SCOREVISION_MECHID", MECHID)
-            mechid = int(payload.get("mechid", default_mechid))
+            mechid = int(payload.get("mechid", settings.SCOREVISION_MECHID))
             uids = payload.get("uids") or []
             wgts = payload.get("weights") or []
             wfi = bool(payload.get("wait_for_inclusion", False))
