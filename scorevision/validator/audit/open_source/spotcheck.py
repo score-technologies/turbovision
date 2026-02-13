@@ -29,7 +29,7 @@ from scorevision.utils.r2_public import (
 from scorevision.utils.settings import get_settings
 from scorevision.utils.miner_registry import get_miners_from_registry
 from scorevision.validator.models import ChallengeRecord, SpotcheckResult
-from scorevision.validator.audit.storage import (
+from scorevision.validator.audit.open_source.storage import (
     commit_audit_index_on_start,
     ensure_audit_index_exists,
     emit_spotcheck_result_shard,

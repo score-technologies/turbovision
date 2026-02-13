@@ -12,7 +12,7 @@ from scorevision.validator.scoring import (
     stake_of,
     are_similar_by_challenges,
 )
-from scorevision.validator.models import WeightsResult, MinerMeta
+from scorevision.validator.models import WeightsResult, OpenSourceMinerMeta
 
 
 def test_extract_miner_and_score_from_payload_valid():
@@ -51,7 +51,7 @@ def test_extract_miner_meta_from_payload_valid():
 
 def test_build_winner_meta_from_uid_found():
     uid_to_hk = {5: "hk123"}
-    miner_meta_by_hk = {"hk123": MinerMeta(hotkey="hk123", chute_id="c1", slug="s1")}
+    miner_meta_by_hk = {"hk123": OpenSourceMinerMeta(hotkey="hk123", chute_id="c1", slug="s1")}
     meta = build_winner_meta(5, uid_to_hk, miner_meta_by_hk)
     assert meta["hotkey"] == "hk123"
     assert meta["chute_id"] == "c1"
