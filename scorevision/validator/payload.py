@@ -1,4 +1,4 @@
-from scorevision.validator.models import MinerMeta
+from scorevision.validator.models import OpenSourceMinerMeta
 
 
 def extract_miner_and_score(
@@ -19,14 +19,14 @@ def extract_miner_and_score(
         return None, None
 
 
-def extract_miner_meta(payload: dict) -> MinerMeta | None:
+def extract_miner_meta(payload: dict) -> OpenSourceMinerMeta | None:
     try:
         telemetry = payload.get("telemetry") or {}
         miner_info = telemetry.get("miner") or {}
         miner_hk = (miner_info.get("hotkey") or "").strip()
         if not miner_hk:
             return None
-        return MinerMeta(
+        return OpenSourceMinerMeta(
             hotkey=miner_hk,
             chute_id=miner_info.get("chute_id"),
             slug=miner_info.get("slug"),
@@ -103,7 +103,7 @@ def extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | flo
 def build_winner_meta(
     winner_uid: int | None,
     uid_to_hk: dict[int, str],
-    miner_meta_by_hk: dict[str, MinerMeta],
+    miner_meta_by_hk: dict[str, OpenSourceMinerMeta],
 ) -> dict[str, str | None] | None:
     if winner_uid is None:
         return None
