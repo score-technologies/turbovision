@@ -15,9 +15,10 @@ import torch
 from aiohttp import ClientSession
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
-from cv2 import CAP_PROP_FRAME_COUNT, VideoCapture
+from base64 import b64decode
+from cv2 import CAP_PROP_FRAME_COUNT, VideoCapture, imdecode, IMREAD_COLOR
 from huggingface_hub import snapshot_download
-from numpy import ndarray
+from numpy import ndarray, frombuffer, uint8
 from pydantic import BaseModel
 from yaml import safe_load
 
@@ -33,8 +34,15 @@ MAX_LOADED_MODEL_SIZE_GB = 5.0
 
 
 ##=========DATA CLASSES================
+class TVFrame(BaseModel):
+    frame_id: int
+    url: str | None = None
+    data: str | None = None
+
+
 class TVPredictInput(BaseModel):
-    url: str
+    url: str | None = None
+    frames: list[TVFrame] | None = None
     meta: dict[str, Any] = {}
 
 
@@ -334,44 +342,93 @@ async def predict(self, data: TVPredictInput) -> dict:
         batch_size = metadata.get("batch_size", 64)
         n_keypoints = metadata.get("n_keypoints", 32)
 
-        url = f"https://proxy.chutes.ai/misc/proxy?url={quote(data.url, safe='')}"
-        async with ClientSession() as session:
-            async with session.get(url) as response:
-                response.raise_for_status()
-                content = await response.read()
-                print("✅ Challenge video downloaded. Saving video to temporary file.")
+        frame_results = []
 
-                with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
-                    f.write(content)
-                    cap = VideoCapture(f.name)
-                    if not cap.isOpened():
-                        raise ValueError(f"Problem accessing downloaded video {f.name}")
+        if data.frames:
+            frame_entries = [(f.frame_id, f.url, f.data) for f in data.frames]
+            async with ClientSession() as session:
+                loaded_frames: list[tuple[int, ndarray]] = []
+                for frame_id, frame_url, frame_data in frame_entries:
+                    if frame_data:
+                        try:
+                            content = b64decode(frame_data)
+                        except Exception as e:
+                            raise ValueError(f"Failed to decode frame {frame_id}: {e}")
+                    elif frame_url:
+                        url = f"https://proxy.chutes.ai/misc/proxy?url={quote(frame_url, safe='')}"
+                        async with session.get(url) as response:
+                            response.raise_for_status()
+                            content = await response.read()
+                    else:
+                        raise ValueError(f"Frame {frame_id} missing url or data")
 
-                    n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
-                    print(
-                        f"Processing video with {n_frames} frames in batches of {batch_size}"
-                    )
+                    arr = frombuffer(content, dtype=uint8)
+                    img = imdecode(arr, IMREAD_COLOR)
+                    if img is None:
+                        raise ValueError(f"Failed to decode frame {frame_id}")
+                    loaded_frames.append((frame_id, img))
 
-                    frame_results = []
-                    for batch_number, images in enumerate(
-                        get_video_frames_in_batches(video=cap, batch_size=batch_size)
-                    ):
-                        frame_number = batch_size * batch_number
-                        print(f"Predicting Batch: {batch_number + 1}")
-                        batch_frame_results = self.miner.predict_batch(
-                            batch_images=images,
-                            offset=frame_number,
-                            n_keypoints=n_keypoints,
+            for i in range(0, len(loaded_frames), batch_size):
+                batch = loaded_frames[i : i + batch_size]
+                batch_images = [img for _, img in batch]
+                batch_frame_ids = [fid for fid, _ in batch]
+                print(f"Predicting Batch: {i // batch_size + 1}")
+                batch_frame_results = self.miner.predict_batch(
+                    batch_images=batch_images,
+                    offset=0,
+                    n_keypoints=n_keypoints,
+                )
+                for frame_id, frame_result in zip(
+                    batch_frame_ids, batch_frame_results, strict=True
+                ):
+                    fr = frame_result.model_dump()
+                    fr["frame_id"] = frame_id
+                    frame_results.append(fr)
+        else:
+            if not data.url:
+                raise ValueError("Missing both video url and frames payload")
+
+            url = f"https://proxy.chutes.ai/misc/proxy?url={quote(data.url, safe='')}"
+            async with ClientSession() as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    content = await response.read()
+                    print("✅ Challenge video downloaded. Saving video to temporary file.")
+
+                    with NamedTemporaryFile(prefix="sv_video_", suffix=".mp4") as f:
+                        f.write(content)
+                        cap = VideoCapture(f.name)
+                        if not cap.isOpened():
+                            raise ValueError(
+                                f"Problem accessing downloaded video {f.name}"
+                            )
+
+                        n_frames = int(cap.get(CAP_PROP_FRAME_COUNT))
+                        print(
+                            f"Processing video with {n_frames} frames in batches of {batch_size}"
                         )
-                        frame_results.extend(
-                            [
-                                frame_result.model_dump()
-                                for frame_result in batch_frame_results
-                            ]
-                        )
 
-                    cap.release()
-                    print("✅ Frame Predictions Completed")
+                        for batch_number, images in enumerate(
+                            get_video_frames_in_batches(
+                                video=cap, batch_size=batch_size
+                            )
+                        ):
+                            frame_number = batch_size * batch_number
+                            print(f"Predicting Batch: {batch_number + 1}")
+                            batch_frame_results = self.miner.predict_batch(
+                                batch_images=images,
+                                offset=frame_number,
+                                n_keypoints=n_keypoints,
+                            )
+                            frame_results.extend(
+                                [
+                                    frame_result.model_dump()
+                                    for frame_result in batch_frame_results
+                                ]
+                            )
+
+                        cap.release()
+                        print("✅ Frame Predictions Completed")
 
         result = TVPredictOutput(success=True, predictions={"frames": frame_results})
 

@@ -20,7 +20,7 @@ from scorevision.utils.challenges import (
 from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.evaluate import post_vlm_ranking
-from scorevision.utils.manifest import Element, Manifest, get_current_manifest, load_manifest_from_public_index
+from scorevision.utils.manifest import Element, Manifest, load_manifest_from_public_index
 from scorevision.utils.miner_registry import Miner, get_miners_from_registry
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.prometheus import (
@@ -81,9 +81,12 @@ async def _build_pgt_with_retries(
                         video_cache=video_cache,
                     )
 
-                    if len(frames) < required_n_frames:
+                    min_frames_required = int(
+                        payload.meta.get("min_frames_required") or required_n_frames
+                    )
+                    if len(frames) < min_frames_required:
                         logger.warning(
-                            f"[PGT] Not enough frames ({len(frames)}/{required_n_frames}) "
+                            f"[PGT] Not enough frames ({len(frames)}/{min_frames_required}) "
                             f"bbox attempt {bbox_attempt + 1}/{max_bbox_retries}"
                         )
                         RUNNER_PGT_RETRY_TOTAL.labels(reason="insufficient_frames").inc()
@@ -113,7 +116,7 @@ async def _build_pgt_with_retries(
                     if not _enough_bboxes_per_frame(
                         pseudo_gt_annotations,
                         min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                        min_frames_required=MIN_FRAMES_REQUIRED,
+                        min_frames_required=min_frames_required,
                     ):
                         logger.warning(
                             f"[PGT] Too few bboxes per frame. bbox retry "
@@ -128,7 +131,7 @@ async def _build_pgt_with_retries(
                     if _enough_bboxes_per_frame(
                         filtered,
                         min_bboxes_per_frame=MIN_BBOXES_PER_FRAME,
-                        min_frames_required=required_n_frames,
+                        min_frames_required=min_frames_required,
                     ):
                         RUNNER_PGT_FRAMES.set(len(filtered))
                         logger.info(
@@ -297,7 +300,9 @@ async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Ma
     if getattr(settings, "URL_MANIFEST", None):
         cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
         return await load_manifest_from_public_index(settings.URL_MANIFEST, block_number=block, cache_dir=cache_dir)
-    return get_current_manifest(block_number=block)
+    raise RuntimeError(
+        "URL_MANIFEST is required when --manifest-path is not provided."
+    )
 
 
 def _cancel_removed_element_tasks(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int]) -> None:

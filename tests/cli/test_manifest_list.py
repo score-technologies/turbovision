@@ -17,7 +17,7 @@ def test_manifest_list_empty_index(tmp_path: Path, fake_settings):
 
 
 def test_manifest_list_with_windows(tmp_path: Path, fake_settings, fake_index_bytes):
-    """List manifests with some windows in index."""
+    """List manifests with entries in the index."""
     runner = CliRunner()
     with patch("scorevision.cli.manifest.get_settings", return_value=fake_settings):
         with patch(
@@ -27,5 +27,5 @@ def test_manifest_list_with_windows(tmp_path: Path, fake_settings, fake_index_by
             result = runner.invoke(manifest_cli, ["list"])
             assert result.exit_code == 0
             assert "Published manifests" in result.output
-            assert "Window: 2025-10-24" in result.output
-            assert "Window: 2025-10-25" in result.output
+            assert "123456" in result.output
+            assert "123460" in result.output

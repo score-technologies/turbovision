@@ -44,7 +44,15 @@ class Settings(BaseModel):
     HUGGINGFACE_API_KEY: SecretStr
     HUGGINGFACE_CONCURRENCY: int
 
-    # Central and Audit Validator 
+    # Generic Cloudflare R2 (manifest publishing)
+    R2_BUCKET: str
+    R2_ACCOUNT_ID: SecretStr
+    R2_WRITE_ACCESS_KEY_ID: SecretStr
+    R2_WRITE_SECRET_ACCESS_KEY: SecretStr
+    R2_CONCURRENCY: int
+    R2_BUCKET_PUBLIC_URL: str
+
+    # Central and Audit Validator
     URL_MANIFEST: str
     SCOREVISION_BUCKET: str
     SCOREVISION_PUBLIC_RESULTS_URL: str
@@ -195,6 +203,13 @@ def get_settings() -> Settings:
         HUGGINGFACE_USERNAME=getenv("HUGGINGFACE_USERNAME", ""),
         HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
         HUGGINGFACE_CONCURRENCY=int(getenv("HUGGINGFACE_CONCURRENCY", 2)),
+        # Generic Cloudflare R2 (manifest publishing)
+        R2_BUCKET=getenv("R2_BUCKET", ""),
+        R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
+        R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
+        R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
+        R2_CONCURRENCY=int(getenv("R2_CONCURRENCY", 8)),
+        R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
         # Cloudflare R2
         SCOREVISION_BUCKET=getenv("SCOREVISION_BUCKET", ""),
         SCOREVISION_PUBLIC_RESULTS_URL=getenv("SCOREVISION_PUBLIC_RESULTS_URL", ""),
@@ -202,7 +217,7 @@ def get_settings() -> Settings:
         CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("CENTRAL_R2_WRITE_ACCESS_KEY_ID", ""),
         CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("CENTRAL_R2_WRITE_SECRET_ACCESS_KEY", ""),
         CENTRAL_R2_CONCURRENCY=int(getenv("CENTRAL_R2_CONCURRENCY", 8)),
-        URL_MANIFEST=getenv("URL_MANIFEST", ""),
+        URL_MANIFEST=getenv("URL_MANIFEST", "https://pub-90235dd27ef947dbace5293e3e56b910.r2.dev/manifest/index.json"),
         AUDIT_R2_BUCKET=getenv("AUDIT_R2_BUCKET", ""),
         AUDIT_R2_ACCOUNT_ID=getenv("AUDIT_R2_ACCOUNT_ID", ""),
         AUDIT_R2_WRITE_ACCESS_KEY_ID=getenv("AUDIT_R2_WRITE_ACCESS_KEY_ID", ""),

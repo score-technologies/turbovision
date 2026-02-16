@@ -26,8 +26,8 @@ def test_current_latest_manifest(tmp_path: Path, fake_settings, fake_index_bytes
             result = runner.invoke(manifest_cli, ["current"])
             assert result.exit_code == 0
             assert "Latest manifest" in result.output
-            assert "Window=2025-10-25" in result.output
-            assert "sha256:def456" in result.output
+            assert "123460" in result.output
+            assert "def456" in result.output
 
 
 def test_current_active_for_block(tmp_path: Path, fake_settings, fake_index_bytes):
@@ -38,13 +38,17 @@ def test_current_active_for_block(tmp_path: Path, fake_settings, fake_index_byte
             "scorevision.cli.manifest.r2_get_object",
             return_value=(fake_index_bytes, None),
         ):
-            # Block within first window
+            # Block before first key's block number
             result = runner.invoke(manifest_cli, ["current", "--block", "123455"])
             assert result.exit_code == 0
-            assert "Active manifest for block 123455" in result.output
-            assert "Window=2025-10-24" in result.output
+            assert "No active manifest found" in result.output
 
-            # Block beyond all expiry
+            # Block equal to first key block
+            result = runner.invoke(manifest_cli, ["current", "--block", "123456"])
+            assert result.exit_code == 0
+            assert "Active manifest for block 123456" in result.output
+
+            # Block beyond all
             result = runner.invoke(manifest_cli, ["current", "--block", "1235000"])
             assert result.exit_code == 0
-            assert "No active manifest found" in result.output
+            assert "Active manifest for block 1235000" in result.output

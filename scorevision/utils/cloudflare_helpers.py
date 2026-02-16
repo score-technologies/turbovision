@@ -23,6 +23,7 @@ from scorevision.utils.r2 import (
     create_s3_client,
     ensure_index_exists as _ensure_index_exists,
     is_configured,
+    is_not_found_error,
 )
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
@@ -128,7 +129,9 @@ async def _cache_shard(key: str, sem: asyncio.Semaphore) -> Path:
         try:
             head = await c.head_object(Bucket=settings.SCOREVISION_BUCKET, Key=key)
             lm = head["LastModified"].isoformat()
-        except c.exceptions.NoSuchKey:
+        except Exception as e:
+            if not is_not_found_error(e):
+                raise
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(
                 stage="cache_head_missing"
             ).inc()
@@ -698,7 +701,6 @@ async def dataset_sv_multi(
 
         if not p.exists():
             continue
-        valid_lines = 0
         with p.open("rb") as f:
             for raw in f:
                 try:
@@ -710,7 +712,6 @@ async def dataset_sv_multi(
                     sig = line.get("signature", "")
                     hk = line.get("hotkey", "")
                     if hk and sig and _verify_signature(hk, payload_str, sig):
-                        valid_lines += 1
                         VALIDATOR_DATASET_LINES_TOTAL.labels(
                             source="cross", result="valid"
                         ).inc()
@@ -773,8 +774,9 @@ async def ensure_winners_index_exists(prefix: str | None = None) -> str:
         try:
             await c.head_object(Bucket=s.SCOREVISION_BUCKET, Key=index_key)
             return index_key
-        except c.exceptions.NoSuchKey:
-            pass
+        except Exception as e:
+            if not is_not_found_error(e):
+                raise
         await c.put_object(
             Bucket=s.SCOREVISION_BUCKET,
             Key=index_key,

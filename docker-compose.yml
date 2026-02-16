@@ -17,6 +17,7 @@ services:
     environment:
       SCOREVISION_CACHE_DIR: /app/data/blocks
       SIGNER_URL: http://signer:8080
+      SCOREVISION_BLACKLIST_PATH: /app/blacklist
       SCOREVISION_METRICS_ADDR: 0.0.0.0
       SCOREVISION_METRICS_PORT: 8110
       USE_PROMETHEUS: "true"
@@ -25,6 +26,7 @@ services:
     volumes:
       - validator-cache:/app/data/blocks
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ./blacklist:/app/blacklist:ro
     ports:
       - "8011:8000"
       - "8110:8110"
@@ -45,12 +47,14 @@ services:
     environment:
       SCOREVISION_METRICS_PORT: "8000"
       SCOREVISION_METRICS_ADDR: 0.0.0.0
+      SCOREVISION_BLACKLIST_PATH: /app/blacklist
       SIGNER_URL: http://signer:8080
       MALLOC_ARENA_MAX: "2"
       PYTHONMALLOC: "malloc"
     volumes:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ./blacklist:/app/blacklist:ro
     ports:
       - "8012:8000"
     healthcheck:

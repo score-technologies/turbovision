@@ -7,8 +7,15 @@ from pydantic import BaseModel
 
 
 # ======NOTE: These must match what is in the chute ==========
+class TVFrame(BaseModel):
+    frame_id: int
+    url: str | None = None
+    data: str | None = None
+
+
 class TVPredictInput(BaseModel):
-    url: str
+    url: str | None = None
+    frames: list[TVFrame] | None = None
     meta: dict[str, Any] = {}
 
 

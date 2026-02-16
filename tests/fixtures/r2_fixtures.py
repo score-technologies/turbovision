@@ -22,7 +22,7 @@ def r2_mock_store():
             return store[key], '"etag123"'
         return None, None
 
-    def mock_put(bucket, key, data, acl="public-read", if_match=None):
+    def mock_put(bucket, key, data=None, acl="public-read", if_match=None, **kwargs):
         # Use canonical JSON for integrity
         if isinstance(data, (dict, list)):
             store[key] = dumps(data, separators=(",", ":"), sort_keys=True).encode(

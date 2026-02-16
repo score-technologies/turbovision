@@ -1,4 +1,5 @@
 from os import environ
+import asyncio
 from json import loads
 from pathlib import Path
 from base64 import b64decode
@@ -11,7 +12,13 @@ from nacl.signing import SigningKey
 from scorevision.utils.manifest import Manifest
 from scorevision.utils.settings import get_settings
 from scorevision.utils.manifest import yaml
-from scorevision.utils.r2 import r2_get_object, r2_put_json, r2_delete_object
+from scorevision.utils.r2 import (
+    r2_get_object,
+    r2_put_json,
+    r2_put_bytes,
+    r2_delete_object,
+)
+from scorevision.utils.bittensor_helpers import get_subtensor
 
 # ============================================================
 # TEMPLATES
@@ -153,15 +160,18 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
 @click.option(
     "--signing-key-path",
     type=click.Path(path_type=Path),
-    help="Ed25519 key as raw hex (optional, fallback to TEE_KEY_HEX)",
+    help="Ed25519 key as raw hex (optional, fallback to TEE_KEY_HEX). If omitted, manifest is uploaded unsigned.",
 )
-def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None):
+def publish_manifest_cdn_cmd(
+    manifest_path: Path,
+    signing_key_path: Path | None,
+):
     """
     Sign, upload (with retries), integrity-check, and update index.json.
     """
 
     settings = get_settings()
-    bucket = settings.SCOREVISION_BUCKET
+    bucket = settings.R2_BUCKET
 
     # ----------------------------------------------------------
     # Load signing key (from file or TEE_KEY_HEX env)
@@ -172,66 +182,90 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
     elif environ.get("TEE_KEY_HEX"):
         key_hex = environ["TEE_KEY_HEX"]
 
-    if not key_hex:
-        raise click.UsageError(
-            "Either --signing-key-path or TEE_KEY_HEX env must be provided."
-        )
-
-    signing_key = SigningKey(bytes.fromhex(key_hex))
-
     # ----------------------------------------------------------
-    # Load + sign manifest
+    # Load + (optional) sign manifest
     # ----------------------------------------------------------
     manifest = Manifest.load_yaml(manifest_path)
-    manifest.sign(signing_key)
+    if key_hex:
+        signing_key = SigningKey(bytes.fromhex(key_hex))
+        manifest.sign(signing_key)
+        manifest.save_yaml(manifest_path)
     manifest_hash = manifest.hash
-    manifest.save_yaml(manifest_path)
 
     # ----------------------------------------------------------
-    # Upload to R2/CDN
+    # Resolve current on-chain block for key naming
     # ----------------------------------------------------------
-    manifest_key = f"manifests/{manifest_hash}.json"
+    async def _current_block() -> int:
+        st = await get_subtensor()
+        return int(await st.get_current_block())
+
+    def _run(coro):
+        try:
+            return asyncio.run(coro)
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro)
+
+    try:
+        block = _run(_current_block())
+    except Exception as e:
+        raise click.ClickException(f"Failed to fetch current block: {e}")
+
+    # ----------------------------------------------------------
+    # Upload to R2 (YAML, compatible with load_manifest_from_public_index)
+    # ----------------------------------------------------------
+    manifest_key = f"manifest/{block}-{manifest_hash}.yaml"
     existing, _ = r2_get_object(bucket, manifest_key)
+
+    local_bytes = manifest_path.read_bytes()
+    local_sha = sha256(local_bytes).hexdigest()
 
     if existing is None:
         click.echo(f"⬆ Uploading manifest {manifest_hash}...")
-        r2_put_json(bucket, manifest_key, loads(manifest.to_canonical_json()))
+        r2_put_bytes(
+            bucket,
+            manifest_key,
+            local_bytes,
+            content_type="application/x-yaml",
+        )
     else:
-        click.echo("ℹ Manifest already exists in CDN (skipping upload).")
+        click.echo("ℹ Manifest already exists in R2 (skipping upload).")
 
     remote_bytes, _ = r2_get_object(bucket, manifest_key)
     if remote_bytes is None:
         raise click.ClickException("Remote manifest missing after upload.")
-    remote_hash = sha256(remote_bytes).hexdigest()
-    if remote_hash != manifest_hash:
+    remote_sha = sha256(remote_bytes).hexdigest()
+    if remote_sha != local_sha:
         raise click.ClickException(
-            f"Integrity mismatch: local={manifest_hash} remote={remote_hash}"
+            f"Integrity mismatch: local={local_sha} remote={remote_sha}"
         )
     click.echo("🧩 Integrity OK.")
 
-    # Update index.json
-    index_key = "index.json"
-    index_bytes, etag = r2_get_object(bucket, index_key)
-    index = loads(index_bytes.decode("utf-8")) if index_bytes else {"windows": {}}
-    win = manifest.window_id
-    index.setdefault("windows", {}).setdefault(win, {})
-    index["windows"][win].update(
-        {
-            "current": manifest_hash,
-            "version": manifest.version,
-            "expiry_block": manifest.expiry_block,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
+    # ----------------------------------------------------------
+    # Update manifest/index.json (list of keys)
+    # ----------------------------------------------------------
+    index_key = "manifest/index.json"
+    index_bytes, _ = r2_get_object(bucket, index_key)
+    index = loads(index_bytes.decode("utf-8")) if index_bytes else []
+    if not isinstance(index, list):
+        raise click.ClickException("manifest/index.json must be a JSON array.")
+
+    if manifest_key not in index:
+        index.append(manifest_key)
+    index = sorted(set(index))
 
     try:
-        click.echo("📝 Updating index.json...")
-        r2_put_json(bucket, index_key, index, if_match=etag)
+        click.echo("📝 Updating manifest/index.json...")
+        r2_put_json(bucket, index_key, index)
     except Exception as e:
         if existing is None:
             click.echo("⚠ Rolling back manifest upload...")
             r2_delete_object(bucket, manifest_key)
-        raise click.ClickException(f"Failed to update index.json: {e}")
+        raise click.ClickException(f"Failed to update manifest/index.json: {e}")
 
     click.echo("✅ Publish complete.")
 
@@ -240,8 +274,8 @@ def publish_manifest_cdn_cmd(manifest_path: Path, signing_key_path: Path | None)
 def list_manifests_cmd():
     """List published manifests from CDN/R2 index."""
     settings = get_settings()
-    bucket = settings.SCOREVISION_BUCKET
-    index_key = "index.json"
+    bucket = settings.R2_BUCKET
+    index_key = "manifest/index.json"
 
     index_bytes, _ = r2_get_object(bucket, index_key)
     if not index_bytes:
@@ -249,18 +283,25 @@ def list_manifests_cmd():
         return
 
     index = loads(index_bytes.decode("utf-8"))
-    windows = index.get("windows", {})
-    if not windows:
+    if not isinstance(index, list) or not index:
         click.echo("ℹ No manifests found in index.")
         return
 
     click.echo("📄 Published manifests:")
-    for win, info in sorted(windows.items()):
-        click.echo(f"  - Window: {win}")
-        click.echo(f"    Current Hash: {info.get('current')}")
-        click.echo(f"    Version: {info.get('version')}")
-        click.echo(f"    Expiry Block: {info.get('expiry_block')}")
-        click.echo(f"    Updated At: {info.get('updated_at')}")
+    def block_from_key(k: str) -> int | None:
+        try:
+            name = Path(k).name
+            return int(name.split("-", 1)[0])
+        except Exception:
+            return None
+
+    keyed = [(block_from_key(k), k) for k in index]
+    keyed.sort(key=lambda x: (x[0] is None, x[0] or 0, x[1]))
+    for blk, key in keyed:
+        if blk is not None:
+            click.echo(f"  - Block: {blk}  Key: {key}")
+        else:
+            click.echo(f"  - Key: {key}")
 
 
 @manifest_cli.command("current")
@@ -268,29 +309,39 @@ def list_manifests_cmd():
 def current_manifest_cmd(block: int):
     """Show active manifest for a given block."""
     settings = get_settings()
-    bucket = settings.SCOREVISION_BUCKET
-    index_bytes, _ = r2_get_object(bucket, "index.json")
+    bucket = settings.R2_BUCKET
+    index_bytes, _ = r2_get_object(bucket, "manifest/index.json")
     if not index_bytes:
         click.echo("❌ No manifests published.")
         return
 
     index = loads(index_bytes.decode("utf-8"))
-    windows = index.get("windows", {})
-
-    if not windows:
-        click.echo("❌ No windows in index.")
+    if not isinstance(index, list) or not index:
+        click.echo("❌ No manifests in index.")
         return
 
+    def block_from_key(k: str) -> int | None:
+        try:
+            name = Path(k).name
+            return int(name.split("-", 1)[0])
+        except Exception:
+            return None
+
+    pairs = [(block_from_key(k), k) for k in index]
+    pairs = [(b, k) for (b, k) in pairs if b is not None]
+    if not pairs:
+        click.echo("❌ No block-prefixed manifests in index.")
+        return
+
+    pairs.sort(key=lambda x: x[0])
     if block is None:
-        # Show latest
-        latest_win = max(windows.keys())
-        info = windows[latest_win]
-        click.echo(f"ℹ Latest manifest: Window={latest_win}, Hash={info['current']}")
-    else:
-        for win, info in windows.items():
-            if info.get("expiry_block") is not None and info["expiry_block"] >= block:
-                click.echo(
-                    f"ℹ Active manifest for block {block}: Window={win}, Hash={info['current']}"
-                )
-                return
+        blk, key = pairs[-1]
+        click.echo(f"ℹ Latest manifest: Block={blk}, Key={key}")
+        return
+
+    eligible = [p for p in pairs if p[0] <= block]
+    if not eligible:
         click.echo(f"ℹ No active manifest found for block {block}")
+        return
+    blk, key = eligible[-1]
+    click.echo(f"ℹ Active manifest for block {block}: Block={blk}, Key={key}")

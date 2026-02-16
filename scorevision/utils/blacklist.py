@@ -5,14 +5,16 @@ from pathlib import Path
 
 logger = getLogger(__name__)
 
-_DEFAULT_BLACKLIST_PATH = Path(__file__).resolve().parents[2] / "blacklist"
+_DEFAULT_BLACKLIST_PATH = Path("/app/blacklist")
 
 
 def load_blacklisted_hotkeys(path: Path | str | None = None) -> set[str]:
-    blacklist_path = Path(path) if path is not None else _DEFAULT_BLACKLIST_PATH
+    blacklist_path = _DEFAULT_BLACKLIST_PATH
+
     try:
         content = blacklist_path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        logger.warning("[Blacklist] File not found: %s", blacklist_path)
         return set()
     except Exception as e:
         logger.warning("[Blacklist] Failed to read %s: %s", blacklist_path, e)
@@ -25,6 +27,4 @@ def load_blacklisted_hotkeys(path: Path | str | None = None) -> set[str]:
             continue
         hotkeys.add(s)
 
-    if hotkeys:
-        logger.debug("[Blacklist] Loaded %d hotkeys from %s", len(hotkeys), blacklist_path)
     return hotkeys

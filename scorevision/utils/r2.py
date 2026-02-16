@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from json import dumps, loads
 import asyncio
 from aiobotocore.session import get_session
+import boto3
 from botocore.config import Config as BotoConfig
 
 from scorevision.utils.r2_public import (
@@ -128,69 +129,66 @@ async def add_index_key_if_new(
         return True
 
 
-def _current_central_cfg() -> R2Config:
-    return central_r2_config(get_settings())
-
-
-async def _r2_get_object_async(bucket: str, key: str) -> tuple[bytes | None, str | None]:
-    cfg = _current_central_cfg()
-    async with create_s3_client(cfg, error_message="Central R2 credentials not set") as c:
-        try:
-            obj = await c.get_object(Bucket=bucket, Key=key)
-        except Exception as e:
-            if is_not_found_error(e):
-                return None, None
-            raise
-        body = await obj["Body"].read()
-        etag = obj.get("ETag")
-        return body, etag
+def _r2_sync_client():
+    settings = get_settings()
+    if not (
+        settings.R2_ACCOUNT_ID.get_secret_value()
+        and settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+        and settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+    ):
+        raise RuntimeError("R2 credentials not set")
+    session = boto3.session.Session()
+    return session.client(
+        "s3",
+        endpoint_url=(
+            f"https://{settings.R2_ACCOUNT_ID.get_secret_value()}.r2.cloudflarestorage.com"
+        ),
+        aws_access_key_id=settings.R2_WRITE_ACCESS_KEY_ID.get_secret_value(),
+        aws_secret_access_key=settings.R2_WRITE_SECRET_ACCESS_KEY.get_secret_value(),
+        config=BotoConfig(max_pool_connections=settings.R2_CONCURRENCY),
+    )
 
 
 def r2_get_object(bucket: str, key: str) -> tuple[bytes | None, str | None]:
-    return asyncio.run(_r2_get_object_async(bucket, key))
+    client = _r2_sync_client()
+    try:
+        resp = client.get_object(Bucket=bucket, Key=key)
+    except client.exceptions.NoSuchKey:
+        return None, None
+    body = resp["Body"].read()
+    etag = resp.get("ETag")
+    return body, etag
 
 
-async def _r2_put_json_async(
+def r2_put_bytes(
     bucket: str,
     key: str,
-    payload: dict | list,
-    if_match: str | None = None,
+    body: bytes,
+    *,
+    content_type: str = "application/octet-stream",
 ) -> None:
-    cfg = _current_central_cfg()
-    async with create_s3_client(cfg, error_message="Central R2 credentials not set") as c:
-        if if_match:
-            head = await c.head_object(Bucket=bucket, Key=key)
-            current_etag = str(head.get("ETag") or "").strip('"')
-            expected_etag = str(if_match).strip('"')
-            if current_etag != expected_etag:
-                raise RuntimeError(
-                    f"ETag mismatch for {bucket}/{key}: expected={expected_etag} got={current_etag}"
-                )
-        await c.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=dumps(payload, separators=(",", ":")),
-            ContentType="application/json",
-        )
+    client = _r2_sync_client()
+    client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=body,
+        ContentType=content_type,
+    )
 
 
-def r2_put_json(
-    bucket: str,
-    key: str,
-    payload: dict | list,
-    if_match: str | None = None,
-) -> None:
-    asyncio.run(_r2_put_json_async(bucket, key, payload, if_match=if_match))
-
-
-async def _r2_delete_object_async(bucket: str, key: str) -> None:
-    cfg = _current_central_cfg()
-    async with create_s3_client(cfg, error_message="Central R2 credentials not set") as c:
-        await c.delete_object(Bucket=bucket, Key=key)
+def r2_put_json(bucket: str, key: str, obj) -> None:
+    body = dumps(obj, separators=(",", ":")).encode()
+    r2_put_bytes(
+        bucket,
+        key,
+        body,
+        content_type="application/json",
+    )
 
 
 def r2_delete_object(bucket: str, key: str) -> None:
-    asyncio.run(_r2_delete_object_async(bucket, key))
+    client = _r2_sync_client()
+    client.delete_object(Bucket=bucket, Key=key)
 
 
 __all__ = [
@@ -217,5 +215,6 @@ __all__ = [
     "normalize_index_url",
     "r2_delete_object",
     "r2_get_object",
+    "r2_put_bytes",
     "r2_put_json",
 ]

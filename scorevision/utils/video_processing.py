@@ -247,6 +247,88 @@ class FrameStore:
         self.close()
 
 
+class InMemoryFrameStore:
+    """Frame/flow accessor backed by in-memory frames (no video file)."""
+
+    def __init__(self, frames: dict[int, ndarray]) -> None:
+        self._frames = dict(frames)
+        self._flow_cache: OrderedDict[int, ndarray] = OrderedDict()
+        self._order = sorted(self._frames.keys())
+        self._index = {fid: idx for idx, fid in enumerate(self._order)}
+        self._lock = RLock()
+
+    def _compute_flow(self, prev_frame: ndarray, current_frame: ndarray) -> ndarray:
+        prev_gray = cvtColor(prev_frame, COLOR_BGR2GRAY)
+        gray = cvtColor(current_frame, COLOR_BGR2GRAY)
+        flow = calcOpticalFlowFarneback(
+            prev_gray,
+            gray,
+            None,
+            pyr_scale=0.5,
+            levels=3,
+            winsize=15,
+            iterations=3,
+            poly_n=5,
+            poly_sigma=1.2,
+            flags=0,
+        )
+        mag, ang = cartToPolar(flow[..., 0], flow[..., 1])
+        hsv = zeros_like(prev_frame)
+        hsv[..., 0] = ang * 180 / pi / 2
+        hsv[..., 1] = 255
+        hsv[..., 2] = normalize(mag, None, 0, 255, NORM_MINMAX)
+        return cvtColor(hsv, COLOR_HSV2BGR)
+
+    def _zero_flow(self, frame: ndarray) -> ndarray:
+        return zeros_like(frame)
+
+    def get_frame(self, frame_number: int) -> ndarray:
+        with self._lock:
+            frame = self._frames.get(frame_number)
+            if frame is None:
+                raise IOError(f"Failed to read frame {frame_number}")
+            return frame
+
+    def get_flow(self, frame_number: int) -> ndarray:
+        with self._lock:
+            cached = self._flow_cache.get(frame_number)
+            if cached is not None:
+                self._flow_cache.move_to_end(frame_number)
+                return cached
+
+            idx = self._index.get(frame_number)
+            if idx is None or idx <= 0:
+                frame = self.get_frame(frame_number)
+                flow = self._zero_flow(frame)
+            else:
+                prev_id = self._order[idx - 1]
+                prev_frame = self.get_frame(prev_id)
+                current_frame = self.get_frame(frame_number)
+                flow = self._compute_flow(prev_frame, current_frame)
+
+            self._flow_cache[frame_number] = flow
+            self._flow_cache.move_to_end(frame_number)
+            return flow
+
+    def get_frame_count(self) -> int:
+        with self._lock:
+            return len(self._frames)
+
+    def close(self) -> None:
+        with self._lock:
+            self._frames.clear()
+            self._flow_cache.clear()
+
+    def clear(self) -> None:
+        self.close()
+
+    def unlink(self) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+
 async def download_video_cached(
     url: str,
     _frame_numbers: list[int],  # retained for backward compatibility
