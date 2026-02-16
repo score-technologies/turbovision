@@ -14,7 +14,7 @@ from scorevision.utils.challenges import (
     prepare_challenge_payload,
     build_svchallenge_from_parts,
 )
-from scorevision.utils.data_models import SVChallenge
+from scorevision.utils.data_models import SVChallenge, SVRunOutput, SVEvaluation
 from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.evaluate import post_vlm_ranking
@@ -23,7 +23,10 @@ from scorevision.utils.async_clients import close_http_clients
 from scorevision.vlm_pipeline.vlm_annotator import (
     generate_annotations_for_select_frames,
 )
-from scorevision.utils.miner_registry import get_miners_from_registry, Miner
+from scorevision.utils.miner_registry import (
+    get_miners_and_skipped_from_registry,
+    Miner,
+)
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
@@ -236,8 +239,8 @@ async def runner(slug: str | None = None) -> None:
     frame_store: FrameStore | None = None
     run_result = "success"
     try:
-        miners = await get_miners_from_registry(NETUID)
-        if not miners:
+        miners, skipped_miners = await get_miners_and_skipped_from_registry(NETUID)
+        if not miners and not skipped_miners:
             logger.warning("No eligible miners found on-chain.")
             RUNNER_ACTIVE_MINERS.set(0)
             run_result = "no_miners"
@@ -248,32 +251,36 @@ async def runner(slug: str | None = None) -> None:
         )
 
         miner_list = list(miners.values())
+        skipped_list = list(skipped_miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
 
-        try:
-            pgt_build_start = loop.time()
-            challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
-                chal_api=chal_api,
-                required_n_frames=REQUIRED_PGT_FRAMES,
-                max_bbox_retries=MAX_PGT_BBOX_RETRIES,
-                max_quality_retries=MAX_PGT_QUALITY_RETRIES,
-                video_cache=video_cache,
-            )
-            last_pgt_duration = loop.time() - pgt_build_start
-            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
-        except Exception as e:
-            logger.warning(
-                f"PGT quality gating failed after retries, skipping challenge: {e}"
-            )
-            last_pgt_duration = loop.time() - pgt_build_start
-            RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
-            run_result = "pgt_failed"
-            return
+        if miner_list:
+            try:
+                pgt_build_start = loop.time()
+                challenge, payload, pseudo_gt_annotations = await _build_pgt_with_retries(
+                    chal_api=chal_api,
+                    required_n_frames=REQUIRED_PGT_FRAMES,
+                    max_bbox_retries=MAX_PGT_BBOX_RETRIES,
+                    max_quality_retries=MAX_PGT_QUALITY_RETRIES,
+                    video_cache=video_cache,
+                )
+                last_pgt_duration = loop.time() - pgt_build_start
+                RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
+            except Exception as e:
+                logger.warning(
+                    f"PGT quality gating failed after retries, skipping challenge: {e}"
+                )
+                last_pgt_duration = loop.time() - pgt_build_start
+                RUNNER_LAST_PGT_DURATION_SECONDS.set(last_pgt_duration)
+                run_result = "pgt_failed"
+                return
+
+        scored_runs: list[tuple[Miner, TVPredictInput, Any, str]] = []
+        miner_total_durations: dict[str, float] = {}
 
         for m in miner_list:
             miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
             miner_output: TVPredictInput | None = None
-            emission_started = False
             miner_total_start = loop.time()
             try:
                 loop = asyncio.get_running_loop()
@@ -305,29 +312,7 @@ async def runner(slug: str | None = None) -> None:
                     RUNNER_EVALUATION_SCORE.labels(miner=miner_label).set(
                         getattr(evaluation, "score", 0.0)
                     )
-
-                emission_started = True
-                emit_start = loop.time()
-                try:
-                    await emit_shard(
-                        slug=m.slug,
-                        challenge=challenge,
-                        miner_run=miner_output,
-                        evaluation=evaluation,
-                        miner_hotkey_ss58=m.hotkey,
-                    )
-                except Exception:
-                    dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.exception(
-                        "[emit] FAILED for %s in %.1fms", miner_label, dt_emit
-                    )
-                    raise
-                else:
-                    dt_emit = (loop.time() - emit_start) * 1000.0
-                    logger.info("[emit] success for %s in %.1fms", miner_label, dt_emit)
-                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
-                finally:
-                    emission_started = False
+                scored_runs.append((m, miner_output, evaluation, miner_label))
             except Exception as e:
                 logger.warning(
                     "Miner uid=%s slug=%s failed: %s",
@@ -337,14 +322,97 @@ async def runner(slug: str | None = None) -> None:
                 )
                 if miner_output is None:
                     RUNNER_MINER_CALLS_TOTAL.labels(outcome="exception").inc()
-                if emission_started:
-                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
             finally:
                 duration = loop.time() - miner_total_start
+                miner_total_durations[miner_label] = duration
                 RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
                     duration
                 )
+
+        if scored_runs:
+            logger.info(
+                "[emit] starting emit phase for %d/%d scored miners",
+                len(scored_runs),
+                len(miner_list),
+            )
+
+        for m, miner_output, evaluation, miner_label in scored_runs:
+            emit_start = loop.time()
+            try:
+                await emit_shard(
+                    slug=m.slug,
+                    challenge=challenge,
+                    miner_run=miner_output,
+                    evaluation=evaluation,
+                    miner_hotkey_ss58=m.hotkey,
+                )
+            except Exception:
+                dt_emit = (loop.time() - emit_start) * 1000.0
+                logger.exception("[emit] FAILED for %s in %.1fms", miner_label, dt_emit)
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
+            else:
+                dt_emit = (loop.time() - emit_start) * 1000.0
+                logger.info("[emit] success for %s in %.1fms", miner_label, dt_emit)
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
+            finally:
+                total_duration = miner_total_durations.get(miner_label, 0.0) + (
+                    loop.time() - emit_start
+                )
+                RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(
+                    total_duration
+                )
+
+        if skipped_list:
+            logger.info(
+                "[emit] emitting zero-score shards for %d skipped miners",
+                len(skipped_list),
+            )
+        for skipped in skipped_list:
+            m = skipped.miner
+            reason = skipped.reason
+            miner_label = getattr(m, "slug", None) or str(getattr(m, "uid", "?"))
+            zero_run = SVRunOutput(
+                success=False,
+                latency_ms=0.0,
+                predictions=None,
+                error=f"skipped_in_registry:{reason}",
+                model=m.model,
+            )
+            zero_eval = SVEvaluation(
+                acc_breakdown={},
+                acc=0.0,
+                latency_ms=0.0,
+                score=0.0,
+                details={"registry_skipped": True, "reason": reason, "uid": m.uid},
+            )
+            RUNNER_EVALUATION_SCORE.labels(miner=miner_label).set(0.0)
+            emit_start = loop.time()
+            try:
+                await emit_shard(
+                    slug=m.slug or f"uid-{m.uid}",
+                    challenge=challenge,
+                    miner_run=zero_run,
+                    evaluation=zero_eval,
+                    miner_hotkey_ss58=m.hotkey,
+                )
+            except Exception:
+                dt_emit = (loop.time() - emit_start) * 1000.0
+                logger.exception(
+                    "[emit] FAILED zero-score shard for %s in %.1fms",
+                    miner_label,
+                    dt_emit,
+                )
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
+            else:
+                dt_emit = (loop.time() - emit_start) * 1000.0
+                logger.info(
+                    "[emit] zero-score shard success for %s (%s) in %.1fms",
+                    miner_label,
+                    reason,
+                    dt_emit,
+                )
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
     except Exception as e:
         logger.error(e)
         run_result = "error"

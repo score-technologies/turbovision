@@ -5,7 +5,6 @@ import logging
 import signal
 import traceback
 import gc
-from json import loads
 from collections import defaultdict, deque
 from functools import lru_cache
 from aiohttp import ClientSession, ClientTimeout
@@ -52,6 +51,8 @@ from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger("scorevision.validator")
 
+blacklist: list[str] = []
+
 # Global shutdown event for graceful shutdown
 shutdown_event = asyncio.Event()
 
@@ -67,6 +68,11 @@ def _validator_hotkey_ss58() -> str:
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
     return wallet.hotkey.ss58_address
+
+
+@lru_cache(maxsize=1)
+def _hotkey_blacklist() -> set[str]:
+    return {str(hk).strip() for hk in blacklist if str(hk).strip()}
 
 
 async def _validate_main(tail: int, alpha: float, m_min: int, tempo: int):
@@ -308,6 +314,11 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     MECHID = settings.SCOREVISION_MECHID
     meta = await st.metagraph(NETUID, mechid=MECHID)
     hk_to_uid = {hk: i for i, hk in enumerate(meta.hotkeys)}
+    blacklisted_hotkeys = _hotkey_blacklist()
+    if blacklisted_hotkeys:
+        logger.info(
+            "Loaded miner hotkey blacklist with %d entries", len(blacklisted_hotkeys)
+        )
 
     stake_tensor = getattr(meta, "S", None)
     if stake_tensor is None:
@@ -343,6 +354,9 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
                 miner = payload.get("miner") or {}
                 hk = (miner.get("hotkey") or "").strip()
                 if not hk or hk not in hk_to_uid:
+                    continue
+                if hk in blacklisted_hotkeys:
+                    VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="blacklist").inc()
                     continue
                 score = float(((payload.get("evaluation") or {}).get("score")) or 0.0)
             except Exception:
@@ -380,6 +394,9 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
             miner = payload.get("miner") or {}
             miner_hk = (miner.get("hotkey") or "").strip()
             if not miner_hk or miner_hk not in hk_to_uid:
+                continue
+            if miner_hk in blacklisted_hotkeys:
+                VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="blacklist").inc()
                 continue
             miner_uid = hk_to_uid[miner_hk]
             validator_hk = (line.get("hotkey") or "").strip()
@@ -482,6 +499,22 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
             validator_uid,
         )
         S_by_m.pop(validator_uid, None)
+
+    if blacklisted_hotkeys:
+        uid_to_hk = {uid: hk for hk, uid in hk_to_uid.items()}
+        blacklisted_uids = [
+            uid
+            for uid in list(S_by_m.keys())
+            if uid_to_hk.get(uid, "") in blacklisted_hotkeys
+        ]
+        for uid in blacklisted_uids:
+            S_by_m.pop(uid, None)
+            VALIDATOR_MINERS_SKIPPED_TOTAL.labels(reason="blacklist").inc()
+        if blacklisted_uids:
+            logger.info(
+                "Excluded %d blacklisted miners from eligible list",
+                len(blacklisted_uids),
+            )
 
     if not S_by_m:
         logger.warning("No miners passed robust filtering.")

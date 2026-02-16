@@ -24,6 +24,12 @@ class Miner:
     block: int
 
 
+@dataclass
+class SkippedMiner:
+    miner: Miner
+    reason: str
+
+
 # ------------------------- HF gating & revision checks ------------------------- #
 _HF_MODEL_GATING_CACHE: Dict[str, Tuple[bool, float]] = {}
 _HF_GATING_TTL = 300  # seconds
@@ -115,7 +121,9 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
 
 
 # ---------------------------- Miner registry main ----------------------------- #
-async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
+async def get_miners_and_skipped_from_registry(
+    netuid: int,
+) -> tuple[Dict[int, Miner], Dict[int, SkippedMiner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision and Chutes slug,
     and returns at most one miner per model (earliest block wins).
@@ -133,7 +141,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             e,
         )
         reset_subtensor()
-        return {}
+        return {}, {}
 
     logger.info(
         "[Registry] extracting candidates (netuid=%s mechid=%s)", netuid, mechid
@@ -147,7 +155,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
             "[Registry] error while fetching metagraph/commitments: %s", e
         )
         reset_subtensor()
-        return {}
+        return {}, {}
 
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
@@ -184,28 +192,33 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
     logger.info("[Registry] %d on-chain candidates", len(candidates))
     if not candidates:
         logger.warning("[Registry] No on-chain candidates")
-        return {}
+        return {}, {}
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
+    skipped: Dict[int, SkippedMiner] = {}
     for uid, m in candidates.items():
         gated = _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
             logger.info(
                 "[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug
             )
+            skipped[uid] = SkippedMiner(miner=m, reason="hf_gated_or_inaccessible")
             continue
 
         ok = True
+        skip_reason = "chutes_validation_failed"
         if m.chute_id:
             info = await fetch_chute_info(m.chute_id)
             if not info:
                 logger.info("[Registry] uid=%s slug=%s: Chutes unfetched", uid, m.slug)
                 ok = False
+                skip_reason = "chutes_unfetched"
             else:
                 slug_chutes = (info.get("slug") or "").strip()
                 if slug_chutes and slug_chutes != (m.slug or ""):
                     ok = False
+                    skip_reason = "chutes_slug_mismatch"
                     logger.info(
                         "[Registry] uid=%s: slug mismatch (chutes=%s, commit=%s)",
                         uid,
@@ -215,6 +228,7 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
                 ch_rev = info.get("revision")
                 if ch_rev and m.revision and str(ch_rev) != str(m.revision):
                     ok = False
+                    skip_reason = "chutes_revision_mismatch"
                     logger.info(
                         "[Registry] uid=%s: revision mismatch (chutes=%s, commit=%s)",
                         uid,
@@ -223,11 +237,13 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
                     )
         if ok:
             filtered[uid] = m
+        else:
+            skipped[uid] = SkippedMiner(miner=m, reason=skip_reason)
 
     logger.info("[Registry] %d miners after filtering", len(filtered))
     if not filtered:
         logger.warning("[Registry] Filter produced no eligible miners")
-        return {}
+        return {}, skipped
 
     # 3) De-duplicate by model: keep earliest block per model (stable)
     best_by_model: Dict[str, Tuple[int, int]] = {}
@@ -245,5 +261,13 @@ async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
 
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
+    for uid, m in filtered.items():
+        if uid not in keep_uids:
+            skipped[uid] = SkippedMiner(miner=m, reason="deduplicated_by_model")
     logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
+    return kept, skipped
+
+
+async def get_miners_from_registry(netuid: int) -> Dict[int, Miner]:
+    kept, _ = await get_miners_and_skipped_from_registry(netuid)
     return kept
