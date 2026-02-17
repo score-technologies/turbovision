@@ -51,7 +51,10 @@ from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger("scorevision.validator")
 
-blacklist: list[str] = []
+blacklist: list[str] = [
+    "5HdX72NK2sdUes3UMvUy37EJHNKkuGuu6w2ratvWLvki4ab8",
+    "5Cu7H6fezpD8qwew9CQCVke3heC4VzUFnBcyj6T7499UvRwn",
+]
 
 # Global shutdown event for graceful shutdown
 shutdown_event = asyncio.Event()
