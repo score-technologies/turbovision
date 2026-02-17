@@ -62,6 +62,7 @@ def test_manifest_full_flow(
             manifest_cli,
             [
                 "publish",
+                "--block", "100000",
                 str(manifest_path),
             ],
         )

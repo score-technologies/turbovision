@@ -25,6 +25,7 @@ from scorevision.validator.audit.storage import (
     commit_audit_index_on_start,
     ensure_audit_index_exists,
     emit_spotcheck_result_shard,
+    require_audit_r2_configured,
 )
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import filter_low_quality_pseudo_gt_annotations
 from scorevision.vlm_pipeline.vlm_annotator_sam3 import generate_annotations_for_select_frames_sam3
@@ -431,6 +432,7 @@ async def run_spotcheck(
 
 
 async def _initialize_audit_storage(commit_on_start: bool) -> None:
+    require_audit_r2_configured()
     if not commit_on_start:
         return
     await ensure_audit_index_exists()
@@ -487,7 +489,6 @@ async def spotcheck_loop(
     )
     await _initialize_audit_storage(commit_on_start)
 
-    manifest = await load_manifest_for_spotcheck()
     first_run = True
 
     while True:
@@ -505,6 +506,7 @@ async def spotcheck_loop(
                 logger.warning("[SpotcheckLoop] No challenge found for spotcheck")
                 continue
 
+            manifest = await load_manifest_for_spotcheck(challenge_record.block)
             result = await run_spotcheck(challenge_record, threshold=threshold, manifest=manifest)
             logger.info(
                 "[SpotcheckLoop] Spotcheck complete: passed=%s match=%.2f%% central=%.4f audit=%.4f",

@@ -121,7 +121,7 @@ async def test_emit_spotcheck_result_shard_uploads_payload():
     assert isinstance(body, list) and len(body) == 1
     line = body[0]
     assert line["hotkey"] == "5Audit"
-    assert "signature" not in line
+    assert line["signature"] == "0xsig"
     assert line["payload"]["result"]["passed"] is True
     assert line["payload"]["scored_frame_numbers"] == [10, 20, 30]
 

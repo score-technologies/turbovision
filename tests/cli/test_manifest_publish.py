@@ -1,5 +1,4 @@
 from os import environ
-from types import SimpleNamespace
 
 from click.testing import CliRunner
 from unittest.mock import patch
@@ -26,6 +25,7 @@ def test_publish_updates_index(
             manifest_cli,
             [
                 "publish",
+                "--block", "100000",
                 str(signed_manifest_file),
             ],
         )

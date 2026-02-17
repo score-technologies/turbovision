@@ -158,6 +158,7 @@ async def prepare_challenge_payload(
     batch_size: int = 64,
     *,
     video_cache: dict[str, Any] | None = None,
+    frame_numbers: list[int] | None = None,
 ) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore | InMemoryFrameStore]:
     settings = get_settings()
 
@@ -182,21 +183,31 @@ async def prepare_challenge_payload(
         frame_store = InMemoryFrameStore(frame_map)
 
         total_frames = len(all_frame_numbers)
-        n_select_cfg = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
-        n_select = min(n_select_cfg, total_frames)
-        if n_select <= 0:
-            raise ScoreVisionChallengeError(
-                "SCOREVISION_VLM_SELECT_N_FRAMES must be positive"
-            )
 
-        start_idx = randint(0, total_frames - n_select)
-        selected_frame_numbers = all_frame_numbers[start_idx : start_idx + n_select]
-        logger.info(
-            "Selected Payload Frames (dynamic): %s (total=%s, n_select=%s)",
-            selected_frame_numbers,
-            total_frames,
-            n_select,
-        )
+        if frame_numbers is not None:
+            selected_frame_numbers = [fn for fn in frame_numbers if fn in frame_map]
+            n_select = len(selected_frame_numbers)
+            logger.info(
+                "Selected Payload Frames (explicit): %s (total=%s)",
+                selected_frame_numbers,
+                total_frames,
+            )
+        else:
+            n_select_cfg = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
+            n_select = min(n_select_cfg, total_frames)
+            if n_select <= 0:
+                raise ScoreVisionChallengeError(
+                    "SCOREVISION_VLM_SELECT_N_FRAMES must be positive"
+                )
+
+            start_idx = randint(0, total_frames - n_select)
+            selected_frame_numbers = all_frame_numbers[start_idx : start_idx + n_select]
+            logger.info(
+                "Selected Payload Frames (dynamic): %s (total=%s, n_select=%s)",
+                selected_frame_numbers,
+                total_frames,
+                n_select,
+            )
 
         select_frames: list[ndarray] = []
         flow_frames: list[ndarray] = []
@@ -282,24 +293,31 @@ async def prepare_challenge_payload(
     if total_frames <= 1:
         raise ScoreVisionChallengeError("Could not determine video frame count")
 
-    min_frame = max(1, int(settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER))
-    max_frame_setting = int(settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER)
-
-    max_frame = min(max_frame_setting, total_frames)
-
-    n_select = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
-
-    if (max_frame - min_frame) < n_select:
-        raise ScoreVisionChallengeError(
-            f"Not enough frames to select {n_select} frames "
-            f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+    if frame_numbers is not None:
+        selected_frame_numbers = [fn for fn in frame_numbers if 0 <= fn < total_frames]
+        logger.info(
+            f"Selected Frames (explicit): {selected_frame_numbers} "
+            f"(total={total_frames})"
         )
-    start = randint(min_frame, max_frame - n_select)
-    selected_frame_numbers = list(range(start, start + n_select))
-    logger.info(
-        f"Selected Frames (dynamic): {selected_frame_numbers} "
-        f"(min={min_frame}, max={max_frame}, total={total_frames})"
-    )
+    else:
+        min_frame = max(1, int(settings.SCOREVISION_VIDEO_MIN_FRAME_NUMBER))
+        max_frame_setting = int(settings.SCOREVISION_VIDEO_MAX_FRAME_NUMBER)
+
+        max_frame = min(max_frame_setting, total_frames)
+
+        n_select = int(settings.SCOREVISION_VLM_SELECT_N_FRAMES)
+
+        if (max_frame - min_frame) < n_select:
+            raise ScoreVisionChallengeError(
+                f"Not enough frames to select {n_select} frames "
+                f"(min_frame={min_frame}, max_frame={max_frame}, total_frames={total_frames})"
+            )
+        start = randint(min_frame, max_frame - n_select)
+        selected_frame_numbers = list(range(start, start + n_select))
+        logger.info(
+            f"Selected Frames (dynamic): {selected_frame_numbers} "
+            f"(min={min_frame}, max={max_frame}, total={total_frames})"
+        )
 
     select_frames: list[ndarray] = []
     flow_frames: list[ndarray] = []

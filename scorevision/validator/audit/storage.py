@@ -40,6 +40,16 @@ def _audit_r2_enabled() -> bool:
     return is_configured(audit_r2_config(get_settings()), require_bucket=True)
 
 
+def require_audit_r2_configured() -> None:
+    if not _audit_r2_enabled():
+        raise RuntimeError(
+            "Audit R2 is not configured. "
+            "Set AUDIT_R2_BUCKET, AUDIT_R2_ACCOUNT_ID, "
+            "AUDIT_R2_WRITE_ACCESS_KEY_ID, and AUDIT_R2_WRITE_SECRET_ACCESS_KEY "
+            "to enable audit shard uploads."
+        )
+
+
 def _audit_results_prefix() -> str:
     s = get_settings()
     ns = (s.AUDIT_R2_RESULTS_PREFIX or "audit_spotcheck").strip().strip("/")
@@ -218,9 +228,10 @@ async def emit_spotcheck_result_shard(
     signed_line = dict(line)
     payload_str = dumps(payload, sort_keys=True, separators=(",", ":"))
     try:
-        hk, _ = await _sign_batch([payload_str])
-        if hk:
+        hk, sigs = await _sign_batch([payload_str])
+        if hk and sigs:
             signed_line["hotkey"] = hk
+            signed_line["signature"] = sigs[0]
         else:
             logger.warning("[audit-r2] Signing returned empty; uploading unsigned shard.")
     except Exception as e:

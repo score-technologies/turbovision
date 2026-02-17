@@ -162,9 +162,16 @@ def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
     type=click.Path(path_type=Path),
     help="Ed25519 key as raw hex (optional, fallback to TEE_KEY_HEX). If omitted, manifest is uploaded unsigned.",
 )
+@click.option(
+    "--block",
+    type=int,
+    default=None,
+    help="Block number for key naming. If omitted, fetched from subtensor.",
+)
 def publish_manifest_cdn_cmd(
     manifest_path: Path,
     signing_key_path: Path | None,
+    block: int | None,
 ):
     """
     Sign, upload (with retries), integrity-check, and update index.json.
@@ -195,25 +202,26 @@ def publish_manifest_cdn_cmd(
     # ----------------------------------------------------------
     # Resolve current on-chain block for key naming
     # ----------------------------------------------------------
-    async def _current_block() -> int:
-        st = await get_subtensor()
-        return int(await st.get_current_block())
+    if block is None:
+        async def _current_block() -> int:
+            st = await get_subtensor()
+            return int(await st.get_current_block())
 
-    def _run(coro):
-        try:
-            return asyncio.run(coro)
-        except RuntimeError:
+        def _run(coro):
             try:
-                loop = asyncio.get_event_loop()
+                return asyncio.run(coro)
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            return loop.run_until_complete(coro)
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                return loop.run_until_complete(coro)
 
-    try:
-        block = _run(_current_block())
-    except Exception as e:
-        raise click.ClickException(f"Failed to fetch current block: {e}")
+        try:
+            block = _run(_current_block())
+        except Exception as e:
+            raise click.ClickException(f"Failed to fetch current block: {e}")
 
     # ----------------------------------------------------------
     # Upload to R2 (YAML, compatible with load_manifest_from_public_index)
