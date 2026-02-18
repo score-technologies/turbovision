@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 from asyncio import TimeoutError, sleep, gather
 from aiohttp import ClientError
 
-from scorevision.chute_template.schemas import TVPredictInput, TVPredictOutput
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput, TVPredictOutput
 from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
