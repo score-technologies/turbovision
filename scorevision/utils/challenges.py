@@ -23,10 +23,15 @@ from scorevision.utils.video_processing import (
     InMemoryFrameStore,
 )
 from scorevision.utils.image_processing import image_to_b64string
-from scorevision.chute_template.schemas import TVFrame, TVPredictInput
+from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
+from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
+    parse_challenge_type,
+    ChallengeType,
+    CHALLENGE_ID_LOOKUP,
+)
 from scorevision.utils.manifest import Manifest
 
 logger = getLogger(__name__)

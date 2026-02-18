@@ -1,7 +1,7 @@
 from pytest import fixture
 from pathlib import Path
 
-from scorevision.chute_template.schemas import TVPredictInput
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.utils.data_models import SVChallenge
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
