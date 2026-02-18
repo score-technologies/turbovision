@@ -154,7 +154,7 @@ async def get_miners_from_registry(
     netuid: int,
     *,
     element_id: str | None = None,
-) -> Dict[int, Miner]:
+) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision and Chutes slug,
     and returns at most one miner per model (earliest block wins).
@@ -176,7 +176,7 @@ async def get_miners_from_registry(
             e,
         )
         reset_subtensor()
-        return {}
+        return {}, {}
 
     logger.info(
         "[Registry] extracting candidates (netuid=%s mechid=%s element_id=%s)",
@@ -191,7 +191,7 @@ async def get_miners_from_registry(
     except Exception as e:
         logger.warning("[Registry] error while fetching metagraph/commitments: %s", e)
         reset_subtensor()
-        return {}
+        return {}, {}
 
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
@@ -231,14 +231,16 @@ async def get_miners_from_registry(
     logger.info("[Registry] %d on-chain candidates", len(candidates))
     if not candidates:
         logger.warning("[Registry] No on-chain candidates")
-        return {}
+        return {}, {}
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
+    skipped: Dict[int, Miner] = {}
     for uid, m in candidates.items():
         gated = await _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
             logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
+            skipped[uid] = m
             continue
 
         ok = True
@@ -269,11 +271,13 @@ async def get_miners_from_registry(
 
         if ok:
             filtered[uid] = m
+        else:
+            skipped[uid] = m
 
     logger.info("[Registry] %d miners after filtering", len(filtered))
     if not filtered:
         logger.warning("[Registry] Filter produced no eligible miners")
-        return {}
+        return {}, skipped
 
     # 3) De-duplicate by model: keep earliest block per model (stable)
     best_by_model: Dict[str, Tuple[int, int]] = {}
@@ -287,6 +291,9 @@ async def get_miners_from_registry(
 
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
+    dedup_skipped = {uid: miner for uid, miner in filtered.items() if uid not in keep_uids}
+    skipped.update(dedup_skipped)
     logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
+    logger.info("[Registry] %d miners skipped", len(skipped))
 
-    return kept
+    return kept, skipped

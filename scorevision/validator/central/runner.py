@@ -27,7 +27,7 @@ from scorevision.utils.cloudflare_helpers import (
     emit_shard,
     ensure_index_exists,
 )
-from scorevision.utils.data_models import SVChallenge
+from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.manifest import Element, Manifest, load_manifest_from_public_index
 from scorevision.utils.miner_registry import Miner, get_miners_from_registry
@@ -494,8 +494,8 @@ async def runner(
 
         logger.info("[Runner] window_start_block=%s (window_id=%s tempo=%s)", window_start_block, window_id, tempo_blocks)
 
-        miners = await get_miners_from_registry(netuid, element_id=element_id)
-        if not miners:
+        miners, skipped_miners = await get_miners_from_registry(netuid, element_id=element_id)
+        if not miners and not skipped_miners:
             logger.warning("[Runner] No eligible miners found on-chain for element_id=%s.", element_id)
             RUNNER_ACTIVE_MINERS.set(0)
             run_result = "no_miners"
@@ -542,10 +542,11 @@ async def runner(
             pgt_duration = event_loop.time() - pgt_build_start
             RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
 
+        emissions_queue: list[dict[str, Any]] = []
+
         for miner in miner_list:
             miner_label = miner.slug or str(getattr(miner, "uid", "?"))
             miner_output = None
-            emission_started = False
             miner_start_time = event_loop.time()
 
             try:
@@ -573,61 +574,148 @@ async def runner(
                     RUNNER_EVALUATION_FAIL_TOTAL.labels(stage="ranking").inc()
                     raise
 
-                emission_started = True
-                emit_start = event_loop.time()
-
-                commitment_meta = {
-                    "element_id": getattr(miner, "element_id", None),
-                    "model": miner.model,
-                    "revision": miner.revision,
-                    "chute_slug": miner.slug,
-                    "chute_id": miner.chute_id,
-                    "commit_block": miner.block,
-                    "window_id": window_id,
-                }
-
-                try:
-                    await emit_shard(
-                        slug=miner.slug,
-                        challenge=challenge,
-                        miner_run=miner_output,
-                        evaluation=evaluation,
-                        miner_hotkey_ss58=miner.hotkey,
-                        window_id=window_id,
-                        window_start_block=window_start_block,
-                        trigger_block=block_number,
-                        element_id=str(element_id) if element_id is not None else None,
-                        manifest_hash=manifest_hash,
-                        salt_id=0,
-                        pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
-                        lane="public",
-                        model=miner.model,
-                        revision=miner.revision,
-                        chute_id=miner.chute_id,
-                        commitment_meta=commitment_meta,
-                    )
-                except Exception:
-                    emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
-                    logger.exception("[emit] FAILED for %s in %.1fms", miner_label, emit_duration_ms)
-                    raise
-                else:
-                    emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
-                    logger.info("[emit] success for %s in %.1fms", miner_label, emit_duration_ms)
-                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
-                finally:
-                    emission_started = False
+                emissions_queue.append(
+                    {
+                        "miner": miner,
+                        "miner_label": miner_label,
+                        "miner_output": miner_output,
+                        "evaluation": evaluation,
+                    }
+                )
 
             except Exception as e:
                 logger.warning("Miner uid=%s slug=%s failed: %s", getattr(miner, "uid", "?"), miner.slug, e)
                 if miner_output is None:
                     RUNNER_MINER_CALLS_TOTAL.labels(outcome="exception").inc()
-                if emission_started:
-                    RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
 
             finally:
                 miner_duration = event_loop.time() - miner_start_time
                 RUNNER_MINER_LAST_DURATION_SECONDS.labels(miner=miner_label).set(miner_duration)
+
+        for emission in emissions_queue:
+            miner = emission["miner"]
+            miner_label = emission["miner_label"]
+            miner_output = emission["miner_output"]
+            evaluation = emission["evaluation"]
+            emit_start = event_loop.time()
+
+            commitment_meta = {
+                "element_id": getattr(miner, "element_id", None),
+                "model": miner.model,
+                "revision": miner.revision,
+                "chute_slug": miner.slug,
+                "chute_id": miner.chute_id,
+                "commit_block": miner.block,
+                "window_id": window_id,
+            }
+
+            try:
+                await emit_shard(
+                    slug=miner.slug,
+                    challenge=challenge,
+                    miner_run=miner_output,
+                    evaluation=evaluation,
+                    miner_hotkey_ss58=miner.hotkey,
+                    window_id=window_id,
+                    window_start_block=window_start_block,
+                    trigger_block=block_number,
+                    element_id=str(element_id) if element_id is not None else None,
+                    manifest_hash=manifest_hash,
+                    salt_id=0,
+                    pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
+                    lane="public",
+                    model=miner.model,
+                    revision=miner.revision,
+                    chute_id=miner.chute_id,
+                    commitment_meta=commitment_meta,
+                )
+            except Exception:
+                emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+                logger.exception("[emit] FAILED for %s in %.1fms", miner_label, emit_duration_ms)
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
+                continue
+
+            emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+            logger.info("[emit] success for %s in %.1fms", miner_label, emit_duration_ms)
+            RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
+
+        if skipped_miners:
+            logger.info(
+                "[Runner] Emitting zero-score shards for %d registry-skipped miners (element=%s).",
+                len(skipped_miners),
+                element_id,
+            )
+
+        for miner in skipped_miners.values():
+            miner_label = miner.slug or str(getattr(miner, "uid", "?"))
+            emit_start = event_loop.time()
+            zero_output = SVRunOutput(
+                success=False,
+                latency_ms=0.0,
+                predictions=None,
+                error="Skipped by miner registry filters",
+                model=miner.model,
+                latency_p50_ms=0.0,
+                latency_p95_ms=0.0,
+                latency_p99_ms=0.0,
+                latency_max_ms=0.0,
+            )
+            zero_evaluation = SVEvaluation(
+                acc_breakdown={},
+                acc=0.0,
+                latency_ms=0.0,
+                score=0.0,
+                details={"registry_skipped": True},
+                latency_p95_ms=0.0,
+                latency_pass=False,
+                rtf=None,
+                scored_frame_numbers=[],
+            )
+            commitment_meta = {
+                "element_id": getattr(miner, "element_id", None),
+                "model": miner.model,
+                "revision": miner.revision,
+                "chute_slug": miner.slug,
+                "chute_id": miner.chute_id,
+                "commit_block": miner.block,
+                "window_id": window_id,
+            }
+
+            try:
+                await emit_shard(
+                    slug=miner.slug or f"skipped-{miner.uid}",
+                    challenge=challenge,
+                    miner_run=zero_output,
+                    evaluation=zero_evaluation,
+                    miner_hotkey_ss58=miner.hotkey,
+                    window_id=window_id,
+                    window_start_block=window_start_block,
+                    trigger_block=block_number,
+                    element_id=str(element_id) if element_id is not None else None,
+                    manifest_hash=manifest_hash,
+                    salt_id=0,
+                    pgt_recipe_hash=getattr(settings, "SCOREVISION_PGT_RECIPE_HASH", None),
+                    lane="public",
+                    model=miner.model,
+                    revision=miner.revision,
+                    chute_id=miner.chute_id,
+                    commitment_meta=commitment_meta,
+                )
+            except Exception:
+                emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+                logger.exception(
+                    "[emit] FAILED zero-score emission for %s in %.1fms",
+                    miner_label,
+                    emit_duration_ms,
+                )
+                RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
+                continue
+
+            emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
+            logger.info("[emit] success zero-score for %s in %.1fms", miner_label, emit_duration_ms)
+            RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
+            RUNNER_MINER_CALLS_TOTAL.labels(outcome="registry_skipped").inc()
 
     except Exception as e:
         logger.error(e)
