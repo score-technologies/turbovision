@@ -6,7 +6,12 @@ import traceback
 from json import dumps
 from pathlib import Path
 from typing import Any
-from scorevision.utils.challenges import build_svchallenge_from_parts, prepare_challenge_payload
+from scorevision.utils.bittensor_helpers import get_validator_indexes_from_chain
+from scorevision.utils.challenges import (
+    build_svchallenge_from_parts,
+    get_ground_truth_from_scorevision,
+    prepare_challenge_payload,
+)
 from scorevision.utils.cloudflare_helpers import _verify_signature
 from scorevision.utils.data_models import SVRunOutput
 from scorevision.utils.evaluate import post_vlm_ranking
@@ -31,6 +36,24 @@ from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import filter_low_quali
 from scorevision.vlm_pipeline.vlm_annotator_sam3 import generate_annotations_for_select_frames_sam3
 
 logger = logging.getLogger(__name__)
+
+
+async def resolve_public_results_url() -> str | None:
+    settings = get_settings()
+    fallback_url = (settings.SCOREVISION_PUBLIC_RESULTS_URL or "").strip()
+    try:
+        validator_indexes = await get_validator_indexes_from_chain(settings.SCOREVISION_NETUID)
+        if validator_indexes:
+            # Registry currently targets one central validator hotkey.
+            _, index_url = next(iter(validator_indexes.items()))
+            logger.info("Using on-chain central validator index URL for spotcheck: %s", index_url)
+            return index_url
+    except Exception as e:
+        logger.warning("Failed to resolve central validator URL from chain: %s", e)
+    if fallback_url:
+        logger.info("Falling back to SCOREVISION_PUBLIC_RESULTS_URL for spotcheck: %s", fallback_url)
+        return fallback_url
+    return None
 
 
 def parse_challenge_record_from_line(line: dict, key: str) -> ChallengeRecord | None:
@@ -93,11 +116,13 @@ def parse_challenge_record_from_line(line: dict, key: str) -> ChallengeRecord | 
 async def fetch_random_challenge_record(
     tail_blocks: int,
     element_id: str | None = None,
+    public_url: str | None = None,
 ) -> ChallengeRecord | None:
-    public_url = get_settings().SCOREVISION_PUBLIC_RESULTS_URL
+    if not public_url:
+        public_url = await resolve_public_results_url()
 
     if not public_url:
-        logger.error("SCOREVISION_PUBLIC_RESULTS_URL not set - cannot fetch challenges")
+        logger.error("No central validator public URL resolved - cannot fetch challenges")
         return None
 
     logger.info("Fetching random challenge from R2 (tail=%d blocks, element=%s)", tail_blocks, element_id)
@@ -191,10 +216,46 @@ async def load_manifest_for_spotcheck(block: int | None = None) -> Manifest | No
 
 
 async def regenerate_ground_truth_sam3(
+    challenge: Any,
+    manifest: Manifest,
+    element_id: str,
+) -> list | None:
+    element = manifest.get_element(id=element_id)
+    if element is None:
+        logger.warning("Element %s not found in manifest", element_id)
+        return None
+
+    pseudo_gt_annotations = await generate_annotations_for_select_frames_sam3(
+        video_name=challenge.challenge_id,
+        frames=challenge.frames,
+        flow_frames=challenge.dense_optical_flow_frames,
+        frame_numbers=challenge.frame_numbers,
+        element=element,
+    )
+
+    if not pseudo_gt_annotations:
+        logger.warning("SAM3 generated no pseudo-GT annotations")
+        return None
+
+    filtered = filter_low_quality_pseudo_gt_annotations(annotations=pseudo_gt_annotations)
+    logger.info(
+        "Generated %d pseudo-GT annotations, %d after filtering",
+        len(pseudo_gt_annotations),
+        len(filtered),
+    )
+
+    if not filtered:
+        logger.warning("All pseudo-GT annotations filtered out")
+        return None
+
+    return filtered
+
+
+async def build_spotcheck_challenge_context(
     challenge_record: ChallengeRecord,
     manifest: Manifest,
     required_n_frames: int = 3,
-) -> tuple[Any, Any, Any, list] | None:
+) -> tuple[Any, Any, Any] | None:
     if not challenge_record.video_url:
         logger.error("No video_url in challenge record %s", challenge_record.challenge_id)
         return None
@@ -245,38 +306,10 @@ async def regenerate_ground_truth_sam3(
             flows=flows,
         )
 
-        element = manifest.get_element(id=challenge_record.element_id)
-        if element is None:
-            logger.warning("Element %s not found in manifest", challenge_record.element_id)
-            return None
-
-        pseudo_gt_annotations = await generate_annotations_for_select_frames_sam3(
-            video_name=challenge.challenge_id,
-            frames=challenge.frames,
-            flow_frames=challenge.dense_optical_flow_frames,
-            frame_numbers=challenge.frame_numbers,
-            element=element,
-        )
-
-        if not pseudo_gt_annotations:
-            logger.warning("SAM3 generated no pseudo-GT annotations")
-            return None
-
-        filtered = filter_low_quality_pseudo_gt_annotations(annotations=pseudo_gt_annotations)
-        logger.info(
-            "Generated %d pseudo-GT annotations, %d after filtering",
-            len(pseudo_gt_annotations),
-            len(filtered),
-        )
-
-        if not filtered:
-            logger.warning("All pseudo-GT annotations filtered out")
-            return None
-
-        return challenge, payload, frame_store, filtered
+        return challenge, payload, frame_store
 
     except Exception as e:
-        logger.error("Failed to regenerate ground truth: %s", e)
+        logger.error("Failed to prepare challenge context: %s", e)
         logger.error("Traceback:\n%s", traceback.format_exc())
         return None
     finally:
@@ -299,7 +332,10 @@ async def rescore_miner_response(
     miner_predictions = challenge_record.miner_predictions
 
     if not miner_predictions and challenge_record.responses_key:
-        public_url = get_settings().SCOREVISION_PUBLIC_RESULTS_URL
+        public_url = await resolve_public_results_url()
+        if not public_url:
+            logger.warning("No public URL available to fetch miner predictions")
+            return 0.0
         miner_predictions = await fetch_miner_predictions(challenge_record.responses_key, public_url)
 
     if not miner_predictions:
@@ -362,14 +398,14 @@ async def run_spotcheck(
                 details={"error": "manifest_load_failed"},
             )
 
-    gt_result = await regenerate_ground_truth_sam3(
+    context_result = await build_spotcheck_challenge_context(
         challenge_record=challenge_record,
         manifest=manifest,
         required_n_frames=settings.SCOREVISION_VLM_SELECT_N_FRAMES,
     )
 
-    if gt_result is None:
-        logger.warning("Could not regenerate ground truth for spotcheck")
+    if context_result is None:
+        logger.warning("Could not prepare challenge context for spotcheck")
         return SpotcheckResult(
             challenge_id=challenge_record.challenge_id,
             element_id=challenge_record.element_id,
@@ -378,10 +414,57 @@ async def run_spotcheck(
             audit_score=0.0,
             match_percentage=0.0,
             passed=False,
-            details={"error": "ground_truth_generation_failed"},
+            details={"error": "challenge_context_failed"},
         )
 
-    challenge, payload, frame_store, pseudo_gt_annotations = gt_result
+    challenge, payload, frame_store = context_result
+    element = manifest.get_element(id=challenge_record.element_id)
+    use_real_gt = bool(getattr(element, "ground_truth", False)) if element else False
+
+    if use_real_gt:
+        try:
+            challenge_id = int(challenge_record.challenge_id)
+            pseudo_gt_annotations = await get_ground_truth_from_scorevision(
+                challenge_id=challenge_id,
+                element_id=challenge_record.element_id,
+            )
+            if not pseudo_gt_annotations:
+                raise ValueError("Empty ground_truth from API")
+            logger.info(
+                "Using ScoreVision API ground truth for challenge=%s element=%s",
+                challenge_record.challenge_id,
+                challenge_record.element_id,
+            )
+        except Exception as e:
+            logger.warning("Ground-truth API fetch failed for spotcheck: %s", e)
+            return SpotcheckResult(
+                challenge_id=challenge_record.challenge_id,
+                element_id=challenge_record.element_id,
+                miner_hotkey=challenge_record.miner_hotkey,
+                central_score=challenge_record.central_score,
+                audit_score=0.0,
+                match_percentage=0.0,
+                passed=False,
+                details={"error": "ground_truth_api_failed"},
+            )
+    else:
+        pseudo_gt_annotations = await regenerate_ground_truth_sam3(
+            challenge=challenge,
+            manifest=manifest,
+            element_id=challenge_record.element_id,
+        )
+        if pseudo_gt_annotations is None:
+            logger.warning("Could not regenerate pseudo ground truth for spotcheck")
+            return SpotcheckResult(
+                challenge_id=challenge_record.challenge_id,
+                element_id=challenge_record.element_id,
+                miner_hotkey=challenge_record.miner_hotkey,
+                central_score=challenge_record.central_score,
+                audit_score=0.0,
+                match_percentage=0.0,
+                passed=False,
+                details={"error": "pseudo_ground_truth_generation_failed"},
+            )
 
     audit_score = await rescore_miner_response(
         challenge_record=challenge_record,
@@ -488,6 +571,7 @@ async def spotcheck_loop(
         element_id or "any",
     )
     await _initialize_audit_storage(commit_on_start)
+    public_url = await resolve_public_results_url()
 
     first_run = True
 
@@ -501,9 +585,14 @@ async def spotcheck_loop(
                 logger.info("[SpotcheckLoop] Next spotcheck in %.0f seconds", delay)
                 await asyncio.sleep(delay)
 
-            challenge_record = await fetch_random_challenge_record(tail_blocks, element_id=element_id)
+            challenge_record = await fetch_random_challenge_record(
+                tail_blocks,
+                element_id=element_id,
+                public_url=public_url,
+            )
             if challenge_record is None:
                 logger.warning("[SpotcheckLoop] No challenge found for spotcheck")
+                public_url = await resolve_public_results_url()
                 continue
 
             manifest = await load_manifest_for_spotcheck(challenge_record.block)
@@ -610,12 +699,18 @@ async def run_single_spotcheck(
 
     await _initialize_audit_storage(commit_on_start)
 
+    public_url = await resolve_public_results_url()
+
     if mock_data_dir is not None:
         logger.info("Using mock data from: %s", mock_data_dir)
         challenge_record = load_challenge_record_from_mock_dir(mock_data_dir)
     else:
         logger.info("Starting single spotcheck (tail=%d, element=%s)", tail_blocks, element_id or "any")
-        challenge_record = await fetch_random_challenge_record(tail_blocks, element_id=element_id)
+        challenge_record = await fetch_random_challenge_record(
+            tail_blocks,
+            element_id=element_id,
+            public_url=public_url,
+        )
 
     if challenge_record is None:
         logger.error("No challenge found - check SCOREVISION_PUBLIC_RESULTS_URL or mock data dir")
