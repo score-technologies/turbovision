@@ -9,7 +9,7 @@ from scorevision.utils.data_models import (
     SVRunOutput,
     SVEvaluation,
 )
-from scorevision.chute_template.schemas import TVPredictInput
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.utils.manifest import Manifest
 
 from scorevision.utils.settings import get_settings

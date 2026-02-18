@@ -1,15 +1,13 @@
 from pathlib import Path
-
 from scorevision.utils.settings import get_settings
 from scorevision.utils.chutes_helpers import deploy_to_chutes, share_chute
-
 from scorevision.utils.huggingface_helpers import (
     create_update_or_verify_huggingface_repo,
 )
 from scorevision.utils.bittensor_helpers import on_chain_commit
 
 
-async def push_ml_model(
+async def deploy_miner(
     ml_model_path: Path | None,
     hf_revision: str | None,
     skip_chutes_deploy: bool,

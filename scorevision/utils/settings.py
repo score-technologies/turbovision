@@ -1,7 +1,6 @@
 from os import getenv
 from functools import lru_cache
 from pathlib import Path
-
 from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr
 
@@ -133,6 +132,21 @@ class Settings(BaseModel):
     AUDIT_COMMIT_MAX_RETRIES: int
     AUDIT_COMMIT_RETRY_DELAY_S: float
 
+    # Private Track
+    PRIVATE_CHALLENGE_INTERVAL_S: int
+    PRIVATE_SPOTCHECK_INTERVAL_S: int
+    PRIVATE_MINER_TIMEOUT_S: float
+    PRIVATE_GT_API_URL: str
+    PRIVATE_R2_RESULTS_PREFIX: str
+    PRIVATE_R2_PUBLIC_INDEX_URL: str
+    PRIVATE_AUDIT_TEMPO: int
+    PRIVATE_DOCKERHUB_NAMESPACE: str
+    PRIVATE_DOCKER_TIMEOUT_S: float
+    PRIVATE_SPOTCHECK_MATCH_THRESHOLD: float
+    PRIVATE_BLACKLIST_API_URL: str
+    PRIVATE_FRAME_RATE: int
+    PRIVATE_MIN_ACTIONS_FOR_CHALLENGE: int
+
 
 def _env_bool(name: str, default: bool) -> bool:
     v = getenv(name, str(default))
@@ -179,12 +193,15 @@ def get_settings() -> Settings:
         ),
         CHUTES_API_KEY=getenv("CHUTES_API_KEY", ""),
         PATH_CHUTE_TEMPLATES=Path(
-            getenv("PATH_CHUTE_TEMPLATES", "scorevision/chute_template")
+            getenv(
+                "PATH_CHUTE_TEMPLATES",
+                "scorevision/miner/open_source/chute_template",
+            )
         ),
         PATH_CHUTE_SCRIPT=Path(
             getenv(
                 "PATH_CHUTE_SCRIPT",
-                "scorevision/chute_template/turbovision_chute.py.j2",
+                "scorevision/miner/open_source/chute_template/turbovision_chute.py.j2",
             )
         ),
         FILENAME_CHUTE_MAIN=getenv("FILENAME_CHUTE_MAIN", "chute.py.j2"),
@@ -234,7 +251,7 @@ def get_settings() -> Settings:
         SIGNER_PORT=int(getenv("SIGNER_PORT", 8080)),
         # ScoreVision
         SCOREVISION_NETUID=int(getenv("SCOREVISION_NETUID", 44)),
-        SCOREVISION_MECHID=1,
+        SCOREVISION_MECHID=int(getenv("SCOREVISION_MECHID", 0)),
         SCOREVISION_VERSION=getenv("SCOREVISION_VERSION", __version__),
         SCOREVISION_API=getenv("SCOREVISION_API", "https://api.scorevision.io"),
         SCOREVISION_VIDEO_FRAMES_PER_SECOND=int(
@@ -311,4 +328,18 @@ def get_settings() -> Settings:
         AUDIT_SPOTCHECK_THRESHOLD=float(getenv("AUDIT_SPOTCHECK_THRESHOLD", 0.95)),
         AUDIT_COMMIT_MAX_RETRIES=int(getenv("AUDIT_COMMIT_MAX_RETRIES", 3)),
         AUDIT_COMMIT_RETRY_DELAY_S=float(getenv("AUDIT_COMMIT_RETRY_DELAY_S", 2.0)),
+        # Private Track
+        PRIVATE_CHALLENGE_INTERVAL_S=int(getenv("PRIVATE_CHALLENGE_INTERVAL_S", 1800)),
+        PRIVATE_SPOTCHECK_INTERVAL_S=int(getenv("PRIVATE_SPOTCHECK_INTERVAL_S", 18000)),
+        PRIVATE_MINER_TIMEOUT_S=float(getenv("PRIVATE_MINER_TIMEOUT_S", 120.0)),
+        PRIVATE_GT_API_URL=getenv("PRIVATE_GT_API_URL", ""),
+        PRIVATE_R2_RESULTS_PREFIX=getenv("PRIVATE_R2_RESULTS_PREFIX", "privatevision_results"),
+        PRIVATE_R2_PUBLIC_INDEX_URL=getenv("PRIVATE_R2_PUBLIC_INDEX_URL", ""),
+        PRIVATE_AUDIT_TEMPO=int(getenv("PRIVATE_AUDIT_TEMPO", 100)),
+        PRIVATE_DOCKERHUB_NAMESPACE=getenv("PRIVATE_DOCKERHUB_NAMESPACE", "scorevision"),
+        PRIVATE_DOCKER_TIMEOUT_S=float(getenv("PRIVATE_DOCKER_TIMEOUT_S", 300.0)),
+        PRIVATE_SPOTCHECK_MATCH_THRESHOLD=float(getenv("PRIVATE_SPOTCHECK_MATCH_THRESHOLD", 0.98)),
+        PRIVATE_BLACKLIST_API_URL=getenv("PRIVATE_BLACKLIST_API_URL", ""),
+        PRIVATE_FRAME_RATE=int(getenv("PRIVATE_FRAME_RATE", 25)),
+        PRIVATE_MIN_ACTIONS_FOR_CHALLENGE=int(getenv("PRIVATE_MIN_ACTIONS_FOR_CHALLENGE", 3)),
     )

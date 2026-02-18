@@ -31,7 +31,7 @@ from cv2 import (
 
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 
-from scorevision.chute_template.schemas import SVFrame
+from scorevision.miner.open_source.chute_template.schemas import SVFrame
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.pillar_metric_registry import register_metric
 from scorevision.utils.manifest import ElementPrefix, PillarName, KeypointTemplate

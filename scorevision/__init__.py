@@ -24,6 +24,40 @@ def app(verbosity: int):
     setup_logging(verbosity)
     logger.debug("Score Vision started (version=%s)", get_settings().SCOREVISION_VERSION)
 
+@app.command("deploy-pt-miner")
+@click.option("--tag", required=True, help="Docker image tag (e.g., v1.0.0)")
+@click.option("--no-push", is_flag=True, help="Skip pushing to DockerHub")
+@click.option("--no-share", is_flag=True, help="Skip adding Score as collaborator")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain commitment")
+@click.option("--no-start", is_flag=True, help="Skip starting the container")
+def pt_deploy_miner_cmd(tag: str, no_push: bool, no_share: bool, no_commit: bool, no_start: bool):
+    from scorevision.cli.private_track_miner import deploy_miner
+    setup_logging()
+    run(deploy_miner(tag, no_push, no_share, no_commit, no_start))
+
+
+@app.command("deploy-os-miner")
+@click.option("--model-path", default=None, help="Local path to model artifacts. If none provided, upload skipped")
+@click.option("--revision", default=None, help="Explicit revision SHA to commit (otherwise auto-detected).")
+@click.option("--no-deploy", is_flag=True, help="Skip Chutes deployment (HF only).")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain commitment (print payload only).")
+@click.option("--element-id", required=True, help="Element ID this miner is committing to (e.g. 'bbox', 'keypoints', '0', '1', etc.).")
+def os_deploy_miner_cmd(model_path: Path | None, revision: str | None, no_deploy: bool, no_commit: bool, element_id: str | None):
+    from scorevision.cli.open_source_miner import deploy_miner
+    setup_logging()
+
+    try:
+        run(
+            deploy_miner(
+                ml_model_path=Path(model_path) if model_path else None,
+                hf_revision=revision,
+                skip_chutes_deploy=no_deploy,
+                skip_bittensor_commit=no_commit,
+                element_id=element_id,
+            )
+        )
+    except Exception as e:
+        click.echo(e)
 
 @app.command("runner")
 def runner_cmd():
@@ -34,50 +68,6 @@ def runner_cmd():
     _start_metrics()
     mark_service_ready("runner")
     asyncio.run(runner_loop(path_manifest=None))
-
-
-@app.command("push")
-@click.option(
-    "--model-path",
-    default=None,
-    help="Local path to model artifacts. If none provided, upload skipped",
-)
-@click.option(
-    "--revision",
-    default=None,
-    help="Explicit revision SHA to commit (otherwise auto-detected).",
-)
-@click.option("--no-deploy", is_flag=True, help="Skip Chutes deployment (HF only).")
-@click.option(
-    "--no-commit", is_flag=True, help="Skip on-chain commitment (print payload only)."
-)
-@click.option(
-    "--element-id",
-    required=True,
-    help="Element ID this miner is committing to (e.g. 'bbox', 'keypoints', '0', '1', etc.).",
-)
-def push(
-    model_path,
-    revision,
-    no_deploy,
-    no_commit,
-    element_id,
-):
-    from scorevision.cli.push import push_ml_model
-    setup_logging()
-
-    try:
-        run(
-            push_ml_model(
-                ml_model_path=Path(model_path) if model_path else None,
-                hf_revision=revision,
-                skip_chutes_deploy=no_deploy,
-                skip_bittensor_commit=no_commit,
-                element_id=element_id,
-            )
-        )
-    except Exception as e:
-        click.echo(e)
 
 
 @app.command("signer")

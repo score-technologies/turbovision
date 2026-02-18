@@ -21,8 +21,9 @@ from scorevision.utils.video_processing import (
     FrameStore,
     InMemoryFrameStore,
 )
-from scorevision.utils.image_processing import image_to_b64string
-from scorevision.chute_template.schemas import TVFrame, TVPredictInput
+from scorevision.utils.image_processing import image_to_base64, pil_from_array
+from scorevision.miner.open_source.chute_template.schemas import SVFrame
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
     ChallengeType,

@@ -6,7 +6,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any, Optional, Dict
 
-from scorevision.chute_template.schemas import TVPredictInput
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.utils.async_clients import close_http_clients
 from scorevision.utils.bittensor_helpers import (
     _already_committed_same_index,
