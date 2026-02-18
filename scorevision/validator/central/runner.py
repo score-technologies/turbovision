@@ -8,7 +8,12 @@ from typing import Any, Optional, Dict
 
 from scorevision.chute_template.schemas import TVPredictInput
 from scorevision.utils.async_clients import close_http_clients
-from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
+from scorevision.utils.bittensor_helpers import (
+    _already_committed_same_index,
+    get_subtensor,
+    on_chain_commit_validator_retry,
+    reset_subtensor,
+)
 from scorevision.utils.challenges import (
     ScoreVisionChallengeError,
     build_svchallenge_from_parts,
@@ -17,7 +22,11 @@ from scorevision.utils.challenges import (
     complete_task_assignment,
     get_ground_truth_from_scorevision,
 )
-from scorevision.utils.cloudflare_helpers import emit_shard
+from scorevision.utils.cloudflare_helpers import (
+    build_public_index_url_from_public_base,
+    emit_shard,
+    ensure_index_exists,
+)
 from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.evaluate import post_vlm_ranking
 from scorevision.utils.manifest import Element, Manifest, load_manifest_from_public_index
@@ -292,6 +301,50 @@ def _setup_shutdown_handler() -> None:
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, f: handler())
+
+
+async def _commit_central_validator_on_start(netuid: int) -> None:
+    if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") in ("0", "false", "False"):
+        return
+
+    settings = get_settings()
+    index_url = build_public_index_url_from_public_base(settings.SCOREVISION_PUBLIC_RESULTS_URL)
+    if not index_url:
+        logger.warning("[central-validator-commit] SCOREVISION_PUBLIC_RESULTS_URL is not set; skipping.")
+        return
+
+    bootstrap_ok = True
+    try:
+        await ensure_index_exists()
+    except Exception as e:
+        bootstrap_ok = False
+        logger.warning("[central-validator-commit] ensure_index_exists failed: %s", e)
+
+    force_bootstrap = os.getenv("VALIDATOR_BOOTSTRAP_COMMIT", "1") in ("1", "true", "True")
+    if not (bootstrap_ok or force_bootstrap):
+        logger.warning("[central-validator-commit] Skipping commit; ensure_index_exists failed.")
+        return
+
+    try:
+        same = await _already_committed_same_index(netuid, index_url)
+        if same:
+            logger.info("[central-validator-commit] Already published %s; skipping.", index_url)
+            return
+    except Exception as e:
+        logger.warning("[central-validator-commit] pre-check failed: %s", e)
+
+    wait_blocks = int(os.getenv("VALIDATOR_COMMIT_WAIT_BLOCKS", "100"))
+    confirm_after = int(os.getenv("VALIDATOR_COMMIT_CONFIRM_AFTER", "3"))
+    max_retries_env = os.getenv("VALIDATOR_COMMIT_MAX_RETRIES")
+    max_retries = int(max_retries_env) if (max_retries_env and max_retries_env.isdigit()) else None
+    ok = await on_chain_commit_validator_retry(
+        index_url,
+        wait_blocks=wait_blocks,
+        confirm_after=confirm_after,
+        max_retries=max_retries,
+    )
+    if not ok:
+        logger.warning("[central-validator-commit] commitment failed.")
 
 
 async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
@@ -591,6 +644,7 @@ async def runner(
 
 async def runner_loop(path_manifest: Path | None = None):
     settings = get_settings()
+    netuid = settings.SCOREVISION_NETUID
     get_block_timeout = settings.RUNNER_GET_BLOCK_TIMEOUT_S
     wait_block_timeout = settings.RUNNER_WAIT_BLOCK_TIMEOUT_S
     reconnect_delay = settings.RUNNER_RECONNECT_DELAY_S
@@ -604,6 +658,7 @@ async def runner_loop(path_manifest: Path | None = None):
     manifest_hash: Optional[str] = None
 
     logger.info("[RunnerLoop] starting (per-element scheduling)")
+    await _commit_central_validator_on_start(netuid)
 
     while not shutdown_event.is_set():
         try:
@@ -690,4 +745,3 @@ async def runner_loop(path_manifest: Path | None = None):
                 pass
 
     logger.info("Runner loop shutting down gracefully...")
-

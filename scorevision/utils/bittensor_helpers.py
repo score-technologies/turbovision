@@ -307,7 +307,7 @@ async def on_chain_commit_validator(index_url: str) -> None:
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
     payload = {
-        "role": "validator",
+        "role": "central_validator",
         "hotkey": w.hotkey.ss58_address,
         "index_url": index_url,
         "chute_name": settings.CHUTES_USERNAME,
@@ -335,37 +335,36 @@ async def get_validator_indexes_from_chain(netuid: int | None = None) -> dict[st
     meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
     commits = await st.get_all_revealed_commitments(netuid)
 
-    stake_tensor = getattr(meta, "S", None)
-    if stake_tensor is None:
-        stake_tensor = getattr(meta, "stake", None)
-
+    target_hotkey = (settings.SCOREVISION_CENTRAL_VALIDATOR_HOTKEY or "").strip()
+    if not target_hotkey:
+        logger.warning("[validator-registry] SCOREVISION_CENTRAL_VALIDATOR_HOTKEY is empty")
+        return {}
     result: dict[str, str] = {}
-    for i, hk in enumerate(meta.hotkeys):
-        arr = commits.get(hk)
+    for hk in meta.hotkeys:
+        if hk != target_hotkey:
+            continue
+        arr = commits.get(hk) or []
         if not arr:
-            continue
-        _, data = arr[-1]
-        try:
-            obj = loads(data)
-        except Exception:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if obj.get("role") == "validator":
-            stake_val = 0.0
+            break
+        picked: dict | None = None
+        for _blk, data in reversed(arr):
             try:
-                val = stake_tensor[i]
-                if hasattr(val, "item"):
-                    val = val.item()
-                stake_val = float(val)
+                obj = loads(data)
             except Exception:
-                pass
-
-            if stake_val >= 1000.0:
-                url = obj.get("index_url")
-                if isinstance(url, str) and url.startswith("http"):
-                    result[hk] = url
-
+                continue
+            if not isinstance(obj, dict):
+                continue
+            role = str(obj.get("role") or "").strip()
+            if role != "central_validator":
+                continue
+            url = obj.get("index_url")
+            if isinstance(url, str) and url.startswith("http"):
+                picked = obj
+                break
+        if picked is None:
+            continue
+        result[hk] = picked["index_url"]
+        break
     return result
 
 
@@ -391,7 +390,7 @@ async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
         return False
     return (
         isinstance(obj, dict)
-        and obj.get("role") == "validator"
+        and obj.get("role") == "central_validator"
         and str(obj.get("index_url")) == str(index_url)
     )
 
@@ -429,8 +428,10 @@ async def _first_commit_block_by_miner(
                     except Exception:
                         continue
 
-                    if isinstance(obj, dict) and obj.get("role") == "validator":
-                        continue
+                    if isinstance(obj, dict):
+                        role = obj.get("role")
+                        if role and role != "miner":
+                            continue
 
                     try:
                         blk_int = int(blk)
@@ -508,7 +509,7 @@ async def on_chain_commit_validator_retry(
                 netuid=settings.SCOREVISION_NETUID,
                 data=dumps(
                     {
-                        "role": "validator",
+                        "role": "central_validator",
                         "hotkey": w.hotkey.ss58_address,
                         "index_url": index_url,
                         "chute_name": settings.CHUTES_USERNAME,

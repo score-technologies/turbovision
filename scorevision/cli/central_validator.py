@@ -34,7 +34,15 @@ def run_weights_process(tail: int, m_min: int, tempo: int, path_manifest: str | 
     setup_logging()
 
     manifest_path = Path(path_manifest) if path_manifest else None
-    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=manifest_path))
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=manifest_path,
+            commit_on_start=False,
+        )
+    )
 
 
 def run_signer_process():
@@ -128,7 +136,15 @@ def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
 
     manifest_path = Path(manifest) if manifest else None
     logger.info("Starting weights-only mode (tempo=%d blocks)", tempo)
-    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=manifest_path))
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=manifest_path,
+            commit_on_start=False,
+        )
+    )
 
 
 @central_validator.command("signer")

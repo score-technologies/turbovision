@@ -109,7 +109,15 @@ def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
     _start_metrics()
     mark_service_ready("validator")
     path_manifest = Path(manifest_path) if manifest_path else None
-    asyncio.run(weights_loop(tail=tail, m_min=m_min, tempo=tempo, path_manifest=path_manifest))
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=path_manifest,
+            commit_on_start=False,
+        )
+    )
 
 
 app.add_command(audit_validator)

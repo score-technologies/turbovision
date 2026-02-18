@@ -209,7 +209,7 @@ async def weights_loop(
     m_min: int = 25,
     tempo: int = 100,
     path_manifest: Path | None = None,
-    commit_on_start: bool = True,
+    commit_on_start: bool = False,
 ) -> None:
     settings = get_settings()
     netuid = settings.SCOREVISION_NETUID

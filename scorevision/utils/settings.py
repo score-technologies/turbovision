@@ -108,6 +108,7 @@ class Settings(BaseModel):
     SCOREVISION_WINDOW_DELTA_ABS: float
     SCOREVISION_WINDOW_DELTA_REL: float
     SCOREVISION_WINDOW_HALF_LIFE: float
+    SCOREVISION_CENTRAL_VALIDATOR_HOTKEY: str
 
     # Runner
     RUNNER_GET_BLOCK_TIMEOUT_S: float
@@ -287,6 +288,10 @@ def get_settings() -> Settings:
             getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
         ),
         SCOREVISION_WINDOW_HALF_LIFE=float(getenv("SCOREVISION_WINDOW_HALF_LIFE", 3.0)),
+        SCOREVISION_CENTRAL_VALIDATOR_HOTKEY=getenv(
+            "SCOREVISION_CENTRAL_VALIDATOR_HOTKEY",
+            "5DFwFpurRFaT5VtjdsATUnRakGhvUdgCghF61457QbWdsnJp",
+        ),
         # Runner
         RUNNER_GET_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", 15.0)),
         RUNNER_WAIT_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", 15.0)),
