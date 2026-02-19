@@ -231,6 +231,14 @@ async def weights_loop(
     effective_tail = max(tail, tail_blocks_default)
     set_weights_count = 0
     validator_hotkey_ss58 = get_validator_hotkey_ss58()
+    central_validator_hotkey = (settings.SCOREVISION_CENTRAL_VALIDATOR_HOTKEY or "").strip()
+    is_central_validator = bool(central_validator_hotkey) and validator_hotkey_ss58 == central_validator_hotkey
+    if not is_central_validator:
+        logger.info(
+            "[weights] winners snapshots disabled for hotkey=%s (central=%s)",
+            validator_hotkey_ss58,
+            central_validator_hotkey or "<unset>",
+        )
 
     while not shutdown_event.is_set():
         try:
@@ -390,7 +398,7 @@ async def weights_loop(
                     logger.info("set_weights OK at block %d", block)
                     set_weights_count += 1
                     if winners_every_n > 0 and set_weights_count % winners_every_n == 0:
-                        if winners_by_element:
+                        if is_central_validator and winners_by_element:
                             payload = {
                                 "block": block,
                                 "window_id": current_window_id,
