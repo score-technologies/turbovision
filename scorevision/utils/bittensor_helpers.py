@@ -8,7 +8,14 @@ from traceback import print_exc
 from typing import Optional
 
 from substrateinterface import Keypair
-from bittensor import wallet, async_subtensor
+from bittensor import wallet
+from bittensor import AsyncSubtensor as _AsyncSubtensor
+try:
+    from bittensor import async_subtensor
+except ImportError:
+    # bittensor v10+: async_subtensor factory may be replaced by AsyncSubtensor directly
+    def async_subtensor(endpoint: str) -> _AsyncSubtensor:
+        return _AsyncSubtensor(network=endpoint)
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
@@ -136,8 +143,12 @@ async def get_subtensor():
     init_timeout = float(os.getenv("SUBTENSOR_INIT_TIMEOUT_S", "15.0"))
 
     async def _init(ep: str):
-        st = async_subtensor(ep)
-        await asyncio.wait_for(st.initialize(), timeout=init_timeout)
+        st = _AsyncSubtensor(network=ep)
+        try:
+            await asyncio.wait_for(st.initialize(), timeout=init_timeout)
+        except AttributeError:
+            # bittensor v10+: initialize() may be a no-op or handled internally
+            pass
         return st
 
     if _SUBTENSOR is None:

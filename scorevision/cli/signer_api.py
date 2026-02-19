@@ -3,6 +3,10 @@ from typing import Tuple
 
 from aiohttp import web
 import bittensor as bt
+try:
+    from bittensor import AsyncSubtensor as _BtAsyncSubtensor
+except ImportError:
+    _BtAsyncSubtensor = None
 
 from scorevision.utils.settings import get_settings
 
@@ -14,7 +18,7 @@ MECHID = 1
 # Global shutdown event
 shutdown_event = asyncio.Event()
 
-_ASYNC_SUBTENSOR: bt.AsyncSubtensor | None = None
+_ASYNC_SUBTENSOR: "bt.AsyncSubtensor | None" = None
 _ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
 _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
@@ -30,8 +34,16 @@ async def get_subtensor():
         fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
         for endpoint in (ep, fb):
             try:
-                st = bt.async_subtensor(endpoint)
-                await st.initialize()
+                # bittensor v10+: use AsyncSubtensor directly
+                try:
+                    from bittensor import AsyncSubtensor as _AsyncSubtensor
+                    st = _AsyncSubtensor(network=endpoint)
+                except (ImportError, TypeError):
+                    st = bt.async_subtensor(endpoint)
+                try:
+                    await st.initialize()
+                except AttributeError:
+                    pass
                 _ASYNC_SUBTENSOR = st
                 if endpoint != ep:
                     logger.warning("Subtensor init fell back to %s", endpoint)
@@ -44,7 +56,7 @@ async def get_subtensor():
         return _ASYNC_SUBTENSOR
 
 
-def _get_sync_subtensor() -> bt.Subtensor:
+def _get_sync_subtensor() -> "bt.Subtensor":
     global _SYNC_SUBTENSOR
     with _SYNC_SUBTENSOR_LOCK:
         if _SYNC_SUBTENSOR is not None:
@@ -54,7 +66,11 @@ def _get_sync_subtensor() -> bt.Subtensor:
         fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
         for endpoint in (ep, fb):
             try:
-                st = bt.subtensor(endpoint)
+                # bittensor v10+: Subtensor accepts network keyword argument
+                try:
+                    st = bt.Subtensor(network=endpoint)
+                except (TypeError, AttributeError):
+                    st = bt.subtensor(endpoint)
                 _SYNC_SUBTENSOR = st
                 if endpoint != ep:
                     logger.warning("Sync subtensor init fell back to %s", endpoint)
