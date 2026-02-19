@@ -20,7 +20,7 @@ dependencies = [
   "Pillow>=10.0",
   "opencv-python>=4.8",
   "click>=8.0.0",
-  "huggingface_hub>=0.24",
+  "huggingface_hub>=1.4.1",
   "bittensor==9.12.0",
   "jinja2>=3.1.6",
   "chutes>=0.3.61",

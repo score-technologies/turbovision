@@ -99,7 +99,9 @@ async def create_or_update_huggingface_repo(model_path: Path, hf_api: HfApi) -> 
     hf_api.create_repo(repo_id=name, repo_type="model", private=True, exist_ok=True)
 
     try:
-        hf_api.update_repo_visibility(repo_id=name, private=True)
+        # update_repo_visibility was removed in huggingface_hub 1.x;
+        # use update_repo_settings instead.
+        hf_api.update_repo_settings(repo_id=name, private=True)
     except Exception as e:
         logger.error(f"Error making hf repo private: {e}")
 
