@@ -11,63 +11,60 @@ x-common: &common #
     - "com.centurylinklabs.watchtower.enable=true"
 
 services:
-  validator:
+  central-weights:
     <<: *common
-    container_name: scorevision-validator
+    container_name: scorevision-central-weights
+    profiles: ["owner", "validator"]
     environment:
       SCOREVISION_CACHE_DIR: /app/data/blocks
-      SIGNER_URL: http://signer:8080
+      SIGNER_URL: http://central-signer:8080
       SCOREVISION_BLACKLIST_PATH: /app/blacklist
-      SCOREVISION_METRICS_ADDR: 0.0.0.0
-      SCOREVISION_METRICS_PORT: 8110
-      USE_PROMETHEUS: "true"
       MALLOC_ARENA_MAX: "2"
       PYTHONMALLOC: "malloc"
     volumes:
       - validator-cache:/app/data/blocks
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
       - ./blacklist:/app/blacklist:ro
-    ports:
-      - "8011:8000"
-      - "8110:8110"
     depends_on:
-      signer:
+      central-signer:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8110/metrics"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    command: ["sv", "-v", "validate"]
+    command: ["sv", "-v", "central-validator", "weights"]
 
-  runner:
+  central-runner:
     <<: *common
-    container_name: scorevision-runner
+    container_name: scorevision-central-runner
+    profiles: ["owner"]
     environment:
-      SCOREVISION_METRICS_PORT: "8000"
-      SCOREVISION_METRICS_ADDR: 0.0.0.0
       SCOREVISION_BLACKLIST_PATH: /app/blacklist
-      SIGNER_URL: http://signer:8080
       MALLOC_ARENA_MAX: "2"
       PYTHONMALLOC: "malloc"
     volumes:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
       - ./blacklist:/app/blacklist:ro
-    ports:
-      - "8012:8000"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/metrics"]
+      test:
+        [
+          "CMD",
+          "/bin/sh",
+          "-lc",
+          "if [ -z \"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\" ]; then exit 0; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; if [ \"$$current\" = \"$$SCOREVISION_CENTRAL_VALIDATOR_HOTKEY\" ]; then ps -o pid= 1 >/dev/null; else exit 0; fi",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-    command: ["sv", "-v", "runner"]
+    command:
+      [
+        "/bin/sh",
+        "-lc",
+        "set -e; target=\"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\"; if [ -z \"$$target\" ]; then echo \"[runner-gate] SCOREVISION_CENTRAL_VALIDATOR_HOTKEY not set -> runner disabled\"; exec sleep infinity; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; echo \"[runner-gate] local_hotkey=$$current\"; echo \"[runner-gate] target_hotkey=$$target\"; if [ \"$$current\" = \"$$target\" ]; then echo \"[runner-gate] hotkey match -> starting central runner\"; exec sv -v central-validator runner; fi; echo \"[runner-gate] hotkey mismatch -> runner disabled on this node\"; exec sleep infinity",
+      ]
 
-  signer:
+  central-signer:
     <<: *common
-    container_name: scorevision-signer
+    container_name: scorevision-central-signer
+    profiles: ["owner", "validator"]
     environment:
       SIGNER_HOST: 0.0.0.0
       SIGNER_PORT: "8080"
@@ -83,11 +80,28 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
-    command: ["sv", "-v", "signer"]
+    command: ["sv", "-v", "central-validator", "signer"]
+
+  audit-spotcheck:
+    <<: *common
+    container_name: scorevision-audit-spotcheck
+    profiles: ["owner", "validator"]
+    environment:
+      SCOREVISION_CACHE_DIR: /app/data/blocks
+      SCOREVISION_BLACKLIST_PATH: /app/blacklist
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+    volumes:
+      - audit-cache:/app/data/blocks
+      - ${HOME}/.chutes:/root/.chutes:ro
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ./blacklist:/app/blacklist:ro
+    command: ["sv", "-v", "audit-validator", "spotcheck"]
 
   prometheus:
     image: prom/prometheus:latest
     container_name: scorevision-prometheus
+    profiles: ["owner", "validator"]
     restart: unless-stopped
     ports:
       - "9191:9090"
@@ -105,6 +119,7 @@ services:
   watchtower:
     image: containrrr/watchtower
     container_name: scorevision-watchtower
+    profiles: ["owner", "validator"]
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -115,4 +130,5 @@ services:
 
 volumes:
   validator-cache:
+  audit-cache:
   prometheus-data:
