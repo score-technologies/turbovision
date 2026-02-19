@@ -308,6 +308,35 @@ async def _commit_central_validator_on_start(netuid: int) -> None:
         return
 
     settings = get_settings()
+    delay_blocks = _to_pos_int(os.getenv("VALIDATOR_COMMIT_START_DELAY_BLOCKS")) or 3
+    if delay_blocks > 0:
+        logger.info(
+            "[central-validator-commit] delaying startup commit by %d block(s)...",
+            delay_blocks,
+        )
+        sub = await get_subtensor()
+        for i in range(delay_blocks):
+            try:
+                await asyncio.wait_for(
+                    sub.wait_for_block(),
+                    timeout=settings.RUNNER_WAIT_BLOCK_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[central-validator-commit] delay wait_for_block timed out (%d/%d); continuing.",
+                    i + 1,
+                    delay_blocks,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[central-validator-commit] delay wait_for_block error (%d/%d): %s",
+                    i + 1,
+                    delay_blocks,
+                    e,
+                )
+                reset_subtensor()
+                sub = await get_subtensor()
+
     index_url = build_public_index_url_from_public_base(settings.SCOREVISION_PUBLIC_RESULTS_URL)
     if not index_url:
         logger.warning("[central-validator-commit] SCOREVISION_PUBLIC_RESULTS_URL is not set; skipping.")
