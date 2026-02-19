@@ -67,11 +67,16 @@ def _result() -> SpotcheckResult:
 async def test_emit_spotcheck_result_shard_skips_without_audit_r2():
     settings = SimpleNamespace(
         SCOREVISION_VERSION="0.2.0",
+        SCOREVISION_BUCKET="",
         AUDIT_R2_BUCKET="",
         AUDIT_R2_ACCOUNT_ID=_Secret(""),
         AUDIT_R2_WRITE_ACCESS_KEY_ID=_Secret(""),
         AUDIT_R2_WRITE_SECRET_ACCESS_KEY=_Secret(""),
+        CENTRAL_R2_ACCOUNT_ID=_Secret(""),
+        CENTRAL_R2_WRITE_ACCESS_KEY_ID=_Secret(""),
+        CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=_Secret(""),
         AUDIT_R2_CONCURRENCY=8,
+        CENTRAL_R2_CONCURRENCY=8,
         AUDIT_R2_RESULTS_PREFIX="audit_spotcheck",
     )
     with patch("scorevision.validator.audit.storage.get_settings", return_value=settings):
@@ -92,11 +97,16 @@ async def test_emit_spotcheck_result_shard_uploads_payload():
     client = _Client()
     settings = SimpleNamespace(
         SCOREVISION_VERSION="0.2.0",
+        SCOREVISION_BUCKET="central-bucket",
         AUDIT_R2_BUCKET="audit-bucket",
         AUDIT_R2_ACCOUNT_ID=_Secret("acc"),
         AUDIT_R2_WRITE_ACCESS_KEY_ID=_Secret("key"),
         AUDIT_R2_WRITE_SECRET_ACCESS_KEY=_Secret("secret"),
+        CENTRAL_R2_ACCOUNT_ID=_Secret(""),
+        CENTRAL_R2_WRITE_ACCESS_KEY_ID=_Secret(""),
+        CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=_Secret(""),
         AUDIT_R2_CONCURRENCY=8,
+        CENTRAL_R2_CONCURRENCY=8,
         AUDIT_R2_RESULTS_PREFIX="audit_spotcheck",
     )
     with patch("scorevision.validator.audit.storage.get_settings", return_value=settings), \
@@ -146,5 +156,5 @@ async def test_commit_audit_index_on_start_commits(monkeypatch):
     assert commit_mock.await_count == 1
     assert (
         commit_mock.await_args.kwargs["index_url"]
-        == "https://pub-audit.r2.dev/scorevision/index.json"
+        == "https://pub-audit.r2.dev/scorevision/audit_spotcheck/index.json"
     )

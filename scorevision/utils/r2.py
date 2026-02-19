@@ -43,12 +43,25 @@ def central_r2_config(settings: Settings) -> R2Config:
 
 
 def audit_r2_config(settings: Settings) -> R2Config:
+    bucket = (settings.AUDIT_R2_BUCKET or settings.SCOREVISION_BUCKET or "").strip()
+    account_id = (
+        settings.AUDIT_R2_ACCOUNT_ID.get_secret_value()
+        or settings.CENTRAL_R2_ACCOUNT_ID.get_secret_value()
+    )
+    access_key_id = (
+        settings.AUDIT_R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+        or settings.CENTRAL_R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+    )
+    secret_access_key = (
+        settings.AUDIT_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+        or settings.CENTRAL_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+    )
     return R2Config(
-        bucket=settings.AUDIT_R2_BUCKET,
-        account_id=settings.AUDIT_R2_ACCOUNT_ID.get_secret_value(),
-        access_key_id=settings.AUDIT_R2_WRITE_ACCESS_KEY_ID.get_secret_value(),
-        secret_access_key=settings.AUDIT_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value(),
-        concurrency=settings.AUDIT_R2_CONCURRENCY,
+        bucket=bucket,
+        account_id=account_id,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        concurrency=settings.AUDIT_R2_CONCURRENCY or settings.CENTRAL_R2_CONCURRENCY,
     )
 
 

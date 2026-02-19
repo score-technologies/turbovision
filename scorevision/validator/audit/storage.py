@@ -8,7 +8,6 @@ from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.r2 import (
     add_index_key_if_new,
     audit_r2_config,
-    build_public_index_url_from_base,
     create_s3_client,
     ensure_index_exists,
     is_configured,
@@ -40,12 +39,16 @@ def _audit_r2_enabled() -> bool:
     return is_configured(audit_r2_config(get_settings()), require_bucket=True)
 
 
+def _audit_bucket() -> str:
+    s = get_settings()
+    return (s.AUDIT_R2_BUCKET or s.SCOREVISION_BUCKET or "").strip()
+
+
 def require_audit_r2_configured() -> None:
     if not _audit_r2_enabled():
         raise RuntimeError(
             "Audit R2 is not configured. "
-            "Set AUDIT_R2_BUCKET, AUDIT_R2_ACCOUNT_ID, "
-            "AUDIT_R2_WRITE_ACCESS_KEY_ID, and AUDIT_R2_WRITE_SECRET_ACCESS_KEY "
+            "Set AUDIT_R2_* or reuse SCOREVISION_BUCKET + CENTRAL_R2_* "
             "to enable audit shard uploads."
         )
 
@@ -68,27 +71,38 @@ def _get_audit_s3_client():
     return create_s3_client(cfg, error_message="Audit R2 credentials not set")
 
 
+def _audit_index_key() -> str:
+    return f"{_audit_results_prefix()}index.json"
+
+
 def _build_audit_public_index_url() -> str | None:
     s = get_settings()
-    return build_public_index_url_from_base(s.AUDIT_R2_BUCKET_PUBLIC_URL)
+    public_base = (
+        s.AUDIT_R2_BUCKET_PUBLIC_URL
+        or s.SCOREVISION_PUBLIC_RESULTS_URL
+        or ""
+    ).strip()
+    if not public_base:
+        return None
+    return f"{public_base.rstrip('/')}/{_audit_index_key()}"
 
 
 async def ensure_audit_index_exists() -> bool:
     if not _audit_r2_enabled():
         return False
-    s = get_settings()
     return await ensure_index_exists(
         client_factory=_get_audit_s3_client,
-        bucket=s.AUDIT_R2_BUCKET,
+        bucket=_audit_bucket(),
+        index_key=_audit_index_key(),
     )
 
 
 async def _audit_index_add_if_new(key: str) -> None:
-    s = get_settings()
     await add_index_key_if_new(
         client_factory=_get_audit_s3_client,
-        bucket=s.AUDIT_R2_BUCKET,
+        bucket=_audit_bucket(),
         key=key,
+        index_key=_audit_index_key(),
     )
 
 
@@ -99,7 +113,7 @@ async def commit_audit_index_on_start() -> None:
 
     index_url = _build_audit_public_index_url()
     if not index_url:
-        logger.warning("[audit-commit] No AUDIT_R2_BUCKET_PUBLIC_URL configured; skipping commit.")
+        logger.warning("[audit-commit] No audit public URL configured; skipping commit.")
         return
 
     ok = await _commit_audit_index(index_url=index_url)
@@ -240,7 +254,7 @@ async def emit_spotcheck_result_shard(
     body = dumps([signed_line], separators=(",", ":"))
     async with _get_audit_s3_client() as c:
         await c.put_object(
-            Bucket=s.AUDIT_R2_BUCKET,
+            Bucket=_audit_bucket(),
             Key=key,
             Body=body,
             ContentType="application/json",
