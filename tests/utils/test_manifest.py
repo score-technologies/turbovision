@@ -1,8 +1,7 @@
-# test_manifest.py
-
 import pytest
 
 from scorevision.utils.manifest import (
+    Element,
     Manifest,
     Tee,
     Element,
@@ -122,3 +121,39 @@ def test_element_allows_missing_clips_and_pgt_recipe_hash():
     elem = man.elements[0]
     assert elem.clips == []
     assert elem.pgt_recipe_hash is None
+
+
+def test_private_track_element_minimal():
+    elem = Element(
+        id="ActionSpot_v1",
+        track="private",
+        weight=1.0,
+    )
+    assert elem.track == "private"
+    assert elem.clips == []
+    assert elem.metrics is None
+    assert elem.preproc is None
+
+
+def test_private_track_element_in_manifest():
+    private_elem = Element(
+        id="ActionSpot_v1",
+        track="private",
+        weight=1.0,
+        eval_window=4,
+    )
+    man = Manifest(
+        window_id="2025-12-01",
+        elements=[private_elem],
+        tee=Tee(trusted_share_gamma=0.0),
+        version=1.3,
+        expiry_block=999999,
+    )
+    assert man.get_element("ActionSpot_v1") == private_elem
+
+
+def test_open_track_element_backward_compatible(dummy_detect_element):
+    assert dummy_detect_element.track is None
+    assert dummy_detect_element.clips != []
+    assert dummy_detect_element.metrics is not None
+
