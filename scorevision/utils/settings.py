@@ -226,7 +226,7 @@ def get_settings() -> Settings:
             "SCOREVISION_WINDOW_TIEBREAK_ENABLE", True
         ),
         SCOREVISION_WINDOW_K_PER_VALIDATOR=int(
-            getenv("SCOREVISION_WINDOW_K_PER_VALIDATOR", 25)
+            getenv("SCOREVISION_WINDOW_K_PER_VALIDATOR", 6)
         ),
         SCOREVISION_WINDOW_DELTA_ABS=float(
             getenv("SCOREVISION_WINDOW_DELTA_ABS", 0.003)
