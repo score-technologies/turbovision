@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from json import dumps
 import httpx
 from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair
-from scorevision.utils.blacklist import BlacklistAPI
+from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
 from scorevision.utils.r2 import add_index_key_if_new, central_r2_config, create_s3_client
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.request_signing import build_signed_headers
@@ -73,15 +73,6 @@ async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> st
         logger.error("Failed to upload shard: %s", e)
         return None
 
-
-async def _get_blacklist(blacklist_api: BlacklistAPI | None) -> set[str]:
-    if blacklist_api is None:
-        return set()
-    try:
-        return await blacklist_api.get_blacklist()
-    except Exception as e:
-        logger.warning("Failed to fetch blacklist: %s", e)
-        return set()
 
 
 async def _fetch_recent_results(tail_blocks: int = 14400) -> list[dict]:
@@ -202,13 +193,13 @@ async def challenge_loop() -> None:
     subtensor = await get_subtensor()
 
     blacklist_api = None
-    if settings.PRIVATE_BLACKLIST_API_URL:
-        blacklist_api = BlacklistAPI(settings.PRIVATE_BLACKLIST_API_URL, keypair)
+    if settings.BLACKLIST_API_URL:
+        blacklist_api = BlacklistAPI(settings.BLACKLIST_API_URL, keypair)
 
     while True:
         try:
             metagraph = await subtensor.metagraph(settings.SCOREVISION_NETUID)
-            blacklist = await _get_blacklist(blacklist_api)
+            blacklist = await fetch_blacklisted_hotkeys(blacklist_api)
             miners = await get_registered_miners(subtensor, metagraph, blacklist)
 
             if not miners:
@@ -252,13 +243,13 @@ async def spotcheck_loop() -> None:
     subtensor = await get_subtensor()
 
     blacklist_api = None
-    if settings.PRIVATE_BLACKLIST_API_URL:
-        blacklist_api = BlacklistAPI(settings.PRIVATE_BLACKLIST_API_URL, keypair)
+    if settings.BLACKLIST_API_URL:
+        blacklist_api = BlacklistAPI(settings.BLACKLIST_API_URL, keypair)
 
     while True:
         try:
             metagraph = await subtensor.metagraph(settings.SCOREVISION_NETUID)
-            blacklist = await _get_blacklist(blacklist_api)
+            blacklist = await fetch_blacklisted_hotkeys(blacklist_api)
             miners = await get_registered_miners(subtensor, metagraph, blacklist)
             registered_hotkeys = {m.hotkey: m for m in miners}
 
