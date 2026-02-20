@@ -65,6 +65,8 @@ class PrivateEvaluationResult:
     timestamp: str
     block: int
     video_url: str = ""
+    response_time_s: float = 0.0
+    timed_out: bool = False
 
 
 @dataclass
