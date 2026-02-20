@@ -45,7 +45,7 @@ def run_spotcheck_process(
     element_id: str | None,
     commit_on_start: bool,
 ):
-    from scorevision.validator.audit import spotcheck_loop
+    from scorevision.validator.audit.open_source.spotcheck import spotcheck_loop
     setup_logging()
 
     asyncio.run(spotcheck_loop(
@@ -70,7 +70,12 @@ def audit_validator():
     pass
 
 
-@audit_validator.command("start")
+@audit_validator.group("open-source")
+def open_source():
+    pass
+
+
+@open_source.command("start")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=100, help="Weights loop tempo in blocks")
@@ -151,7 +156,7 @@ def start_cmd(
     logger.info("Audit validator shutdown complete")
 
 
-@audit_validator.command("weights")
+@open_source.command("weights")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=100, help="Weights loop tempo in blocks")
@@ -174,7 +179,7 @@ def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     )
 
 
-@audit_validator.command("spotcheck")
+@open_source.command("spotcheck")
 @click.option("--min-interval", default=None, type=int, help="Min interval between spotchecks (seconds)")
 @click.option("--max-interval", default=None, type=int, help="Max interval between spotchecks (seconds)")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
@@ -237,10 +242,119 @@ def spotcheck_cmd(
         ))
 
 
-@audit_validator.command("signer")
+@open_source.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
     setup_logging()
 
     logger.info("Starting signer-only mode")
     asyncio.run(run_signer())
+
+
+@audit_validator.group("private-track")
+def private_track():
+    pass
+
+
+@private_track.command("weights")
+@click.option("--tail", default=28800, help="Tail blocks for data fetching")
+@click.option("--m-min", default=25, help="Minimum samples per miner")
+@click.option("--tempo", default=100, help="Weights loop tempo in blocks")
+@click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
+def private_weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
+    from pathlib import Path
+    from scorevision.validator.core import weights_loop
+    setup_logging()
+
+    manifest_path = Path(manifest) if manifest else None
+    logger.info("Starting private-track weights-only mode (tempo=%d blocks)", tempo)
+    asyncio.run(
+        weights_loop(
+            tail=tail,
+            m_min=m_min,
+            tempo=tempo,
+            path_manifest=manifest_path,
+            commit_on_start=False,
+        )
+    )
+
+
+@audit_validator.command("start")
+@click.option("--tail", default=28800, help="Tail blocks for data fetching")
+@click.option("--m-min", default=25, help="Minimum samples per miner")
+@click.option("--tempo", default=100, help="Weights loop tempo in blocks")
+@click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
+@click.option("--spotcheck-min", default=None, type=int, help="Min spotcheck interval in seconds")
+@click.option("--spotcheck-max", default=None, type=int, help="Max spotcheck interval in seconds")
+@click.option("--threshold", default=None, type=float, help="Spotcheck match threshold (0.0-1.0)")
+@click.option("--element-id", default=None, help="Filter spotcheck to specific element")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain audit index commitment on startup")
+def start_all_cmd(
+    tail: int,
+    m_min: int,
+    tempo: int,
+    manifest: str | None,
+    spotcheck_min: int | None,
+    spotcheck_max: int | None,
+    threshold: float | None,
+    element_id: str | None,
+    no_commit: bool,
+):
+    settings = get_settings()
+
+    if spotcheck_min is None:
+        spotcheck_min = settings.AUDIT_SPOTCHECK_MIN_INTERVAL_S
+    if spotcheck_max is None:
+        spotcheck_max = settings.AUDIT_SPOTCHECK_MAX_INTERVAL_S
+    if threshold is None:
+        threshold = settings.AUDIT_SPOTCHECK_THRESHOLD
+
+    setup_signal_handlers()
+
+    logger.info("Starting unified audit validator (open-source + private-track)")
+    logger.info("  Signer service: starting...")
+    logger.info("  Weights loop (both tracks): tempo=%d blocks, tail=%d, m_min=%d", tempo, tail, m_min)
+    logger.info("  Open-source spotcheck loop: interval=%d-%d seconds, threshold=%.0f%%", spotcheck_min, spotcheck_max, threshold * 100)
+
+    signer_proc = multiprocessing.Process(
+        target=run_signer_process,
+        name="audit-signer",
+    )
+    weights_proc = multiprocessing.Process(
+        target=run_weights_process,
+        args=(tail, m_min, tempo, manifest),
+        name="audit-weights",
+    )
+    spotcheck_proc = multiprocessing.Process(
+        target=run_spotcheck_process,
+        args=(spotcheck_min, spotcheck_max, tail, threshold, element_id, not no_commit),
+        name="audit-spotcheck",
+    )
+
+    signer_proc.start()
+    weights_proc.start()
+    spotcheck_proc.start()
+
+    logger.info(
+        "All processes started (signer pid=%d, weights pid=%d, spotcheck pid=%d)",
+        signer_proc.pid,
+        weights_proc.pid,
+        spotcheck_proc.pid,
+    )
+
+    try:
+        signer_proc.join()
+        weights_proc.join()
+        spotcheck_proc.join()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, terminating processes...")
+        signer_proc.terminate()
+        weights_proc.terminate()
+        spotcheck_proc.terminate()
+        signer_proc.join(timeout=5)
+        weights_proc.join(timeout=5)
+        spotcheck_proc.join(timeout=5)
+
+    logger.info("Audit validator shutdown complete")
+
+

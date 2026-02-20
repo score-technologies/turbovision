@@ -63,6 +63,7 @@ class PrivateEvaluationResult:
     processing_time: float
     timestamp: str
     block: int
+    video_url: str = ""
 
 
 @dataclass

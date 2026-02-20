@@ -45,6 +45,7 @@ from scorevision.utils.manifest import (
     Manifest,
     load_manifest_from_public_index,
 )
+from scorevision.validator.audit.private_track.audit import get_private_winner
 from scorevision.validator.payload import extract_elements_from_manifest
 from scorevision.validator.scoring import days_to_blocks
 from scorevision.validator.winner import get_winner_for_element
@@ -300,34 +301,48 @@ async def weights_loop(
                 winners_by_element: dict[str, dict[str, str | None]] = {}
                 max_tail_used = effective_tail
 
-                total_elem_weight = sum(max(0.0, w) for _eid, w, _ew in elements)
+                total_elem_weight = sum(max(0.0, w) for _eid, w, _ew, _t in elements)
                 if total_elem_weight <= 0:
                     logger.warning("[weights] Element weights sum to 0 -> forcing fallback_uid=%d", fallback_uid)
                     weights_by_uid = {fallback_uid: 1.0}
                 else:
-                    elements = [(eid, max(0.0, float(w)), eval_window_days) for (eid, w, eval_window_days) in elements]
+                    private_min_samples = settings.PRIVATE_AUDIT_MIN_SAMPLES
+                    elements = [(eid, max(0.0, float(w)), eval_window_days, track) for (eid, w, eval_window_days, track) in elements]
                     max_tail_used = 0
 
-                    for element_id, elem_weight, eval_window_days in elements:
+                    for element_id, elem_weight, eval_window_days, track in elements:
                         tail_from_eval = days_to_blocks(eval_window_days)
                         tail_for_element = tail_from_eval if tail_from_eval is not None else effective_tail
                         max_tail_used = max(max_tail_used, tail_for_element)
 
                         logger.info(
-                            "[weights] element=%s eval_window_days=%s -> tail_blocks=%d",
+                            "[weights] element=%s track=%s eval_window_days=%s -> tail_blocks=%d",
                             element_id,
+                            track or "open-source",
                             str(eval_window_days),
                             tail_for_element,
                         )
 
-                        winner_uid, scores_by_miner, winner_meta = await get_winner_for_element(
-                            element_id=element_id,
-                            current_window_id=current_window_id,
-                            tail=tail_for_element,
-                            m_min=m_min,
-                            blacklisted_hotkeys=blacklisted_hotkeys,
-                            validator_hotkey_ss58=validator_hotkey_ss58,
-                        )
+                        winner_uid = None
+                        winner_meta = None
+
+                        if track == "private":
+                            meta = await subtensor.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
+                            winner_uid, winner_meta = await get_private_winner(
+                                tail_blocks=tail_for_element,
+                                min_samples=private_min_samples,
+                                metagraph_hotkeys=meta.hotkeys,
+                                blacklisted_hotkeys=blacklisted_hotkeys or set(),
+                            )
+                        else:
+                            winner_uid, _, winner_meta = await get_winner_for_element(
+                                element_id=element_id,
+                                current_window_id=current_window_id,
+                                tail=tail_for_element,
+                                m_min=m_min,
+                                blacklisted_hotkeys=blacklisted_hotkeys,
+                                validator_hotkey_ss58=validator_hotkey_ss58,
+                            )
 
                         if winner_uid is None:
                             logger.warning("[weights] No winner for element_id=%s", element_id)

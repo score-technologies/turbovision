@@ -57,13 +57,14 @@ def extract_challenge_id(payload: dict) -> str | None:
         return None
 
 
-def extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | float | None]]:
+def extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | float | None, str | None]]:
     elements = getattr(manifest, "elements", None) or []
-    out: list[tuple[str, float, int | float | None]] = []
+    out: list[tuple[str, float, int | float | None, str | None]] = []
     for elem in elements:
         eid = None
         weight = None
         eval_window = None
+        track = None
         if hasattr(elem, "element_id"):
             eid = getattr(elem, "element_id")
         elif hasattr(elem, "id"):
@@ -78,6 +79,10 @@ def extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | flo
             eval_window = getattr(elem, "eval_window")
         elif isinstance(elem, dict):
             eval_window = elem.get("eval_window")
+        if hasattr(elem, "track"):
+            track = getattr(elem, "track")
+        elif isinstance(elem, dict):
+            track = elem.get("track")
         if eid is None:
             continue
         try:
@@ -96,7 +101,7 @@ def extract_elements_from_manifest(manifest) -> list[tuple[str, float, int | flo
                     ew = int(ew)
             except Exception:
                 ew = None
-        out.append((eid_str, w, ew))
+        out.append((eid_str, w, ew, track))
     return out
 
 

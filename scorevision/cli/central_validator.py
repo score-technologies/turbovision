@@ -57,7 +57,12 @@ def central_validator():
     pass
 
 
-@central_validator.command("start")
+@central_validator.group("open-source")
+def open_source():
+    pass
+
+
+@open_source.command("start")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=100, help="Weights loop tempo in blocks")
@@ -112,7 +117,7 @@ def start_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     logger.info("Central validator shutdown complete")
 
 
-@central_validator.command("runner")
+@open_source.command("runner")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
 def runner_cmd(manifest: str | None):
     from pathlib import Path
@@ -124,7 +129,7 @@ def runner_cmd(manifest: str | None):
     asyncio.run(runner_loop(path_manifest=manifest_path))
 
 
-@central_validator.command("weights")
+@open_source.command("weights")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=100, help="Weights loop tempo in blocks")
@@ -147,10 +152,33 @@ def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     )
 
 
-@central_validator.command("signer")
+@open_source.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
     setup_logging()
 
     logger.info("Starting signer-only mode")
     asyncio.run(run_signer())
+
+
+@central_validator.group("private-track")
+def private_track():
+    pass
+
+
+@private_track.command("runner")
+def private_runner_cmd():
+    from scorevision.validator.central.private_track.runner import run_challenge_process
+    setup_logging()
+
+    logger.info("Starting private track challenge runner")
+    run_challenge_process()
+
+
+@private_track.command("spotcheck")
+def private_spotcheck_cmd():
+    from scorevision.validator.central.private_track.runner import run_spotcheck_process
+    setup_logging()
+
+    logger.info("Starting private track spot check loop")
+    run_spotcheck_process()

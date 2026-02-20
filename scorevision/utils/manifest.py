@@ -290,23 +290,25 @@ class Element(BaseModel):
     """
 
     id: str
+    track: str | None = None
     window_block: int | None = None
     eval_window: int | float | None = None
     weight: float | None = None
-    clips: list[Clip]
-    metrics: Metrics
-    preproc: Preproc
-    latency_p95_ms: int
-    service_rate_fps: int
-    pgt_recipe_hash: str
+    clips: list[Clip] = Field(default_factory=list)
+    metrics: Metrics | None = None
+    preproc: Preproc | None = None
+    latency_p95_ms: int | None = None
+    service_rate_fps: int | None = None
+    pgt_recipe_hash: str | None = None
     ground_truth: bool = Field(
         default=False,
         description="If true, use real ground truth fetched from API instead of SAM3 pseudo-GT",
     )
     baseline_theta: float = Field(
-        ge=0.0, description="Score threshold for emissions (min 0.0)"
+        default=0.0, ge=0.0, description="Score threshold for emissions (min 0.0)"
     )
     delta_floor: float = Field(
+        default=0.0,
         ge=0.0,
         description=(
             "Minimum margin above baseline (Q_e floor). "
@@ -315,6 +317,7 @@ class Element(BaseModel):
         ),
     )
     beta: float = Field(
+        default=1.0,
         ge=0.0,
         description="Difficulty weight for emission allocation (must be positive)",
     )
@@ -351,7 +354,8 @@ class Element(BaseModel):
 
     @model_validator(mode="after")
     def validate_id(self):
-        self.category
+        if self.track != "private":
+            self.category
         return self
 
 
@@ -478,6 +482,7 @@ class Manifest(BaseModel):
             elements.append(
                 Element(
                     id=e["id"],
+                    track=e.get("track"),
                     window_block=e.get("window_block"),
                     eval_window=e.get("eval_window"),
                     weight=e.get("weight"),

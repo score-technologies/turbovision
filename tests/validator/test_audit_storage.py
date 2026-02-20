@@ -148,6 +148,8 @@ async def test_commit_audit_index_on_start_skip_env(monkeypatch):
 async def test_commit_audit_index_on_start_commits(monkeypatch):
     settings = SimpleNamespace(
         AUDIT_R2_BUCKET_PUBLIC_URL="https://pub-audit.r2.dev",
+        SCOREVISION_PUBLIC_RESULTS_URL="",
+        AUDIT_R2_RESULTS_PREFIX="audit_spotcheck",
     )
     monkeypatch.setenv("AUDIT_COMMIT_VALIDATOR_ON_START", "1")
     with patch("scorevision.validator.audit.open_source.storage.get_settings", return_value=settings), \
