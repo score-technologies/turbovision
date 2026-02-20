@@ -35,6 +35,7 @@ services:
     container_name: scorevision-central-runner
     profiles: ["owner"]
     environment:
+      SIGNER_URL: http://central-signer:8080
       SCOREVISION_BLACKLIST_PATH: /app/blacklist
       MALLOC_ARENA_MAX: "2"
       PYTHONMALLOC: "malloc"
@@ -42,6 +43,9 @@ services:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
       - ./blacklist:/app/blacklist:ro
+    depends_on:
+      central-signer:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -87,6 +91,7 @@ services:
     container_name: scorevision-audit-spotcheck
     profiles: ["owner", "validator"]
     environment:
+      SIGNER_URL: http://central-signer:8080
       SCOREVISION_CACHE_DIR: /app/data/blocks
       SCOREVISION_BLACKLIST_PATH: /app/blacklist
       MALLOC_ARENA_MAX: "2"
