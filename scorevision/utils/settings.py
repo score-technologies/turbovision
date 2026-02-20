@@ -232,7 +232,7 @@ def get_settings() -> Settings:
             getenv("SCOREVISION_WINDOW_DELTA_ABS", 0.003)
         ),
         SCOREVISION_WINDOW_DELTA_REL=float(
-            getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
+            getenv("SCOREVISION_WINDOW_DELTA_REL", 0.03)
         ),
     )
 
