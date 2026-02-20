@@ -545,11 +545,30 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
+            zero_score_eps = 1e-12
+            candidate_uids = {
+                uid
+                for uid, s in S_by_m.items()
+                if abs(float(s or 0.0)) > zero_score_eps
+            }
+            excluded_zero_uids = [
+                uid
+                for uid, s in S_by_m.items()
+                if uid != winner_uid and abs(float(s or 0.0)) <= zero_score_eps
+            ]
+            candidate_uids.add(winner_uid)
+            if excluded_zero_uids:
+                logger.info(
+                    "[window-tiebreak] Excluding %d zero-score miners from tiebreak candidate set",
+                    len(excluded_zero_uids),
+                )
+
             challenge_scores_by_V_m = await _collect_recent_challenge_scores_by_V_m(
                 tail=tail,
                 validator_indexes=validator_indexes,
                 hk_to_uid=hk_to_uid,
                 K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
+                eligible_uids=candidate_uids,
             )
 
             challenge_scores_by_m = _aggregate_challenge_scores_by_m(
@@ -558,8 +577,6 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
 
             uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
             first_commit_block_by_hk = await _first_commit_block_by_miner(NETUID)
-
-            candidate_uids = set(S_by_m.keys())
 
             final_uid = _pick_winner_with_window_tiebreak(
                 winner_uid,
@@ -726,6 +743,7 @@ async def _collect_recent_challenge_scores_by_V_m(
     hk_to_uid: dict[str, int],
     *,
     K: int = 25,
+    eligible_uids: set[int] | None = None,
 ) -> dict[tuple[str, int], deque]:
 
     challenge_scores_by_V_m: dict[tuple[str, int], deque] = defaultdict(
@@ -740,6 +758,8 @@ async def _collect_recent_challenge_scores_by_V_m(
             if not miner_hk or miner_hk not in hk_to_uid:
                 continue
             m = hk_to_uid[miner_hk]
+            if eligible_uids is not None and m not in eligible_uids:
+                continue
             V = (line.get("hotkey") or "").strip()
             if not V:
                 continue
@@ -812,31 +832,77 @@ def _are_similar_by_challenges(
     delta_abs: float,
     delta_rel: float,
     min_common_challenges: int = 5,
-) -> bool:
+) -> tuple[bool, dict[str, object]]:
 
     common_challenges = set()
     all_challenges = set(challenge_scores1.keys()) | set(challenge_scores2.keys())
-    
+
     for challenge_id in all_challenges:
         score1 = challenge_scores1.get(challenge_id, 0.0)
         score2 = challenge_scores2.get(challenge_id, 0.0)
         if abs(score1) > 1e-9 and abs(score2) > 1e-9:
             common_challenges.add(challenge_id)
-    
+
+    compared = len(common_challenges)
+    debug_stats: dict[str, object] = {
+        "all_challenges": len(all_challenges),
+        "compared_challenges": compared,
+        "min_common_challenges": min_common_challenges,
+        "failed_score_challenges": 0,
+        "max_abs_diff": 0.0,
+        "max_abs_diff_challenge_id": None,
+        "max_abs_diff_threshold": 0.0,
+        "failed_examples": [],
+    }
+
     if len(common_challenges) < min_common_challenges:
-        return False
-    
+        debug_stats["reason"] = "insufficient_common_challenges"
+        return False, debug_stats
+
+    failed_examples: list[dict[str, object]] = []
+    failed_count = 0
+    max_abs_diff = 0.0
+    max_abs_diff_challenge_id: str | None = None
+    max_abs_diff_threshold = 0.0
+
     for challenge_id in common_challenges:
         score1 = challenge_scores1[challenge_id]
         score2 = challenge_scores2[challenge_id]
-        
+
         max_score = max(abs(score1), abs(score2))
         threshold = max(delta_abs, delta_rel * max_score)
-        
-        if abs(score1 - score2) > threshold:
-            return False
-    
-    return True
+        abs_diff = abs(score1 - score2)
+
+        if abs_diff > max_abs_diff:
+            max_abs_diff = abs_diff
+            max_abs_diff_challenge_id = challenge_id
+            max_abs_diff_threshold = threshold
+
+        if abs_diff > threshold:
+            failed_count += 1
+            if len(failed_examples) < 3:
+                failed_examples.append(
+                    {
+                        "challenge_id": challenge_id,
+                        "score1": round(score1, 6),
+                        "score2": round(score2, 6),
+                        "abs_diff": round(abs_diff, 6),
+                        "threshold": round(threshold, 6),
+                    }
+                )
+
+    debug_stats["failed_score_challenges"] = failed_count
+    debug_stats["max_abs_diff"] = round(max_abs_diff, 6)
+    debug_stats["max_abs_diff_challenge_id"] = max_abs_diff_challenge_id
+    debug_stats["max_abs_diff_threshold"] = round(max_abs_diff_threshold, 6)
+    debug_stats["failed_examples"] = failed_examples
+
+    if failed_count > 0:
+        debug_stats["reason"] = "score_delta_exceeded"
+        return False, debug_stats
+
+    debug_stats["reason"] = "all_common_challenges_within_threshold"
+    return True, debug_stats
 
 
 def _pick_winner_with_window_tiebreak(
@@ -865,13 +931,36 @@ def _pick_winner_with_window_tiebreak(
         if not challenge_scores:
             continue
         
-        if _are_similar_by_challenges(
+        is_similar, similarity_debug = _are_similar_by_challenges(
             winner_scores,
             challenge_scores,
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=5,
-        ):
+        )
+
+        logger.debug(
+            "[window-tiebreak] compare winner uid=%d hk=%s vs uid=%d hk=%s -> "
+            "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
+            "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
+            "failed_examples=%s",
+            winner_uid,
+            uid_to_hk.get(winner_uid, ""),
+            m,
+            uid_to_hk.get(m, ""),
+            is_similar,
+            similarity_debug.get("reason"),
+            similarity_debug.get("all_challenges"),
+            similarity_debug.get("compared_challenges"),
+            similarity_debug.get("min_common_challenges"),
+            similarity_debug.get("failed_score_challenges"),
+            similarity_debug.get("max_abs_diff"),
+            similarity_debug.get("max_abs_diff_threshold"),
+            similarity_debug.get("max_abs_diff_challenge_id"),
+            similarity_debug.get("failed_examples"),
+        )
+
+        if is_similar:
             similar_uids.append(m)
             logger.debug(
                 f"[window-tiebreak] Miner {m} is similar to provisional winner {winner_uid} "
