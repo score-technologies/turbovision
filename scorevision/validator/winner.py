@@ -1,4 +1,4 @@
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from logging import getLogger
 
 from scorevision.utils.bittensor_helpers import (
@@ -176,33 +176,73 @@ async def get_winner_for_element(
     sums_by_miner: dict[int, float] = {}
     cnt_by_miner: dict[int, int] = {}
     miner_meta_by_hk: dict[str, MinerMeta] = {}
+    diagnostics = Counter()
+    observed_windows: set[str] = set()
+    unknown_miner_hotkeys: set[str] = set()
+    source_indexes: set[str] = set()
 
     async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
+        diagnostics["lines_total"] += 1
+        src_index = str(line.get("_src_index") or "").strip()
+        if src_index:
+            source_indexes.add(src_index)
         try:
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:
+                diagnostics["skip_element_mismatch"] += 1
                 continue
             payload_window = payload.get("window_id") or (
                 (payload.get("telemetry") or {}).get("window_id")
             )
             if payload_window != current_window_id:
+                diagnostics["skip_window_mismatch"] += 1
+                if payload_window and len(observed_windows) < 5:
+                    observed_windows.add(str(payload_window))
+                continue
+            telemetry = payload.get("telemetry") or {}
+            miner_info = telemetry.get("miner") or {}
+            miner_hk = (miner_info.get("hotkey") or "").strip()
+            if not miner_hk:
+                diagnostics["skip_missing_miner_hotkey"] += 1
+                continue
+            if miner_hk not in hk_to_uid:
+                diagnostics["skip_unknown_miner_hotkey"] += 1
+                if len(unknown_miner_hotkeys) < 5:
+                    unknown_miner_hotkeys.add(miner_hk)
                 continue
             miner_uid, score = extract_miner_and_score(payload, hk_to_uid)
-            if miner_uid is None:
+            if miner_uid is None or score is None:
+                diagnostics["skip_extract_failed"] += 1
                 continue
             miner_meta = extract_miner_meta(payload)
             if miner_meta:
                 miner_meta_by_hk[miner_meta.hotkey] = miner_meta
         except Exception:
+            diagnostics["skip_parse_error"] += 1
             continue
+        diagnostics["accepted_lines"] += 1
         sums_by_miner[miner_uid] = sums_by_miner.get(miner_uid, 0.0) + score
         cnt_by_miner[miner_uid] = cnt_by_miner.get(miner_uid, 0) + 1
 
     if not cnt_by_miner:
         logger.warning(
-            "[winner] No central validator data for element_id=%s window_id=%s -> fallback",
+            "[winner] No central validator data for element_id=%s window_id=%s -> fallback "
+            "(lines=%d accepted=%d skip_window=%d skip_unknown_hotkey=%d "
+            "skip_missing_hotkey=%d skip_element=%d skip_extract=%d parse_errors=%d "
+            "source_indexes=%d observed_windows=%s unknown_hotkeys=%s)",
             element_id,
             current_window_id,
+            diagnostics["lines_total"],
+            diagnostics["accepted_lines"],
+            diagnostics["skip_window_mismatch"],
+            diagnostics["skip_unknown_miner_hotkey"],
+            diagnostics["skip_missing_miner_hotkey"],
+            diagnostics["skip_element_mismatch"],
+            diagnostics["skip_extract_failed"],
+            diagnostics["skip_parse_error"],
+            len(source_indexes),
+            ",".join(sorted(observed_windows)) if observed_windows else "-",
+            ",".join(sorted(unknown_miner_hotkeys)) if unknown_miner_hotkeys else "-",
         )
         VALIDATOR_MINERS_CONSIDERED.set(0)
         return (
