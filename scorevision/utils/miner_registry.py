@@ -8,7 +8,6 @@ import aiohttp
 from huggingface_hub import HfApi
 
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
-from scorevision.utils.blacklist import load_blacklisted_hotkeys
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -154,6 +153,7 @@ async def get_miners_from_registry(
     netuid: int,
     *,
     element_id: str | None = None,
+    blacklisted_hotkeys: set[str] | None = None,
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision and Chutes slug,
@@ -162,7 +162,8 @@ async def get_miners_from_registry(
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
 
-    blacklisted_hotkeys = load_blacklisted_hotkeys()
+    if blacklisted_hotkeys is None:
+        blacklisted_hotkeys = set()
     if blacklisted_hotkeys:
         logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
 

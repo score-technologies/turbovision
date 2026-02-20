@@ -33,7 +33,7 @@ from scorevision.utils.bittensor_helpers import (
     on_chain_commit_validator_retry,
     _already_committed_same_index,
 )
-from scorevision.utils.blacklist import load_blacklisted_hotkeys
+from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
 from scorevision.utils.cloudflare_helpers import (
     ensure_index_exists,
     build_public_index_url_from_public_base,
@@ -241,9 +241,15 @@ async def weights_loop(
             central_validator_hotkey or "<unset>",
         )
 
+    blacklist_api = (
+        BlacklistAPI(settings.BLACKLIST_API_URL, wallet.hotkey)
+        if settings.BLACKLIST_API_URL
+        else None
+    )
+
     while not shutdown_event.is_set():
         try:
-            blacklisted_hotkeys = load_blacklisted_hotkeys()
+            blacklisted_hotkeys = await fetch_blacklisted_hotkeys(blacklist_api)
             if blacklisted_hotkeys:
                 logger.info("[weights] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
 
