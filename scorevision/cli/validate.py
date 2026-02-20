@@ -939,7 +939,7 @@ def _pick_winner_with_window_tiebreak(
             min_common_challenges=5,
         )
 
-        logger.debug(
+        logger.info(
             "[window-tiebreak] compare winner uid=%d hk=%s vs uid=%d hk=%s -> "
             "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
             "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
@@ -962,13 +962,13 @@ def _pick_winner_with_window_tiebreak(
 
         if is_similar:
             similar_uids.append(m)
-            logger.debug(
+            logger.info(
                 f"[window-tiebreak] Miner {m} is similar to provisional winner {winner_uid} "
                 f"by challenge comparison"
             )
     
     if len(similar_uids) == 1:
-        logger.debug(
+        logger.info(
             f"[window-tiebreak] No similar miners found; provisional winner {winner_uid} wins"
         )
         return winner_uid
