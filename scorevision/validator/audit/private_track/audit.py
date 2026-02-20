@@ -10,6 +10,10 @@ from scorevision.utils.settings import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _is_weight_eligible_result(result: dict) -> bool:
+    return result.get("timed_out") is not True
+
+
 async def fetch_private_shards(
     public_index_url: str, tail_blocks: int
 ) -> list[dict]:
@@ -42,6 +46,8 @@ def aggregate_scores(results: list[dict]) -> dict[str, tuple[float, int]]:
     counts: dict[str, int] = defaultdict(int)
 
     for result in results:
+        if not _is_weight_eligible_result(result):
+            continue
         hotkey = result.get("miner_hotkey")
         score = result.get("score")
         if not hotkey or score is None:
