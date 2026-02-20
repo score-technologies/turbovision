@@ -21,6 +21,10 @@ from scorevision.validator.models import PrivateEvaluationResult
 logger = logging.getLogger(__name__)
 
 
+def _is_weight_eligible_result(result: dict) -> bool:
+    return result.get("timed_out") is not True
+
+
 async def fetch_video_segments(api_url: str, keypair=None) -> list[dict]:
     if not api_url:
         return []
@@ -131,31 +135,62 @@ async def _challenge_miner(
     timeout: float,
     block: int,
 ) -> dict:
-    response = await send_challenge(miner, challenge, keypair, timeout=timeout)
+    try:
+        attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
+        response = attempt.response
+        is_scored = response is not None and not attempt.timed_out
 
-    if response:
-        score = score_predictions(response.predictions, challenge.ground_truth)
-        pred_count = len(response.predictions)
-        proc_time = response.processing_time
-    else:
-        score = 0.0
-        pred_count = 0
-        proc_time = 0.0
+        if is_scored:
+            score = score_predictions(response.predictions, challenge.ground_truth)
+            pred_count = len(response.predictions)
+        else:
+            score = 0.0
+            pred_count = 0
 
-    logger.info("Miner %s: score=%.3f", miner.hotkey, score)
+        if is_scored:
+            logger.info(
+                "Miner %s: score=%.3f response_time=%.3fs",
+                miner.hotkey,
+                score,
+                attempt.elapsed_s,
+            )
+        else:
+            logger.warning(
+                "Miner %s excluded from private scoring response_time=%.3fs threshold=%.3fs",
+                miner.hotkey,
+                attempt.elapsed_s,
+                timeout,
+            )
 
-    return asdict(PrivateEvaluationResult(
-        challenge_id=challenge.challenge_id,
-        miner_hotkey=miner.hotkey,
-        miner_uid=miner.uid,
-        score=score,
-        prediction_count=pred_count,
-        ground_truth_count=len(challenge.ground_truth),
-        processing_time=proc_time,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        block=block,
-        video_url=challenge.video_url,
-    ))
+        return asdict(PrivateEvaluationResult(
+            challenge_id=challenge.challenge_id,
+            miner_hotkey=miner.hotkey,
+            miner_uid=miner.uid,
+            score=score,
+            prediction_count=pred_count,
+            ground_truth_count=len(challenge.ground_truth),
+            processing_time=attempt.elapsed_s,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            block=block,
+            video_url=challenge.video_url,
+            response_time_s=attempt.elapsed_s,
+            timed_out=attempt.timed_out,
+        ))
+    except Exception as e:
+        logger.error("Miner %s challenge processing failed: %s", miner.hotkey, e)
+        return asdict(PrivateEvaluationResult(
+            challenge_id=challenge.challenge_id,
+            miner_hotkey=miner.hotkey,
+            miner_uid=miner.uid,
+            score=0.0,
+            prediction_count=0,
+            ground_truth_count=len(challenge.ground_truth),
+            processing_time=0.0,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            block=block,
+            video_url=challenge.video_url,
+            timed_out=True,
+        ))
 
 
 async def challenge_loop() -> None:
@@ -238,7 +273,11 @@ async def spotcheck_loop() -> None:
                 await asyncio.sleep(settings.PRIVATE_SPOTCHECK_INTERVAL_S)
                 continue
 
-            eligible = [r for r in results if r.get("miner_hotkey") in registered_hotkeys]
+            eligible = [
+                r
+                for r in results
+                if r.get("miner_hotkey") in registered_hotkeys and _is_weight_eligible_result(r)
+            ]
             if not eligible:
                 logger.info("No eligible miners with recent results for spot check")
                 await asyncio.sleep(settings.PRIVATE_SPOTCHECK_INTERVAL_S)

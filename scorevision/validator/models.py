@@ -64,6 +64,8 @@ class PrivateEvaluationResult:
     timestamp: str
     block: int
     video_url: str = ""
+    response_time_s: float = 0.0
+    timed_out: bool = False
 
 
 @dataclass
@@ -74,4 +76,3 @@ class PrivateTrackMinerMeta:
     image_tag: str | None = None
     ip: str | None = None
     port: int | None = None
-

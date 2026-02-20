@@ -333,7 +333,7 @@ def get_settings() -> Settings:
         # Private Track
         PRIVATE_CHALLENGE_INTERVAL_S=int(getenv("PRIVATE_CHALLENGE_INTERVAL_S", 1800)),
         PRIVATE_SPOTCHECK_INTERVAL_S=int(getenv("PRIVATE_SPOTCHECK_INTERVAL_S", 18000)),
-        PRIVATE_MINER_TIMEOUT_S=float(getenv("PRIVATE_MINER_TIMEOUT_S", 120.0)),
+        PRIVATE_MINER_TIMEOUT_S=float(getenv("PRIVATE_MINER_TIMEOUT_S", 30.0)),
         PRIVATE_GT_API_URL=getenv("PRIVATE_GT_API_URL", ""),
         PRIVATE_R2_RESULTS_PREFIX=getenv("PRIVATE_R2_RESULTS_PREFIX", "privatevision_results"),
         PRIVATE_R2_PUBLIC_INDEX_URL=getenv("PRIVATE_R2_PUBLIC_INDEX_URL", ""),

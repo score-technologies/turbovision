@@ -37,6 +37,20 @@ def test_aggregate_scores_empty():
     assert aggregate_scores([]) == {}
 
 
+def test_aggregate_scores_skips_timed_out_results():
+    results = [
+        {"miner_hotkey": "hk1", "score": 0.9},
+        {"miner_hotkey": "hk1", "score": 0.8, "timed_out": True},
+        {"miner_hotkey": "hk2", "score": 0.7, "timed_out": True},
+        {"miner_hotkey": "hk2", "score": 0.6},
+    ]
+    scores = aggregate_scores(results)
+    assert scores == {
+        "hk1": (0.9, 1),
+        "hk2": (0.6, 1),
+    }
+
+
 def test_map_hotkey_scores_to_uids():
     scores_by_hotkey = {
         "hk_a": (4.0, 4),
