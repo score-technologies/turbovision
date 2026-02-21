@@ -105,6 +105,8 @@ async def collect_recent_challenge_scores_by_validator_miner(
     element_id: str,
     current_window_id: str,
     K: int = 25,
+    eligible_uids: set[int] | None = None,
+    excluded_uids: set[int] | None = None,
 ) -> dict[tuple[str, int], deque]:
     challenge_scores: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=K))
     async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
@@ -114,6 +116,10 @@ async def collect_recent_challenge_scores_by_validator_miner(
                 continue
             miner_uid, score = extract_miner_and_score(payload, hk_to_uid)
             if miner_uid is None:
+                continue
+            if eligible_uids is not None and miner_uid not in eligible_uids:
+                continue
+            if excluded_uids is not None and miner_uid in excluded_uids:
                 continue
             validator_hk = (line.get("hotkey") or "").strip()
             if not validator_hk:
@@ -294,8 +300,31 @@ async def get_winner_for_element(
         tail,
     )
 
+    winner_from_tiebreak_only_pool = False
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
+            zero_score_eps = 1e-12
+            eligible_non_zero_uids = {
+                uid for uid, score in scores_by_miner.items() if abs(float(score or 0.0)) > zero_score_eps
+            }
+            excluded_zero_uids = [
+                uid
+                for uid, score in scores_by_miner.items()
+                if uid != winner_uid and abs(float(score or 0.0)) <= zero_score_eps
+            ]
+            candidate_uids = set(eligible_non_zero_uids)
+            candidate_uids.add(winner_uid)
+            if excluded_zero_uids:
+                logger.info(
+                    "[window-tiebreak] Element=%s | Excluding %d zero-score miners from candidate set",
+                    element_id,
+                    len(excluded_zero_uids),
+                )
+
+            excluded_uids_for_tiebreak: set[int] = set()
+            if validator_uid is not None:
+                excluded_uids_for_tiebreak.add(validator_uid)
+
             challenge_scores_by_validator_miner = await collect_recent_challenge_scores_by_validator_miner(
                 tail=tail,
                 validator_indexes=validator_indexes,
@@ -303,10 +332,26 @@ async def get_winner_for_element(
                 element_id=element_id,
                 current_window_id=current_window_id,
                 K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
+                eligible_uids=None,
+                excluded_uids=excluded_uids_for_tiebreak,
             )
             challenge_scores_by_miner = aggregate_challenge_scores_by_miner(challenge_scores_by_validator_miner)
+
+            additional_tiebreak_uids = {
+                uid for uid in challenge_scores_by_miner.keys() if uid not in excluded_uids_for_tiebreak
+            }
+            if additional_tiebreak_uids:
+                candidate_uids.update(additional_tiebreak_uids)
+
+            tiebreak_only_uids = candidate_uids.difference(set(scores_by_miner.keys()))
+            if tiebreak_only_uids:
+                logger.info(
+                    "[window-tiebreak] Element=%s | Added %d non-eligible miners to tiebreak pool",
+                    element_id,
+                    len(tiebreak_only_uids),
+                )
+
             first_commit_block_by_hk = await _first_commit_block_by_miner(netuid)
-            candidate_uids = set(scores_by_miner.keys())
             final_uid = pick_winner_with_tiebreak(
                 winner_uid,
                 uid_to_hk=uid_to_hk,
@@ -325,6 +370,7 @@ async def get_winner_for_element(
                     final_uid,
                 )
                 winner_uid = final_uid
+            winner_from_tiebreak_only_pool = winner_uid in tiebreak_only_uids
         except Exception as e:
             logger.warning("[window-tiebreak] Element=%s disabled due to error: %s", element_id, e)
 
@@ -337,7 +383,18 @@ async def get_winner_for_element(
     )
 
     TARGET_UID = 6
+    winner_has_eligible_score = winner_uid in scores_by_miner
     final_score = float(scores_by_miner.get(winner_uid, 0.0) or 0.0)
+
+    if winner_from_tiebreak_only_pool or not winner_has_eligible_score:
+        logger.info(
+            "[window-tiebreak] Element=%s | Winner uid=%d came from non-eligible pool -> routing to TARGET_UID=%d",
+            element_id,
+            winner_uid,
+            TARGET_UID,
+        )
+        winner_uid = TARGET_UID
+        final_score = float(scores_by_miner.get(TARGET_UID, 0.0) or 0.0)
 
     if abs(final_score) <= 1e-12:
         logger.info(

@@ -1,6 +1,9 @@
 from collections import deque
+from logging import getLogger
 from statistics import median
 from scorevision.utils.settings import get_settings
+
+logger = getLogger(__name__)
 
 
 def weighted_median(values: list[float], weights: list[float]) -> float:
@@ -62,6 +65,82 @@ def are_similar_by_challenges(
     return True
 
 
+def _are_similar_by_challenges_debug(
+    challenge_scores1: dict[str, float],
+    challenge_scores2: dict[str, float],
+    *,
+    delta_abs: float,
+    delta_rel: float,
+    min_common_challenges: int = 5,
+) -> tuple[bool, dict[str, object]]:
+    common_challenges = set()
+    all_challenges = set(challenge_scores1.keys()) | set(challenge_scores2.keys())
+    for challenge_id in all_challenges:
+        score1 = float(challenge_scores1.get(challenge_id, 0.0) or 0.0)
+        score2 = float(challenge_scores2.get(challenge_id, 0.0) or 0.0)
+        if abs(score1) > 1e-9 and abs(score2) > 1e-9:
+            common_challenges.add(challenge_id)
+
+    debug_stats: dict[str, object] = {
+        "all_challenges": len(all_challenges),
+        "compared_challenges": len(common_challenges),
+        "min_common_challenges": min_common_challenges,
+        "failed_score_challenges": 0,
+        "max_abs_diff": 0.0,
+        "max_abs_diff_challenge_id": None,
+        "max_abs_diff_threshold": 0.0,
+        "failed_examples": [],
+    }
+
+    if len(common_challenges) < min_common_challenges:
+        debug_stats["reason"] = "insufficient_common_challenges"
+        return False, debug_stats
+
+    failed_examples: list[dict[str, object]] = []
+    failed_count = 0
+    max_abs_diff = 0.0
+    max_abs_diff_challenge_id: str | None = None
+    max_abs_diff_threshold = 0.0
+
+    for challenge_id in common_challenges:
+        score1 = float(challenge_scores1.get(challenge_id, 0.0) or 0.0)
+        score2 = float(challenge_scores2.get(challenge_id, 0.0) or 0.0)
+        max_score = max(abs(score1), abs(score2))
+        threshold = max(delta_abs, delta_rel * max_score)
+        abs_diff = abs(score1 - score2)
+
+        if abs_diff > max_abs_diff:
+            max_abs_diff = abs_diff
+            max_abs_diff_challenge_id = challenge_id
+            max_abs_diff_threshold = threshold
+
+        if abs_diff > threshold:
+            failed_count += 1
+            if len(failed_examples) < 3:
+                failed_examples.append(
+                    {
+                        "challenge_id": challenge_id,
+                        "score1": round(score1, 6),
+                        "score2": round(score2, 6),
+                        "abs_diff": round(abs_diff, 6),
+                        "threshold": round(threshold, 6),
+                    }
+                )
+
+    debug_stats["failed_score_challenges"] = failed_count
+    debug_stats["max_abs_diff"] = round(max_abs_diff, 6)
+    debug_stats["max_abs_diff_challenge_id"] = max_abs_diff_challenge_id
+    debug_stats["max_abs_diff_threshold"] = round(max_abs_diff_threshold, 6)
+    debug_stats["failed_examples"] = failed_examples
+
+    if failed_count > 0:
+        debug_stats["reason"] = "score_delta_exceeded"
+        return False, debug_stats
+
+    debug_stats["reason"] = "all_common_challenges_within_threshold"
+    return True, debug_stats
+
+
 def aggregate_challenge_scores_by_miner(
     challenge_scores_by_validator_miner: dict[tuple[str, int], deque],
 ) -> dict[int, dict[str, float]]:
@@ -95,16 +174,40 @@ def pick_winner_with_tiebreak(
         scores = challenge_scores_by_miner.get(miner_uid)
         if not scores:
             continue
-        if are_similar_by_challenges(
+        is_similar, similarity_debug = _are_similar_by_challenges_debug(
             winner_scores,
             scores,
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=min_common_challenges,
-        ):
+        )
+
+        logger.info(
+            "[window-tiebreak] compare winner uid=%d hk=%s vs uid=%d hk=%s -> "
+            "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
+            "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
+            "failed_examples=%s",
+            winner_uid,
+            uid_to_hk.get(winner_uid, ""),
+            miner_uid,
+            uid_to_hk.get(miner_uid, ""),
+            is_similar,
+            similarity_debug.get("reason"),
+            similarity_debug.get("all_challenges"),
+            similarity_debug.get("compared_challenges"),
+            similarity_debug.get("min_common_challenges"),
+            similarity_debug.get("failed_score_challenges"),
+            similarity_debug.get("max_abs_diff"),
+            similarity_debug.get("max_abs_diff_threshold"),
+            similarity_debug.get("max_abs_diff_challenge_id"),
+            similarity_debug.get("failed_examples"),
+        )
+        if is_similar:
             similar_uids.append(miner_uid)
     if len(similar_uids) == 1:
+        logger.info("[window-tiebreak] No similar miners found; provisional winner %d wins", winner_uid)
         return winner_uid
+    logger.info("[window-tiebreak] Found %d similar miners: %s", len(similar_uids), similar_uids)
     best_uid = winner_uid
     best_blk = None
     for miner_uid in similar_uids:
@@ -113,8 +216,11 @@ def pick_winner_with_tiebreak(
             continue
         blk = first_commit_block_by_hk.get(hk)
         candidate = int(blk) if blk is not None else 10**18
-        if (best_blk is None) or (candidate < best_blk):
+        if (
+            (best_blk is None)
+            or (candidate < best_blk)
+            or (candidate == best_blk and hk < uid_to_hk.get(best_uid, ""))
+        ):
             best_blk = candidate
             best_uid = miner_uid
     return best_uid
-
