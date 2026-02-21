@@ -52,7 +52,7 @@ services:
           "CMD",
           "/bin/sh",
           "-lc",
-          "if [ -z \"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\" ]; then exit 0; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; if [ \"$$current\" = \"$$SCOREVISION_CENTRAL_VALIDATOR_HOTKEY\" ]; then ps -o pid= 1 >/dev/null; else exit 0; fi",
+          "if [ -z \"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\" ]; then exit 0; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; if [ \"$$current\" = \"$$SCOREVISION_CENTRAL_VALIDATOR_HOTKEY\" ]; then kill -0 1; else exit 0; fi",
         ]
       interval: 30s
       timeout: 10s

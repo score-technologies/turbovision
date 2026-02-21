@@ -279,13 +279,13 @@ def get_settings() -> Settings:
             "SCOREVISION_WINDOW_TIEBREAK_ENABLE", True
         ),
         SCOREVISION_WINDOW_K_PER_VALIDATOR=int(
-            getenv("SCOREVISION_WINDOW_K_PER_VALIDATOR", 25)
+            getenv("SCOREVISION_WINDOW_K_PER_VALIDATOR", 6)
         ),
         SCOREVISION_WINDOW_DELTA_ABS=float(
             getenv("SCOREVISION_WINDOW_DELTA_ABS", 0.003)
         ),
         SCOREVISION_WINDOW_DELTA_REL=float(
-            getenv("SCOREVISION_WINDOW_DELTA_REL", 0.01)
+            getenv("SCOREVISION_WINDOW_DELTA_REL", 0.03)
         ),
         SCOREVISION_WINDOW_HALF_LIFE=float(getenv("SCOREVISION_WINDOW_HALF_LIFE", 3.0)),
         SCOREVISION_CENTRAL_VALIDATOR_HOTKEY=getenv(
