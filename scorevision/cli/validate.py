@@ -505,8 +505,12 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
         )
         S_by_m.pop(validator_uid, None)
 
+    uid_to_hk = {uid: hk for hk, uid in hk_to_uid.items()}
+    blacklisted_uids_all = {
+        uid for uid, hk in uid_to_hk.items() if hk in blacklisted_hotkeys
+    }
+
     if blacklisted_hotkeys:
-        uid_to_hk = {uid: hk for hk, uid in hk_to_uid.items()}
         blacklisted_uids = [
             uid
             for uid in list(S_by_m.keys())
@@ -542,11 +546,12 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     )
     CURRENT_WINNER.set(winner_uid)
     VALIDATOR_WINNER_SCORE.set(S_by_m.get(winner_uid, 0.0))
+    winner_from_tiebreak_only_pool = False
 
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
             zero_score_eps = 1e-12
-            candidate_uids = {
+            eligible_non_zero_uids = {
                 uid
                 for uid, s in S_by_m.items()
                 if abs(float(s or 0.0)) > zero_score_eps
@@ -556,6 +561,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
                 for uid, s in S_by_m.items()
                 if uid != winner_uid and abs(float(s or 0.0)) <= zero_score_eps
             ]
+            candidate_uids = set(eligible_non_zero_uids)
             candidate_uids.add(winner_uid)
             if excluded_zero_uids:
                 logger.info(
@@ -563,19 +569,37 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
                     len(excluded_zero_uids),
                 )
 
+            excluded_uids_for_tiebreak = set(blacklisted_uids_all)
+            if validator_uid is not None:
+                excluded_uids_for_tiebreak.add(validator_uid)
+
             challenge_scores_by_V_m = await _collect_recent_challenge_scores_by_V_m(
                 tail=tail,
                 validator_indexes=validator_indexes,
                 hk_to_uid=hk_to_uid,
                 K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
-                eligible_uids=candidate_uids,
+                eligible_uids=None,
+                excluded_uids=excluded_uids_for_tiebreak,
             )
 
             challenge_scores_by_m = _aggregate_challenge_scores_by_m(
                 challenge_scores_by_V_m
             )
 
-            uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
+            additional_tiebreak_uids = {
+                uid
+                for uid in challenge_scores_by_m.keys()
+                if uid not in excluded_uids_for_tiebreak
+            }
+            if additional_tiebreak_uids:
+                candidate_uids.update(additional_tiebreak_uids)
+            tiebreak_only_uids = candidate_uids.difference(set(S_by_m.keys()))
+            if tiebreak_only_uids:
+                logger.info(
+                    "[window-tiebreak] Added %d non-eligible miners to tiebreak pool",
+                    len(tiebreak_only_uids),
+                )
+
             first_commit_block_by_hk = await _first_commit_block_by_miner(NETUID)
 
             final_uid = _pick_winner_with_window_tiebreak(
@@ -597,6 +621,7 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
                     final_uid,
                 )
                 winner_uid = final_uid
+            winner_from_tiebreak_only_pool = winner_uid in tiebreak_only_uids
 
         except Exception as e:
             logger.warning(
@@ -608,7 +633,18 @@ async def get_weights(tail: int = 36000, m_min: int = 25):
     )
 
     TARGET_UID = 6
+    winner_has_eligible_score = winner_uid in S_by_m
     final_score = float(S_by_m.get(winner_uid, 0.0) or 0.0)
+
+    if winner_from_tiebreak_only_pool or not winner_has_eligible_score:
+        logger.info(
+            "Winner uid=%d came from non-eligible tiebreak pool -> routing all emissions to fallback TARGET_UID=%d",
+            winner_uid,
+            TARGET_UID,
+        )
+        CURRENT_WINNER.set(winner_uid)
+        VALIDATOR_WINNER_SCORE.set(0.0)
+        return [TARGET_UID], [1.0]
 
     if abs(final_score) <= 1e-12:
         logger.info(
@@ -744,6 +780,7 @@ async def _collect_recent_challenge_scores_by_V_m(
     *,
     K: int = 25,
     eligible_uids: set[int] | None = None,
+    excluded_uids: set[int] | None = None,
 ) -> dict[tuple[str, int], deque]:
 
     challenge_scores_by_V_m: dict[tuple[str, int], deque] = defaultdict(
@@ -759,6 +796,8 @@ async def _collect_recent_challenge_scores_by_V_m(
                 continue
             m = hk_to_uid[miner_hk]
             if eligible_uids is not None and m not in eligible_uids:
+                continue
+            if excluded_uids is not None and m in excluded_uids:
                 continue
             V = (line.get("hotkey") or "").strip()
             if not V:
