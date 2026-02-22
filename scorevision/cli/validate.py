@@ -57,6 +57,8 @@ blacklist: list[str] = [
     "5CexEm1NcEm7cBgrDFwiG3bdfixuPiYiYVARoMWipEoTpzqX",
     "5FJ8Xr2YAsUAA1ArHeVy2jMN9CFHDC1nWS4aZq2L4NdAUiSh",
     "5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9",
+    "5GqGwCNnwpBG2KQ3Y4fUoK5MHSSeMj1nhaL6iKBr3CnexsBY",
+    "5DUATFM1hfUu4hUduFTg6DDWjhLUvrqD5SNZyESTffZhgpgB",
 ]
 
 # Global shutdown event for graceful shutdown
