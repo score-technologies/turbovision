@@ -53,8 +53,9 @@ def runner_cmd():
 )
 @click.option(
     "--element-id",
-    required=True,
-    help="Element ID this miner is committing to (e.g. 'bbox', 'keypoints', '0', '1', etc.).",
+    required=False,
+    default=None,
+    help="Element ID to commit. If omitted, sv push reads the manifest and prompts you to choose.",
 )
 def push(
     model_path,
