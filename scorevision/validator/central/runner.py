@@ -658,6 +658,7 @@ async def runner(
                     revision=miner.revision,
                     chute_id=miner.chute_id,
                     commitment_meta=commitment_meta,
+                    commit_block=miner.block,
                 )
             except Exception:
                 emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
@@ -730,6 +731,7 @@ async def runner(
                     revision=miner.revision,
                     chute_id=miner.chute_id,
                     commitment_meta=commitment_meta,
+                    commit_block=miner.block,
                 )
             except Exception:
                 emit_duration_ms = (event_loop.time() - emit_start) * 1000.0

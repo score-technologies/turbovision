@@ -144,6 +144,43 @@ def extract_block_from_key(key: str) -> int | None:
         return None
 
 
+def _extract_path_segments_from_key_or_url(key_or_url: str) -> list[str]:
+    raw_path = urlparse(key_or_url).path if "://" in key_or_url else key_or_url
+    return [p for p in raw_path.split("/") if p]
+
+
+def extract_element_miner_commit_from_key(key_or_url: str) -> tuple[str, str, int]:
+    parts = _extract_path_segments_from_key_or_url(key_or_url)
+    try:
+        root_idx = parts.index("scorevision")
+    except ValueError:
+        return "", "", -1
+
+    if len(parts) <= root_idx + 4:
+        return "", "", -1
+
+    element_id = parts[root_idx + 1]
+    miner_hotkey = parts[root_idx + 2]
+    maybe_commit_or_kind = parts[root_idx + 3]
+
+    if maybe_commit_or_kind in ("evaluation", "responses"):
+        return element_id, miner_hotkey, -1
+
+    try:
+        commit_block = int(maybe_commit_or_kind)
+    except Exception:
+        return "", "", -1
+
+    if commit_block < 0 or len(parts) <= root_idx + 5:
+        return "", "", -1
+
+    kind = parts[root_idx + 4]
+    if kind not in ("evaluation", "responses"):
+        return "", "", -1
+
+    return element_id, miner_hotkey, commit_block
+
+
 def filter_keys_by_tail(
     keys: list[str], tail_blocks: int
 ) -> tuple[list[str], int, int]:
@@ -163,3 +200,26 @@ def filter_keys_by_tail(
 
     return filtered, max_block, min_keep
 
+
+def filter_keys_by_latest_commit_by_miner(keys: list[str]) -> list[str]:
+    latest_commit_by_miner: dict[tuple[str, str], int] = {}
+    parsed: list[tuple[str, str, int, str]] = []
+
+    for key in keys:
+        element, miner, commit_block = extract_element_miner_commit_from_key(key)
+        parsed.append((element, miner, commit_block, key))
+        if not element or not miner:
+            continue
+        pair = (element, miner)
+        prev = latest_commit_by_miner.get(pair)
+        if prev is None or commit_block > prev:
+            latest_commit_by_miner[pair] = commit_block
+
+    filtered: list[str] = []
+    for element, miner, commit_block, key in parsed:
+        if not element or not miner:
+            filtered.append(key)
+            continue
+        if latest_commit_by_miner.get((element, miner), -1) == commit_block:
+            filtered.append(key)
+    return filtered

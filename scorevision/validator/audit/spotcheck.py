@@ -19,6 +19,7 @@ from scorevision.utils.manifest import Manifest, get_current_manifest, load_mani
 from scorevision.utils.r2_public import (
     extract_block_from_key,
     fetch_index_keys,
+    filter_keys_by_latest_commit_by_miner,
     fetch_miner_predictions,
     fetch_responses_data,
     fetch_shard_lines,
@@ -133,6 +134,7 @@ async def fetch_random_challenge_record(
         return None
 
     filtered_keys, max_block, min_keep = filter_keys_by_tail(index_keys, tail_blocks)
+    filtered_keys = filter_keys_by_latest_commit_by_miner(filtered_keys)
 
     if not filtered_keys:
         logger.warning("No valid shard keys found within tail window")

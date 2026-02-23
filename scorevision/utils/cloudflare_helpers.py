@@ -275,6 +275,7 @@ async def emit_shard(
     revision: str | None = None,
     chute_id: str | None = None,
     commitment_meta: dict | None = None,
+    commit_block: int | None = None,
 ) -> None:
 
     st = await get_subtensor()
@@ -295,7 +296,19 @@ async def emit_shard(
     safe_element_id = safe_element_id.replace("/", "_")
 
     base_prefix = "scorevision"
-    prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/"
+    commit_block_for_path = None
+    try:
+        if commit_block is not None:
+            commit_block_for_path = max(0, int(commit_block))
+        elif isinstance(commitment_meta, dict) and commitment_meta.get("commit_block") is not None:
+            commit_block_for_path = max(0, int(commitment_meta.get("commit_block")))
+    except Exception:
+        commit_block_for_path = None
+
+    if commit_block_for_path is None:
+        prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/"
+    else:
+        prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/{commit_block_for_path:09d}/"
 
     eval_key = f"{prefix}evaluation/{shard_block:09d}-{challenge.challenge_id}.json"
     resp_key = f"{prefix}responses/{shard_block:09d}-{challenge.challenge_id}.json"
@@ -468,21 +481,44 @@ async def dataset_sv(tail: int, *, max_concurrency: int = None):
     sem = asyncio.Semaphore(int(os.getenv("SCOREVISION_DATASET_PREFETCH", "8")))
     index = await _index_list()
 
-    pairs: list[tuple[int, str]] = []
+    pairs: list[tuple[int, str, str, str, int]] = []
     for k in index:
         name = Path(k).name
         try:
             b = int(name.split("-", 1)[0])
-            pairs.append((b, k))
+            element, miner, commit_block = _extract_element_miner_commit_tuple_from_key_or_url(k)
+            pairs.append((b, k, element, miner, commit_block))
         except Exception:
             continue
     if not pairs:
         return
+
+    latest_commit_by_miner: dict[tuple[str, str], int] = {}
+    for _b, _k, element, miner, commit_block in pairs:
+        if not element or not miner:
+            continue
+        key = (element, miner)
+        prev = latest_commit_by_miner.get(key)
+        if prev is None or commit_block > prev:
+            latest_commit_by_miner[key] = commit_block
+
+    latest_pairs = []
+    for pair in pairs:
+        _b, _k, element, miner, commit_block = pair
+        if not element or not miner:
+            latest_pairs.append(pair)
+            continue
+        if latest_commit_by_miner.get((element, miner), -1) == commit_block:
+            latest_pairs.append(pair)
+
+    if latest_pairs:
+        pairs = latest_pairs
+
     pairs.sort()
     max_block = pairs[-1][0]
     min_keep = max_block - int(tail)
 
-    keys = [k for (b, k) in pairs if b >= min_keep]
+    keys = [k for (b, k, _e, _m, _c) in pairs if b >= min_keep]
     logger.info(
         f"[dataset] max_block={max_block} tail={tail} -> keeping >= {min_keep} | keys_kept={len(keys)}"
     )
@@ -612,6 +648,45 @@ def _safe_element_id_for_path(element_id: str | None) -> str | None:
         return None
     return s.replace("/", "_")
 
+
+def _extract_path_segments_from_key_or_url(key_or_url: str) -> list[str]:
+    raw_path = urlparse(key_or_url).path if "://" in key_or_url else key_or_url
+    return [p for p in raw_path.split("/") if p]
+
+
+def _extract_element_miner_commit_tuple_from_key_or_url(
+    key_or_url: str,
+) -> tuple[str, str, int]:
+    parts = _extract_path_segments_from_key_or_url(key_or_url)
+    try:
+        root_idx = parts.index("scorevision")
+    except ValueError:
+        return "", "", -1
+
+    if len(parts) <= root_idx + 4:
+        return "", "", -1
+
+    element_id = parts[root_idx + 1]
+    miner_hotkey = parts[root_idx + 2]
+    maybe_commit_or_kind = parts[root_idx + 3]
+
+    if maybe_commit_or_kind in ("evaluation", "responses"):
+        return element_id, miner_hotkey, -1
+
+    try:
+        commit_block = int(maybe_commit_or_kind)
+    except Exception:
+        return "", "", -1
+
+    if commit_block < 0 or len(parts) <= root_idx + 5:
+        return "", "", -1
+
+    kind = parts[root_idx + 4]
+    if kind not in ("evaluation", "responses"):
+        return "", "", -1
+
+    return element_id, miner_hotkey, commit_block
+
 async def _list_keys_from_remote_index(index_url: str) -> list[str]:
     idx = await _http_get_json(index_url)
     keys: list[str] = []
@@ -637,7 +712,7 @@ async def dataset_sv_multi(
     wanted_elem = _safe_element_id_for_path(element_id)
     wanted_seg = f"/scorevision/{wanted_elem}/" if wanted_elem else None
 
-    all_pairs: list[tuple[int, str, str]] = []
+    all_pairs: list[tuple[int, str, str, str, str, int]] = []
     for idx_hk, idx_url in validator_indexes.items():
         try:
             keys = await _list_keys_from_remote_index(idx_url)
@@ -663,15 +738,37 @@ async def dataset_sv_multi(
             except Exception:
                 pass
             if b is not None:
-                all_pairs.append((b, u, idx_url))
+                element, miner, commit_block = _extract_element_miner_commit_tuple_from_key_or_url(u)
+                all_pairs.append((b, u, idx_url, element, miner, commit_block))
 
     if not all_pairs:
         return
 
+    latest_commit_by_miner: dict[tuple[str, str], int] = {}
+    for _b, _u, _idx_url, element, miner, commit_block in all_pairs:
+        if not element or not miner:
+            continue
+        key = (element, miner)
+        prev = latest_commit_by_miner.get(key)
+        if prev is None or commit_block > prev:
+            latest_commit_by_miner[key] = commit_block
+
+    latest_pairs = []
+    for pair in all_pairs:
+        _b, _u, _idx_url, element, miner, commit_block = pair
+        if not element or not miner:
+            latest_pairs.append(pair)
+            continue
+        if latest_commit_by_miner.get((element, miner), -1) == commit_block:
+            latest_pairs.append(pair)
+
+    if latest_pairs:
+        all_pairs = latest_pairs
+
     all_pairs.sort()
     max_block = all_pairs[-1][0]
     min_keep = max_block - int(tail)
-    kept = [(b, u, iurl) for (b, u, iurl) in all_pairs if b >= min_keep]
+    kept = [(b, u, iurl) for (b, u, iurl, _e, _m, _c) in all_pairs if b >= min_keep]
     logger.info(
         f"[dataset-multi] element_id={element_id} max_block={max_block} tail={tail} -> kept={len(kept)} shards"
     )
