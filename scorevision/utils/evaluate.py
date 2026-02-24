@@ -21,6 +21,7 @@ from scorevision.vlm_pipeline.utils.response_models import (
     BoundingBox,
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
+    ShirtColor,
 )
 from scorevision.utils.pillar_metric_registry import (
     METRIC_REGISTRY,
@@ -37,6 +38,35 @@ from scorevision.utils.rtf import (
 )
 
 logger = getLogger(__name__)
+
+
+def _normalize_cluster_id(raw_cluster: object) -> ShirtColor | None:
+    if raw_cluster is None:
+        return None
+
+    if isinstance(raw_cluster, ShirtColor):
+        return raw_cluster
+
+    if isinstance(raw_cluster, str):
+        value = raw_cluster.strip().lower()
+        if value in {"team1", "team_1", "team-1", "1"}:
+            return TEAM1_SHIRT_COLOUR
+        if value in {"team2", "team_2", "team-2", "2"}:
+            return TEAM2_SHIRT_COLOUR
+        try:
+            return ShirtColor(value)
+        except ValueError:
+            return None
+
+    if isinstance(raw_cluster, bool):
+        return None
+
+    if isinstance(raw_cluster, int):
+        if raw_cluster in (0, 1):
+            return TEAM1_SHIRT_COLOUR
+        if raw_cluster == 2:
+            return TEAM2_SHIRT_COLOUR
+    return None
 
 
 def parse_miner_prediction(
@@ -66,6 +96,14 @@ def parse_miner_prediction(
                     else:
                         continue
 
+                    raw_cluster = None
+                    if "cluster_id" in bbox:
+                        raw_cluster = bbox.get("cluster_id")
+                    elif "team_id" in bbox:
+                        raw_cluster = bbox.get("team_id")
+
+                    cluster_id = _normalize_cluster_id(raw_cluster)
+
                     bboxes.append(
                         BoundingBox(
                             bbox_2d=[
@@ -75,7 +113,7 @@ def parse_miner_prediction(
                                 int(bbox["y2"]),
                             ],
                             label=looked_up,
-                            # cluster_id=object_colour,
+                            cluster_id=cluster_id,
                         )
                     )
                 except Exception as e:
