@@ -550,7 +550,7 @@ def _join_key_to_base(index_url: str, key_or_url: str) -> str:
     if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
         return key_or_url
 
-    if key_or_url.startswith("scorevision/"):
+    if key_or_url.startswith("manako/"):
         return _bucket_base(index_url) + key_or_url
 
     if key_or_url.startswith("/"):

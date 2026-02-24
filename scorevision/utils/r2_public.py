@@ -39,18 +39,18 @@ def build_index_url(public_url: str) -> str:
     url = public_url.rstrip("/")
     if url.endswith("/index.json"):
         return url
-    if url.endswith("/scorevision"):
+    if url.endswith("/manako"):
         return f"{url}/index.json"
-    if "/scorevision" in url:
-        base = url.split("/scorevision")[0]
-        return f"{base}/scorevision/index.json"
-    return f"{url}/scorevision/index.json"
+    if "/manako" in url:
+        base = url.split("/manako")[0]
+        return f"{base}/manako/index.json"
+    return f"{url}/manako/index.json"
 
 
 def extract_base_url(public_url: str) -> str:
     url = public_url.rstrip("/")
-    if "/scorevision" in url:
-        return url.split("/scorevision")[0]
+    if "/manako" in url:
+        return url.split("/manako")[0]
     return url
 
 
@@ -64,13 +64,13 @@ def normalize_index_url(url: str | None) -> str | None:
         return None
     if url.strip().endswith(".json"):
         return url.strip()
-    return url.rstrip("/") + "/scorevision/index.json"
+    return url.rstrip("/") + "/manako/index.json"
 
 
 def build_public_index_url_from_base(public_base: str | None) -> str | None:
     if not public_base:
         return None
-    return public_base.rstrip("/") + "/scorevision/index.json"
+    return public_base.rstrip("/") + "/manako/index.json"
 
 
 async def fetch_index_keys(public_url: str) -> list[str]:
@@ -152,7 +152,7 @@ def _extract_path_segments_from_key_or_url(key_or_url: str) -> list[str]:
 def extract_element_miner_commit_from_key(key_or_url: str) -> tuple[str, str, int]:
     parts = _extract_path_segments_from_key_or_url(key_or_url)
     try:
-        root_idx = parts.index("scorevision")
+        root_idx = parts.index("manako")
     except ValueError:
         return "", "", -1
 

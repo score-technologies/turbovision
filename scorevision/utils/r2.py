@@ -97,7 +97,7 @@ async def ensure_index_exists(
     *,
     client_factory,
     bucket: str,
-    index_key: str = "scorevision/index.json",
+    index_key: str = "manako/index.json",
 ) -> bool:
     async with client_factory() as c:
         try:
@@ -120,7 +120,7 @@ async def add_index_key_if_new(
     client_factory,
     bucket: str,
     key: str,
-    index_key: str = "scorevision/index.json",
+    index_key: str = "manako/index.json",
 ) -> bool:
     async with client_factory() as c:
         try:

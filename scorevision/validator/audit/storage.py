@@ -56,7 +56,7 @@ def require_audit_r2_configured() -> None:
 def _audit_results_prefix() -> str:
     s = get_settings()
     ns = (s.AUDIT_R2_RESULTS_PREFIX or "audit_spotcheck").strip().strip("/")
-    return f"scorevision/{ns}/"
+    return f"manako/{ns}/"
 
 
 def _safe_key_segment(value: str | None, fallback: str) -> str:

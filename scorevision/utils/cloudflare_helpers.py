@@ -84,12 +84,12 @@ def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
 def _central_results_prefix(ns: str | None = None) -> str:
     s = get_settings()
     ns = (ns if ns is not None else s.CENTRAL_R2_RESULTS_PREFIX).strip().strip("/")
-    return f"scorevision/{ns}/"
+    return f"manako/{ns}/"
 
 
 def _winners_prefix(ns: str | None = None) -> str:
     ns = (ns or os.getenv("SCOREVISION_WINNERS_PREFIX") or "winners").strip().strip("/")
-    return f"scorevision/{ns}/"
+    return f"manako/{ns}/"
 
 
 def _winners_index_key(ns: str | None = None) -> str:
@@ -98,7 +98,7 @@ def _winners_index_key(ns: str | None = None) -> str:
 
 async def _index_list() -> list[str]:
     settings = get_settings()
-    index_key = "scorevision/index.json"
+    index_key = "manako/index.json"
 
     async with get_s3_client() as c:
         try:
@@ -163,7 +163,7 @@ def normalize_index_url(url: str | None) -> str | None:
         return None
     if url.strip().endswith(".json"):
         return url.strip()
-    return url.rstrip("/") + "/scorevision/index.json"
+    return url.rstrip("/") + "/manako/index.json"
 
 
 def get_s3_client():
@@ -295,7 +295,7 @@ async def emit_shard(
     safe_element_id = (element_id or "unknown-element").strip()
     safe_element_id = safe_element_id.replace("/", "_")
 
-    base_prefix = "scorevision"
+    base_prefix = "manako"
     commit_block_for_path = None
     try:
         if commit_block is not None:
@@ -631,7 +631,7 @@ def _join_key_to_base(index_url: str, key_or_url: str) -> str:
     if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
         return key_or_url
 
-    if key_or_url.startswith("scorevision/"):
+    if key_or_url.startswith("manako/"):
         return _bucket_base(index_url) + key_or_url
 
     if key_or_url.startswith("/"):
@@ -659,7 +659,7 @@ def _extract_element_miner_commit_tuple_from_key_or_url(
 ) -> tuple[str, str, int]:
     parts = _extract_path_segments_from_key_or_url(key_or_url)
     try:
-        root_idx = parts.index("scorevision")
+        root_idx = parts.index("manako")
     except ValueError:
         return "", "", -1
 
@@ -710,7 +710,7 @@ async def dataset_sv_multi(
     }
 
     wanted_elem = _safe_element_id_for_path(element_id)
-    wanted_seg = f"/scorevision/{wanted_elem}/" if wanted_elem else None
+    wanted_seg = f"/manako/{wanted_elem}/" if wanted_elem else None
 
     all_pairs: list[tuple[int, str, str, str, str, int]] = []
     for idx_hk, idx_url in validator_indexes.items():
