@@ -38,3 +38,14 @@ def test_legacy_hf_env_names_are_accepted(monkeypatch):
     assert settings.HUGGINGFACE_USERNAME == "legacy-user"
     assert settings.HUGGINGFACE_API_KEY.get_secret_value() == "legacy-token"
     get_settings.cache_clear()
+
+
+def test_scorevision_public_results_url_env_name_is_accepted(monkeypatch):
+    monkeypatch.delenv("R2_BUCKET_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("SCOREVISION_PUBLIC_RESULTS_URL", "https://pub-scorevision.r2.dev")
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.SCOREVISION_PUBLIC_RESULTS_URL == "https://pub-scorevision.r2.dev"
+    get_settings.cache_clear()

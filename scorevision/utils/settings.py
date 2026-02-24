@@ -220,7 +220,10 @@ def get_settings() -> Settings:
         R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
         # Cloudflare R2
         SCOREVISION_BUCKET=getenv("R2_BUCKET", ""),
-        SCOREVISION_PUBLIC_RESULTS_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
+        SCOREVISION_PUBLIC_RESULTS_URL=getenv(
+            "SCOREVISION_PUBLIC_RESULTS_URL",
+            getenv("R2_BUCKET_PUBLIC_URL", ""),
+        ),
         CENTRAL_R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
         CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
