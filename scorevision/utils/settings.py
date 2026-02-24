@@ -142,7 +142,14 @@ def _env_bool(name: str, default: bool) -> bool:
 @lru_cache
 def get_settings() -> Settings:
     load_dotenv()
-    central_results_prefix = getenv("CENTRAL_R2_RESULTS_PREFIX", "results_soccer")
+    central_results_prefix = getenv(
+        "SCOREVISION_RESULTS_PREFIX",
+        "results_soccer",
+    )
+    shared_r2_concurrency = getenv(
+        "SCOREVISION_R2_CONCURRENCY",
+        getenv("R2_CONCURRENCY", "8"),
+    )
     return Settings(
         # Bittensor
         BITTENSOR_WALLET_COLD=getenv("BITTENSOR_WALLET_COLD", "default"),
@@ -201,8 +208,8 @@ def get_settings() -> Settings:
         ),
         OPENROUTER_VLM=getenv("OPENROUTER_VLM", "qwen/qwen2.5-vl-72b-instruct:free"),
         # HuggingFace
-        HUGGINGFACE_USERNAME=getenv("HUGGINGFACE_USERNAME", ""),
-        HUGGINGFACE_API_KEY=getenv("HUGGINGFACE_API_KEY", ""),
+        HUGGINGFACE_USERNAME=getenv("HF_USER", ""),
+        HUGGINGFACE_API_KEY=getenv("HF_TOKEN", ""),
         HUGGINGFACE_CONCURRENCY=int(getenv("HUGGINGFACE_CONCURRENCY", 2)),
         # Generic Cloudflare R2 (manifest publishing)
         R2_BUCKET=getenv("R2_BUCKET", ""),
@@ -212,19 +219,19 @@ def get_settings() -> Settings:
         R2_CONCURRENCY=int(getenv("R2_CONCURRENCY", 8)),
         R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
         # Cloudflare R2
-        SCOREVISION_BUCKET=getenv("SCOREVISION_BUCKET", ""),
-        SCOREVISION_PUBLIC_RESULTS_URL=getenv("SCOREVISION_PUBLIC_RESULTS_URL", ""),
-        CENTRAL_R2_ACCOUNT_ID=getenv("CENTRAL_R2_ACCOUNT_ID", ""),
-        CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("CENTRAL_R2_WRITE_ACCESS_KEY_ID", ""),
-        CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("CENTRAL_R2_WRITE_SECRET_ACCESS_KEY", ""),
-        CENTRAL_R2_CONCURRENCY=int(getenv("CENTRAL_R2_CONCURRENCY", 8)),
+        SCOREVISION_BUCKET=getenv("R2_BUCKET", ""),
+        SCOREVISION_PUBLIC_RESULTS_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
+        CENTRAL_R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
+        CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
+        CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
+        CENTRAL_R2_CONCURRENCY=int(shared_r2_concurrency),
         URL_MANIFEST=getenv("URL_MANIFEST", "https://pub-90235dd27ef947dbace5293e3e56b910.r2.dev/manifest/index.json"),
-        AUDIT_R2_BUCKET=getenv("AUDIT_R2_BUCKET", ""),
-        AUDIT_R2_ACCOUNT_ID=getenv("AUDIT_R2_ACCOUNT_ID", ""),
-        AUDIT_R2_WRITE_ACCESS_KEY_ID=getenv("AUDIT_R2_WRITE_ACCESS_KEY_ID", ""),
-        AUDIT_R2_WRITE_SECRET_ACCESS_KEY=getenv("AUDIT_R2_WRITE_SECRET_ACCESS_KEY", ""),
-        AUDIT_R2_CONCURRENCY=int(getenv("AUDIT_R2_CONCURRENCY", 8)),
-        AUDIT_R2_BUCKET_PUBLIC_URL=getenv("AUDIT_R2_BUCKET_PUBLIC_URL", ""),
+        AUDIT_R2_BUCKET=getenv("R2_BUCKET", ""),
+        AUDIT_R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
+        AUDIT_R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
+        AUDIT_R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
+        AUDIT_R2_CONCURRENCY=int(shared_r2_concurrency),
+        AUDIT_R2_BUCKET_PUBLIC_URL=getenv("R2_BUCKET_PUBLIC_URL", ""),
         AUDIT_R2_RESULTS_PREFIX=getenv("AUDIT_R2_RESULTS_PREFIX", "audit_spotcheck"),
         CENTRAL_R2_RESULTS_PREFIX=central_results_prefix,
         # Signer

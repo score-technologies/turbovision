@@ -48,7 +48,7 @@ def require_audit_r2_configured() -> None:
     if not _audit_r2_enabled():
         raise RuntimeError(
             "Audit R2 is not configured. "
-            "Set AUDIT_R2_* or reuse SCOREVISION_BUCKET + CENTRAL_R2_* "
+            "Set R2_* variables "
             "to enable audit shard uploads."
         )
 
