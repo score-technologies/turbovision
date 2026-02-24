@@ -25,7 +25,7 @@ def calculate_rtf(p95_latency_ms: float, service_rate_fps: float) -> float:
     if service_rate_fps <= 0:
         raise ValueError("service_rate_fps must be positive")
 
-    return (p95_latency_ms / 1000.0) * (service_rate_fps / 5.0)
+    return (p95_latency_ms / 10000.0) * (service_rate_fps / 5.0)
 
 
 def check_rtf_gate(rtf_value: float, threshold: float = 1.0) -> bool:
