@@ -1,57 +1,60 @@
 # Turbo Vision Validator Guide
 
-Validators keep Turbo Vision honest by benchmarking every submitted model against fresh match footage. Follow the steps below to start contributing structured signals back to the network.
+Validators keep Turbo Vision honest by scoring miner outputs and publishing weights on-chain.
 
 ## 0. Prerequisites
-- Finish the shared setup in `README.md` (Bittensor wallet, Chutes developer access, Hugging Face credentials, ScoreVision CLI).
-- Ready access to the validator host’s `.env` file and Docker (recommended deployment path).
+- Finish the shared setup in `README.md` (wallets, Chutes access, Hugging Face credentials, CLI).
+- Prepare a host with Docker and access to `.env`.
 
-## 1. Prepare Cloudflare R2 Storage
-1. Log into the [Cloudflare Dashboard](https://dash.cloudflare.com) and open **R2**.
-2. Create an R2 bucket (e.g. `scorevision-results`) and write down the **Account ID**.
-3. Under **Manage R2 API Tokens**, mint a token with **Read/Write** access. Save the `CENTRAL_R2_WRITE_ACCESS_KEY_ID` and `CENTRAL_R2_WRITE_SECRET_ACCESS_KEY`.
-4. In the bucket’s **Settings → Public Access**, enable public reads and note the **Public URL** your miners will hit for results.
+## 1. Prepare Cloudflare R2
+1. In the [Cloudflare Dashboard](https://dash.cloudflare.com), create/select your R2 bucket.
+2. Generate a Read/Write API token.
+3. Enable public access and copy the public URL.
 
-## 2. Configure Environment Variables
-Add the following variables to `.env` (or your process manager) on the validator host:
-
-```bash
-CENTRAL_R2_ACCOUNT_ID=<your_r2_account_id>
-CENTRAL_R2_WRITE_ACCESS_KEY_ID=<your_access_key_id>
-CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=<your_secret_access_key>
-CENTRAL_R2_RESULTS_PREFIX=results_soccer
-SCOREVISION_NETUID=<target_subnet_id>  # e.g. 44 for Turbo Vision
-```
-
-Double‑check that the shared values from the README (`BITTENSOR_WALLET_COLD`, `BITTENSOR_WALLET_HOT`, `CHUTES_API_KEY`, `HF_USER`, `HF_TOKEN`) are also present.
-
-## 3. Launch the Validator (Docker Recommended)
-From the repository root:
+## 2. Configure `.env`
+Use the current variable names from `env.example`:
 
 ```bash
-docker compose down && docker compose pull
-docker compose up --build -d
-docker compose logs -f validator
+R2_ACCOUNT_ID=<your_r2_account_id>
+R2_WRITE_ACCESS_KEY_ID=<your_access_key_id>
+R2_WRITE_SECRET_ACCESS_KEY=<your_secret_access_key>
+R2_BUCKET=<your_bucket_name>
+R2_BUCKET_PUBLIC_URL=<your_public_url>
+SCOREVISION_RESULTS_PREFIX=results_soccer
+AUDIT_R2_RESULTS_PREFIX=audit_spotcheck
+SCOREVISION_NETUID=<target_subnet_id>
 ```
 
-This pulls the latest validator image, rebuilds if necessary, and tails the validator logs so you can confirm it is receiving challenges and publishing scores.
+Also ensure shared values exist: `BITTENSOR_WALLET_COLD`, `BITTENSOR_WALLET_HOT`, `CHUTES_API_KEY`, `HF_USER`, `HF_TOKEN`.
 
-> Turbo Vision validators target subnet mechanism **1**. The logic is baked into the code; only keep `SCOREVISION_NETUID` aligned with the live network.
-
-## 4. Optional: Run the Stack Locally
-The CLI lets you run validator components without Docker when debugging:
+## 3. Launch with Docker (Recommended)
+From repo root:
 
 ```bash
-sv -vv validate   # end-to-end validation loop
-sv -vv runner     # execute scoring jobs
-sv -vv signer     # submit results on-chain
+docker compose --profile validator up --build -d
+docker compose ps
+docker compose logs -f central-weights
+docker compose logs -f central-signer
+docker compose logs -f audit-spotcheck
 ```
 
-Use these commands on development machines before redeploying containers.
 
-## 5. Stay Production Ready
-- Confirm your R2 bucket is collecting artifacts and that public URLs are reachable.
-- Monitor validator logs for failed submissions; miners depend on quick feedback.
-- Keep your Chutes API token valid and rotate secrets according to your ops policy.
+## 4. Optional Local CLI Modes
+For local debugging without Docker:
 
-Once these steps are complete, your validator is live and helping Turbo Vision close the gap between automated models and elite football analysts.
+```bash
+sv -v central-validator start
+sv -v central-validator runner
+sv -v central-validator weights
+sv -v central-validator signer
+
+sv -v audit-validator start
+sv -v audit-validator spotcheck --once
+```
+
+## 5. Operations Checklist
+- Check that R2 keys are written under the configured prefixes.
+- Watch `central-weights` / `audit-spotcheck` logs for repeated failures.
+- Keep API keys and wallet access healthy and rotated.
+
+When these checks pass, your validator stack is correctly aligned with the current command and config model.

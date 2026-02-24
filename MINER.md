@@ -1,72 +1,67 @@
 # Turbo Vision Miner Guide
 
-Miners supply Turbo Vision with expert models that understand the flow of the match and answer validator challenges in real time. Use this checklist to go from zero to earning emissions.
+Miners publish models, deploy them to Chutes, and commit metadata on-chain.
 
 ## 0. Prerequisites
-- Complete the common setup in `README.md` (wallets, Chutes developer access, Hugging Face credentials, ScoreVision CLI).
-- Have GPU resources or cloud capacity to train and serve your model.
+- Complete the shared setup in `README.md`.
+- Ensure `.env` contains: `BITTENSOR_WALLET_COLD`, `BITTENSOR_WALLET_HOT`, `CHUTES_API_KEY`, `HF_USER`, `HF_TOKEN`, `SCOREVISION_NETUID`.
+- Have GPU/cloud capacity for inference.
 
-## 1. Register on the Score Vision Subnet
-Make sure your hotkey is registered on subnet **44** (Turbo Vision):
+## 1. Register Your Hotkey on the Target Subnet
+Use the same subnet ID as `SCOREVISION_NETUID` in `.env`:
 
 ```bash
-btcli subnet register --wallet.name <coldkey_name> --wallet.hotkey <hotkey_name>
+btcli subnet register --netuid <SCOREVISION_NETUID> --wallet.name <coldkey_name> --wallet.hotkey <hotkey_name>
 ```
 
-## 2. Unlock Chutes Developer Deployments
-Turbo Vision requires a developer-enabled account on [chutes.ai](https://chutes.ai). After support confirms the upgrade:
+## 2. Enable Chutes Developer Deployments
+Turbo Vision deployment requires a funded Chutes account:
 
 ```bash
 pip install -U chutes
 chutes register
 ```
 
-Verify that `CHUTES_API_KEY` in `.env` contains a developer token—standard keys cannot deploy miners.
+Confirm `CHUTES_API_KEY` is a developer key.
 
-## 3. Build or Adapt Your Model
-Train a model that can process the video frames or features used by the subnet. Keep track of:
-- Expected input format coming from validator prompts.
-- Latency budget for returning predictions.
-- Metrics you will monitor to judge live performance.
+## 3. Prepare Your Miner Code
+- Build your model to handle validator challenge payloads.
+- Keep response latency stable enough for live scoring.
+- Validate output format against current Element expectations.
 
-## 4. Customize the Chute Template
-Edit the files inside `scorevision/chute_template/` to load and serve your model:
-- `setup.py` – install dependencies and fetch artifacts.
-- `load.py` – initialize model weights and supporting assets.
-- `predict.py` – handle inference requests from the validator runner.
+For chute structure and local/live testing flow, use `example_miner/README.md`.
 
-## 5. Ship to Hugging Face and Chutes
-Push your model artifacts and deploy them to the live miner:
+## 4. Push, Deploy, Commit
+Deploy with the current CLI command:
 
 ```bash
-sv -vv push --model-path <path_to_model_assets> --element-id <element_id>
+sv -v push --model-path <path_to_model_assets> --element-id <element_id>
 ```
 
-Optional flags:
+Useful flags:
+- `--revision <sha-or-branch>`: force a specific Hugging Face revision.
+- `--no-deploy`: upload/update HF only.
+- `--no-commit`: skip chain commit and print payload only.
 
-- `--revision <sha-or-branch>` to target a specific Hugging Face revision.
-- `--no-deploy` to skip Chutes deployment (HF only).
-- `--no-commit` to skip on-chain commitment (prints payload only).
+If `--element-id` is omitted (and commit is enabled), `sv push` reads the active manifest and prompts you to choose an element.
 
-Uploads are rate-limited—plan your iterations accordingly.
-
-## 6. Check Your Registration
-Inspect element windows and your commitments:
-
-```bash
-sv miner elements --window current
-sv miner commitments list --source both
-```
-
-Investigate failures via the Chutes dashboard. Copy the instance ID from **Statistics** and fetch logs with:
+## 5. Validate Deployment Health
+Use Chutes dashboard and instance logs:
 
 ```bash
 curl -X GET "https://api.chutes.ai/instances/<CHUTE_INSTANCE_ID>/logs" \
   -H "Authorization: <CHUTES_API_KEY>"
 ```
 
-## 7. Maintain and Iterate
-- Track validator scores and feedback to tune your model.
-- Rebuild and redeploy when new datasets or evaluation hints land.
+You can also inspect available metric pillars from the CLI:
 
-When these steps are complete, your miner is eligible to answer live challenges and earn rewards on Turbo Vision.
+```bash
+sv elements list
+```
+
+## 6. Iterate Safely
+- Track scoring behavior and redeploy frequently.
+- Use `--no-commit` for dry-runs before publishing new commitments.
+- Keep model artifacts and revisions reproducible.
+
+Once this flow is in place, your miner is aligned with the current Turbo Vision command set.

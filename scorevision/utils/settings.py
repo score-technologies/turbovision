@@ -228,7 +228,7 @@ def get_settings() -> Settings:
         CENTRAL_R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
         CENTRAL_R2_WRITE_SECRET_ACCESS_KEY=getenv("R2_WRITE_SECRET_ACCESS_KEY", ""),
         CENTRAL_R2_CONCURRENCY=int(shared_r2_concurrency),
-        URL_MANIFEST=getenv("URL_MANIFEST", "https://pub-90235dd27ef947dbace5293e3e56b910.r2.dev/manifest/index.json"),
+        URL_MANIFEST=getenv("URL_MANIFEST", "https://turbo.scoredata.me/manifest/index.json"),
         AUDIT_R2_BUCKET=getenv("R2_BUCKET", ""),
         AUDIT_R2_ACCOUNT_ID=getenv("R2_ACCOUNT_ID", ""),
         AUDIT_R2_WRITE_ACCESS_KEY_ID=getenv("R2_WRITE_ACCESS_KEY_ID", ""),
