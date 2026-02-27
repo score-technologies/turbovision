@@ -19,11 +19,18 @@ class DockerImage:
         return f"{self.repository}:{self.tag}"
 
 
-def build_image(dockerfile_path: str, context_path: str, image: DockerImage) -> bool:
+def build_image(
+    dockerfile_path: str,
+    context_path: str,
+    image: DockerImage,
+    platform: str = "linux/amd64",
+) -> bool:
     logger.info("Building Docker image: %s", image.full_name)
-    result = subprocess.run(
-        ["docker", "build", "-f", dockerfile_path, "-t", image.full_name, context_path],
-    )
+    cmd = ["docker", "build", "-f", dockerfile_path, "-t", image.full_name]
+    if platform:
+        cmd.extend(["--platform", platform])
+    cmd.append(context_path)
+    result = subprocess.run(cmd)
     if result.returncode != 0:
         logger.error("Docker build failed")
         return False

@@ -7,9 +7,9 @@ def predict_actions(video_path: Path) -> list[FramePrediction]:
     frame_count = get_frame_count(video_path)
 
     # TODO: Replace this with your actual prediction logic
-    # This example predicts "pass" on every 50th frame
+    # This example predicts "pass" on every 25th frame
     predictions = []
-    for frame in range(0, frame_count, 50):
+    for frame in range(0, frame_count, 25):
         predictions.append(FramePrediction(frame=frame, action="pass"))
 
     return predictions
