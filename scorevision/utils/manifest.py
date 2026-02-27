@@ -618,6 +618,33 @@ def _pick_manifest_url_max_block(urls: list[str]) -> tuple[int, str] | None:
     pairs.sort(key=lambda x: x[0])
     return pairs[-1]
 
+
+def _pick_manifest_url_for_block(
+    urls: list[str], block_number: int | None
+) -> tuple[int, str] | None:
+    pairs: list[tuple[int, str]] = []
+    for u in urls:
+        name = Path(urlparse(u).path).name
+        try:
+            b = int(name.split("-", 1)[0])
+        except Exception:
+            continue
+        pairs.append((b, u))
+
+    if not pairs:
+        return None
+
+    pairs.sort(key=lambda x: x[0])
+    if block_number is None:
+        return pairs[-1]
+
+    eligible = [p for p in pairs if p[0] <= block_number]
+    if eligible:
+        return eligible[-1]
+
+    return pairs[-1]
+
+
 async def load_manifest_from_public_index(
     index_url: str,
     *,
@@ -626,7 +653,7 @@ async def load_manifest_from_public_index(
 ) -> Manifest:
     idx = await _http_get_json(index_url)
     urls = _extract_manifest_urls_from_index(index_url, idx)
-    picked = _pick_manifest_url_max_block(urls)
+    picked = _pick_manifest_url_for_block(urls, block_number)
     if not picked:
         raise RuntimeError(f"No manifest entries found in index: {index_url}")
 

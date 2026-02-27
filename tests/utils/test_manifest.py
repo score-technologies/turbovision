@@ -5,6 +5,7 @@ import pytest
 from scorevision.utils.manifest import (
     Manifest,
     Tee,
+    _pick_manifest_url_for_block,
 )
 
 
@@ -72,3 +73,23 @@ def test_manifest_get_element_by_id(dummy_detect_element, dummy_pitch_element):
     )
     assert dummy_detect_element == man.get_element(id=dummy_detect_element.id)
     assert dummy_pitch_element == man.get_element(id=dummy_pitch_element.id)
+
+
+def test_pick_manifest_url_for_block_uses_latest_when_no_block():
+    urls = [
+        "https://example.com/manifest/100-a.yaml",
+        "https://example.com/manifest/250-b.yaml",
+        "https://example.com/manifest/180-c.yaml",
+    ]
+    picked = _pick_manifest_url_for_block(urls, None)
+    assert picked == (250, "https://example.com/manifest/250-b.yaml")
+
+
+def test_pick_manifest_url_for_block_uses_latest_eligible():
+    urls = [
+        "https://example.com/manifest/100-a.yaml",
+        "https://example.com/manifest/180-c.yaml",
+        "https://example.com/manifest/250-b.yaml",
+    ]
+    picked = _pick_manifest_url_for_block(urls, 200)
+    assert picked == (180, "https://example.com/manifest/180-c.yaml")

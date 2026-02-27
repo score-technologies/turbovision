@@ -7,6 +7,7 @@ from json import dumps
 from pathlib import Path
 from typing import Any
 from scorevision.utils.bittensor_helpers import get_validator_indexes_from_chain
+from scorevision.utils.chutes_helpers import validate_chute_integrity
 from scorevision.utils.challenges import (
     build_svchallenge_from_parts,
     get_ground_truth_from_scorevision,
@@ -26,6 +27,7 @@ from scorevision.utils.r2_public import (
     filter_keys_by_tail,
 )
 from scorevision.utils.settings import get_settings
+from scorevision.utils.miner_registry import get_miners_from_registry
 from scorevision.validator.models import ChallengeRecord, SpotcheckResult
 from scorevision.validator.audit.storage import (
     commit_audit_index_on_start,
@@ -37,6 +39,69 @@ from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import filter_low_quali
 from scorevision.vlm_pipeline.vlm_annotator_sam3 import generate_annotations_for_select_frames_sam3
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_miner_commitment_from_record(challenge_record: ChallengeRecord) -> dict[str, str | None]:
+    payload = challenge_record.payload or {}
+    telemetry = payload.get("telemetry") or {}
+    miner_info = telemetry.get("miner") or {}
+    commitment = miner_info.get("commitment") if isinstance(miner_info.get("commitment"), dict) else {}
+
+    model = miner_info.get("model") or commitment.get("model")
+    revision = miner_info.get("revision") or commitment.get("revision")
+    slug = miner_info.get("slug") or commitment.get("chute_slug")
+    chute_id = miner_info.get("chute_id") or commitment.get("chute_id")
+
+    return {
+        "model": str(model).strip() if model else None,
+        "revision": str(revision).strip() if revision else None,
+        "slug": str(slug).strip() if slug else None,
+        "chute_id": str(chute_id).strip() if chute_id else None,
+    }
+
+
+async def _check_spotcheck_miner_eligibility(
+    challenge_record: ChallengeRecord,
+) -> tuple[bool, str | None]:
+    """
+    Mirror central gating before rescoring in spotcheck:
+    1) miner must be eligible in registry filters (includes HF gated/private/revision checks)
+    2) chute integrity + model/revision match must pass
+    """
+    settings = get_settings()
+    miners, _ = await get_miners_from_registry(
+        settings.SCOREVISION_NETUID, element_id=challenge_record.element_id
+    )
+    miner = next(
+        (m for m in miners.values() if (m.hotkey or "").strip() == challenge_record.miner_hotkey),
+        None,
+    )
+    if miner is None:
+        return False, "registry_ineligible_or_missing"
+
+    expected = _extract_miner_commitment_from_record(challenge_record)
+    expected_model = expected.get("model") or miner.model
+    expected_revision = expected.get("revision") or miner.revision
+    chute_id = expected.get("chute_id") or miner.chute_id
+
+    if not chute_id:
+        return False, "missing_chute_id_for_integrity_check"
+
+    trustworthy, hf_repo_name, hf_repo_revision = await validate_chute_integrity(chute_id=chute_id)
+    if not trustworthy:
+        return False, "chute_integrity_hash_mismatch"
+
+    if expected_model and hf_repo_name and hf_repo_name != expected_model:
+        return False, "integrity_model_mismatch"
+    if expected_model and not hf_repo_name:
+        return False, "integrity_missing_model"
+
+    if expected_revision and hf_repo_revision and hf_repo_revision != expected_revision:
+        return False, "integrity_revision_mismatch"
+    if expected_revision and not hf_repo_revision:
+        return False, "integrity_missing_revision"
+
+    return True, None
 
 
 async def resolve_public_results_url() -> str | None:
@@ -384,6 +449,32 @@ async def run_spotcheck(
         challenge_record.miner_hotkey[:8] if challenge_record.miner_hotkey else "?",
         challenge_record.central_score,
     )
+
+    try:
+        eligible, reason = await _check_spotcheck_miner_eligibility(challenge_record)
+    except Exception as e:
+        logger.warning("Spotcheck eligibility check failed: %s", e)
+        eligible, reason = False, "eligibility_check_error"
+    if not eligible:
+        logger.warning(
+            "Spotcheck forcing audit score=0 due to miner eligibility failure: challenge=%s miner=%s reason=%s",
+            challenge_record.challenge_id,
+            challenge_record.miner_hotkey[:8] if challenge_record.miner_hotkey else "?",
+            reason,
+        )
+        audit_score = 0.0
+        match_pct = calculate_match_percentage(challenge_record.central_score, audit_score)
+        passed = match_pct >= threshold
+        return SpotcheckResult(
+            challenge_id=challenge_record.challenge_id,
+            element_id=challenge_record.element_id,
+            miner_hotkey=challenge_record.miner_hotkey,
+            central_score=challenge_record.central_score,
+            audit_score=audit_score,
+            match_percentage=match_pct,
+            passed=passed,
+            details={"error": "miner_eligibility_failed", "reason": reason},
+        )
 
     if manifest is None:
         manifest = await load_manifest_for_spotcheck(challenge_record.block)
