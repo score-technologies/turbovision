@@ -1,7 +1,9 @@
+import logging
 from scorevision.miner.private_track.security import BLACKLIST_ENABLED, VERIFY_ENABLED
 from scorevision.utils.logging import setup_logging
 
-logger = setup_logging()
+setup_logging()
+logger = logging.getLogger("scorevision")
 
 
 def log_startup_config() -> None:
