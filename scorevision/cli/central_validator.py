@@ -60,7 +60,7 @@ def central_validator():
 @central_validator.command("start")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
-@click.option("--tempo", default=100, help="Weights loop tempo in blocks")
+@click.option("--tempo", default=150, help="Weights loop tempo in blocks")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
 def start_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     setup_signal_handlers()
@@ -127,7 +127,7 @@ def runner_cmd(manifest: str | None):
 @central_validator.command("weights")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
-@click.option("--tempo", default=100, help="Weights loop tempo in blocks")
+@click.option("--tempo", default=150, help="Weights loop tempo in blocks")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
 def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     from pathlib import Path

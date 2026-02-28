@@ -207,7 +207,7 @@ async def commit_validator_on_start(netuid: int):
 async def weights_loop(
     tail: int = 28800,
     m_min: int = 25,
-    tempo: int = 100,
+    tempo: int = 150,
     path_manifest: Path | None = None,
     commit_on_start: bool = False,
 ) -> None:

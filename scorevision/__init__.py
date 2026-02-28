@@ -97,7 +97,7 @@ def signer_cmd():
     "--m-min", type=int, envvar="SCOREVISION_M_MIN", default=25, show_default=True
 )
 @click.option(
-    "--tempo", type=int, envvar="SCOREVISION_TEMPO", default=100, show_default=True
+    "--tempo", type=int, envvar="SCOREVISION_TEMPO", default=150, show_default=True
 )
 @click.option(
     "--manifest-path", type=click.Path(exists=True, dir_okay=False), default=None

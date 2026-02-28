@@ -281,7 +281,7 @@ def get_settings() -> Settings:
         SCOREVISION_BACKOFF_RATE=float(getenv("SCOREVISION_BACKOFF_RATE", 0.5)),
         SCOREVISION_TAIL=int(getenv("SCOREVISION_TAIL", 28800)),
         SCOREVISION_M_MIN=int(getenv("SCOREVISION_M_MIN", 25)),
-        SCOREVISION_TEMPO=int(getenv("SCOREVISION_TEMPO", 100)),
+        SCOREVISION_TEMPO=int(getenv("SCOREVISION_TEMPO", 150)),
         SCOREVISION_CACHE_DIR=Path(
             getenv("SCOREVISION_CACHE_DIR", "~/.cache/scorevision/blocks")
         ).expanduser(),
