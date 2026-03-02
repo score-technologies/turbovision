@@ -21,6 +21,7 @@ _ASYNC_SUBTENSOR: bt.AsyncSubtensor | None = None
 _ASYNC_SUBTENSOR_LOCK = asyncio.Lock()
 _SYNC_SUBTENSOR: bt.Subtensor | None = None
 _SYNC_SUBTENSOR_LOCK = threading.Lock()
+_SET_WEIGHTS_LOCK = threading.Lock()
 
 
 async def _get_async_subtensor():
@@ -140,6 +141,11 @@ def _set_weights(
     return False
 
 
+def _set_weights_serialized(**kwargs) -> bool:
+    with _SET_WEIGHTS_LOCK:
+        return _set_weights(**kwargs)
+
+
 async def run_signer() -> None:
     settings = get_settings()
     host = settings.SIGNER_HOST
@@ -230,7 +236,8 @@ async def run_signer() -> None:
                     status=400,
                 )
 
-            ok = _set_weights(
+            ok = await asyncio.to_thread(
+                _set_weights_serialized,
                 wallet=wallet,
                 netuid=netuid,
                 mechid=mechid,
@@ -280,4 +287,3 @@ async def run_signer() -> None:
         await _reset_async_subtensor()
         _reset_sync_subtensor()
         gc.collect()
-

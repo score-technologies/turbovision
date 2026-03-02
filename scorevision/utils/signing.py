@@ -1,7 +1,8 @@
+import asyncio
 from json import loads
 from time import time_ns
 
-from aiohttp import ClientTimeout, ClientSession
+from aiohttp import ClientError, ClientSession, ClientTimeout
 from substrateinterface import Keypair
 
 from scorevision.utils.settings import get_settings
@@ -10,23 +11,35 @@ from scorevision.utils.settings import get_settings
 async def _sign_batch(payloads: list[str]) -> tuple[str, list[str]]:
     """ """
     settings = get_settings()
-    if settings.SIGNER_URL:
+    signer_url = (settings.SIGNER_URL or "").rstrip("/")
+    if not signer_url:
+        raise ValueError("No Signer URL set")
+
+    timeout = ClientTimeout(connect=2, total=10)
+    retries = 3
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
         try:
-            timeout = ClientTimeout(connect=2, total=30)
             async with ClientSession(timeout=timeout) as sess:
-                r = await sess.post(
-                    f"{settings.SIGNER_URL}/sign", json={"payloads": payloads}
-                )
+                r = await sess.post(f"{signer_url}/sign", json={"payloads": payloads})
                 txt = await r.text()
-                if r.status == 200:
-                    data = loads(txt)
-                    sigs = data.get("signatures") or []
-                    hk = data.get("hotkey") or ""
-                    if len(sigs) == len(payloads) and hk:
-                        return hk, sigs
-        except Exception as e:
-            raise Exception(f"signer unavailable, fallback to local: {e}")
-    raise ValueError("No Signer URL set")
+                if r.status != 200:
+                    raise RuntimeError(f"signer status={r.status}")
+
+                data = loads(txt)
+                sigs = data.get("signatures") or []
+                hk = data.get("hotkey") or ""
+                if len(sigs) != len(payloads) or not hk:
+                    raise RuntimeError("invalid signer response")
+                return hk, sigs
+        except (asyncio.TimeoutError, ClientError, RuntimeError, ValueError) as e:
+            last_error = e
+            if attempt < retries:
+                await asyncio.sleep(0.2 * attempt)
+                continue
+
+    raise Exception(f"signer unavailable, fallback to local: {last_error}")
 
 
 def sign_message(keypair: Keypair, message: str | None) -> str | None:
