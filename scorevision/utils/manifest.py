@@ -321,6 +321,14 @@ class Element(BaseModel):
         ge=0.0,
         description="Difficulty weight for emission allocation (must be positive)",
     )
+    max_model_size_mb: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "Maximum allowed total Hugging Face model repository size in MB for miners "
+            "serving this element. Miners above this limit are excluded from registry."
+        ),
+    )
     salt: Salt = Field(default_factory=Salt)
     keypoint_template: ChallengeType | None = None
     objects: list[str] | None = None
