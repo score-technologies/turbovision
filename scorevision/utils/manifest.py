@@ -58,6 +58,9 @@ class PillarName(str, Enum):
     SMOOTHNESS = "smoothness"
     ROLE = "role"
     KEYPOINTS_IOU = "keypoints_iou" 
+    MAP50 = "map50"
+    PRECISION = "precision"
+    RECALL = "recall"
 
 
 class ElementPrefix(str, Enum):
