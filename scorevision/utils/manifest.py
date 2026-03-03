@@ -277,12 +277,12 @@ class Element(BaseModel):
 
     Fields:
     id:                Unique versioned name (e.g., "PlayerDetect_v1@1.0")
-    clips:             List of Clip objects
+    clips:             Optional list of Clip objects
     preproc:           Preprocessing config (fps, resize, normalization)
     metrics:           Metric pillar weights (sum to 1.0)
     latency_p95_ms:    Hard p95 latency gate in milliseconds
     service_rate_fps:  Target real-time service rate (fps)
-    pgt_recipe_hash:   Immutable hash of the Pseudo-Ground Truth recipe
+    pgt_recipe_hash:   Optional immutable hash of the Pseudo-Ground Truth recipe
     baseline_theta:    θₑ — Minimum Element-specific performance required to earn rewards
     delta_floor:       Minimum margin above baseline (Qₑ floor) before applying difficulty weighting
     beta:              βₑ — Difficulty multiplier to scale rewards for harder Elements
@@ -293,12 +293,12 @@ class Element(BaseModel):
     window_block: int | None = None
     eval_window: int | float | None = None
     weight: float | None = None
-    clips: list[Clip]
+    clips: list[Clip] = Field(default_factory=list)
     metrics: Metrics
     preproc: Preproc
     latency_p95_ms: int
     service_rate_fps: int
-    pgt_recipe_hash: str
+    pgt_recipe_hash: str | None = None
     ground_truth: bool = Field(
         default=False,
         description="If true, use real ground truth fetched from API instead of SAM3 pseudo-GT",

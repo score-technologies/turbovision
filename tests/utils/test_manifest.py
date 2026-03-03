@@ -5,6 +5,10 @@ import pytest
 from scorevision.utils.manifest import (
     Manifest,
     Tee,
+    Element,
+    Metrics,
+    Preproc,
+    PillarName,
     _pick_manifest_url_for_block,
 )
 
@@ -93,3 +97,28 @@ def test_pick_manifest_url_for_block_uses_latest_eligible():
     ]
     picked = _pick_manifest_url_for_block(urls, 200)
     assert picked == (180, "https://example.com/manifest/180-c.yaml")
+
+
+def test_element_allows_missing_clips_and_pgt_recipe_hash():
+    man = Manifest(
+        window_id="2025-10-27",
+        elements=[
+            Element(
+                id="Detect_v1@1.0",
+                metrics=Metrics(pillars={PillarName.IOU: 1.0}),
+                preproc=Preproc(fps=5, resize_long=1280, norm="rgb-01"),
+                latency_p95_ms=200,
+                service_rate_fps=25,
+                baseline_theta=0.0,
+                delta_floor=0.01,
+                beta=1.0,
+            )
+        ],
+        tee=Tee(trusted_share_gamma=0.2),
+        version="1.3",
+        expiry_block=123456,
+    )
+
+    elem = man.elements[0]
+    assert elem.clips == []
+    assert elem.pgt_recipe_hash is None
