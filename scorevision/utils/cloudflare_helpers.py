@@ -319,10 +319,24 @@ async def emit_shard(
     except Exception:
         video_url = None
 
+    payload_frames = None
+    try:
+        raw_frames = getattr(getattr(challenge, "payload", None), "frames", None)
+        if raw_frames:
+            payload_frames = []
+            for frame in raw_frames:
+                if hasattr(frame, "model_dump"):
+                    payload_frames.append(frame.model_dump(mode="json"))
+                elif isinstance(frame, dict):
+                    payload_frames.append(frame)
+    except Exception:
+        payload_frames = None
+
     if getattr(miner_run, "predictions", None) is not None:
         logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
         resp_blob = {
             "video_url": video_url,
+            "frames": payload_frames,
             "predictions": miner_run.predictions,
         }
         try:

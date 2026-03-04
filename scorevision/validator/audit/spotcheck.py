@@ -231,10 +231,13 @@ async def fetch_random_challenge_record(
     random.shuffle(candidates)
     for record in candidates:
         if record.responses_key and public_url:
-            predictions, video_url = await fetch_responses_data(record.responses_key, public_url)
-            if predictions and video_url:
+            predictions, video_url, payload_frames = await fetch_responses_data(
+                record.responses_key, public_url
+            )
+            if predictions and (video_url or payload_frames):
                 record.miner_predictions = predictions
                 record.video_url = video_url
+                record.payload_frames = payload_frames
                 logger.info(
                     "Selected challenge: id=%s element=%s miner=%s central_score=%.4f",
                     record.challenge_id,
@@ -323,8 +326,11 @@ async def build_spotcheck_challenge_context(
     manifest: Manifest,
     required_n_frames: int = 3,
 ) -> tuple[Any, Any, Any] | None:
-    if not challenge_record.video_url:
-        logger.error("No video_url in challenge record %s", challenge_record.challenge_id)
+    if not challenge_record.video_url and not challenge_record.payload_frames:
+        logger.error(
+            "No video_url or payload_frames in challenge record %s",
+            challenge_record.challenge_id,
+        )
         return None
 
     if not challenge_record.element_id:
@@ -338,10 +344,13 @@ async def build_spotcheck_challenge_context(
     chal_api = {
         "task_id": challenge_record.challenge_id,
         "element_id": challenge_record.element_id,
-        "video_url": challenge_record.video_url,
         "window_id": challenge_record.window_id,
         "challenge_type": challenge_type,
     }
+    if challenge_record.video_url:
+        chal_api["video_url"] = challenge_record.video_url
+    if challenge_record.payload_frames:
+        chal_api["payload"] = {"frames": challenge_record.payload_frames}
 
     video_cache: dict[str, Any] = {}
     try:
@@ -741,6 +750,7 @@ def load_challenge_record_from_mock_dir(mock_data_dir: Path) -> ChallengeRecord 
         scored_frame_numbers = payload.get("scored_frame_numbers")
 
         miner_predictions = None
+        payload_frames = None
         if responses_key:
             resp_file = mock_data_dir / Path(responses_key).name
             if resp_file.exists():
@@ -748,6 +758,9 @@ def load_challenge_record_from_mock_dir(mock_data_dir: Path) -> ChallengeRecord 
                 with open(resp_file) as f:
                     resp_data = json.load(f)
                 miner_predictions = resp_data.get("predictions")
+                payload_frames = resp_data.get("frames")
+                if not isinstance(payload_frames, list):
+                    payload_frames = None
                 if not video_url:
                     video_url = resp_data.get("video_url")
 
@@ -761,6 +774,7 @@ def load_challenge_record_from_mock_dir(mock_data_dir: Path) -> ChallengeRecord 
             payload=payload,
             miner_predictions=miner_predictions,
             video_url=video_url,
+            payload_frames=payload_frames,
             responses_key=responses_key,
             scored_frame_numbers=scored_frame_numbers,
         )
