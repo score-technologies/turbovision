@@ -101,7 +101,6 @@ Flow (per window):
 5) Optionally snapshot winners to R2.
 
 Behavior knobs:
-
 - `elements[].eval_window` controls lookback in days (converted to blocks).
 - `elements[].weight` controls the Element share of final weights.
 - Hotkey blacklist is loaded from `manifest_update/blacklist` (one hotkey per line, `#` for comments).
