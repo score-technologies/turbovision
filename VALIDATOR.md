@@ -29,7 +29,7 @@ Also ensure shared values exist: `BITTENSOR_WALLET_COLD`, `BITTENSOR_WALLET_HOT`
 
 ## 3. Launch with Docker (Recommended)
 From repo root:
-
+MAKE SURE YOU RUN THE VALIDATOR PROFILE
 ```bash
 docker compose --profile validator up --build -d
 docker compose ps
