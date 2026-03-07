@@ -91,7 +91,6 @@ sv -vv validate --manifest-path path/to/manifest.yml
 ```
 
 Flow (per window):
-
 1) Load the active Manifest for the current block.
 2) For each Element:
    - Determine how far back to look using `elements[].eval_window` (days).
