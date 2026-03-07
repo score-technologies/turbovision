@@ -112,9 +112,9 @@ async def fetch_shard_lines(public_url: str, key: str) -> list[dict]:
 
 async def fetch_responses_data(
     responses_key: str, public_url: str
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]] | None]:
     if not responses_key:
-        return None, None
+        return None, None, None
 
     base = extract_base_url(public_url)
     url = f"{base}/{responses_key}"
@@ -122,17 +122,20 @@ async def fetch_responses_data(
 
     data = await fetch_json_from_url(url)
     if data is None:
-        return None, None
+        return None, None, None
 
     predictions = data.get("predictions")
     video_url = data.get("video_url")
-    return predictions, video_url
+    frames = data.get("frames")
+    if not isinstance(frames, list):
+        frames = None
+    return predictions, video_url, frames
 
 
 async def fetch_miner_predictions(
     responses_key: str, public_url: str
 ) -> dict[str, Any] | None:
-    predictions, _ = await fetch_responses_data(responses_key, public_url)
+    predictions, _, _ = await fetch_responses_data(responses_key, public_url)
     return predictions
 
 

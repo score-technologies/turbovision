@@ -29,6 +29,8 @@ class Miner:
 # ------------------------- HF gating & revision checks ------------------------- #
 _HF_MODEL_GATING_CACHE: Dict[str, Tuple[bool, float]] = {}
 _HF_GATING_TTL = 300  # seconds
+_HF_MODEL_SIZE_CACHE: Dict[Tuple[str, str], Tuple[Optional[float], float]] = {}
+_HF_MODEL_SIZE_TTL = 300  # seconds
 
 
 async def _hf_is_gated(model_id: str) -> Optional[bool]:
@@ -87,6 +89,55 @@ async def _hf_gated_or_inaccessible(
         logger.info("[HF] model=%s revision inaccessible", model_id)
         return True
     return False
+
+
+def _hf_repo_total_size_mb(model_id: str, revision: Optional[str]) -> Optional[float]:
+    revision_key = str(revision or "")
+    cache_key = (model_id, revision_key)
+    now = time.time()
+    cached = _HF_MODEL_SIZE_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _HF_MODEL_SIZE_TTL:
+        logger.debug(
+            "[HF] size cache hit model=%s revision=%s size_mb=%s",
+            model_id,
+            revision_key,
+            cached[0],
+        )
+        return cached[0]
+
+    try:
+        tok = os.getenv("HF_TOKEN")
+        api = HfApi(token=tok) if tok else HfApi()
+        total_bytes = 0
+        for node in api.list_repo_tree(
+            repo_id=model_id,
+            repo_type="model",
+            revision=revision,
+            recursive=True,
+            expand=True,
+        ):
+            size = getattr(node, "size", None)
+            if isinstance(size, int) and size >= 0:
+                total_bytes += size
+
+        size_mb = total_bytes / (1024 * 1024)
+        _HF_MODEL_SIZE_CACHE[cache_key] = (size_mb, now)
+        logger.debug(
+            "[HF] computed size model=%s revision=%s size_mb=%.2f",
+            model_id,
+            revision_key,
+            size_mb,
+        )
+        return size_mb
+    except Exception as e:
+        logger.info(
+            "[HF] failed to compute repo size model=%s revision=%s: %s",
+            model_id,
+            revision_key,
+            e,
+        )
+        _HF_MODEL_SIZE_CACHE[cache_key] = (None, now)
+        return None
 
 
 # ------------------------------ Chutes helpers -------------------------------- #
@@ -154,10 +205,12 @@ async def get_miners_from_registry(
     netuid: int,
     *,
     element_id: str | None = None,
+    max_model_size_mb: float | None = None,
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
-    Reads on-chain commitments, verifies HF gating/revision and Chutes slug,
-    and returns at most one miner per model (earliest block wins).
+    Reads on-chain commitments, verifies HF gating/revision, optional HF repo size
+    cap, and Chutes slug; then returns at most one miner per model
+    (earliest block wins).
     """
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
@@ -242,6 +295,34 @@ async def get_miners_from_registry(
             logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
             skipped[uid] = m
             continue
+        if max_model_size_mb is not None and max_model_size_mb > 0:
+            if not m.model:
+                logger.info(
+                    "[Registry] uid=%s slug=%s skipped: missing HF model id for size check",
+                    uid,
+                    m.slug,
+                )
+                skipped[uid] = m
+                continue
+            model_size_mb = _hf_repo_total_size_mb(m.model, m.revision)
+            if model_size_mb is None:
+                logger.info(
+                    "[Registry] uid=%s slug=%s skipped: unable to resolve HF repo size",
+                    uid,
+                    m.slug,
+                )
+                skipped[uid] = m
+                continue
+            if model_size_mb > max_model_size_mb:
+                logger.info(
+                    "[Registry] uid=%s slug=%s skipped: HF repo size %.2fMB exceeds max %.2fMB",
+                    uid,
+                    m.slug,
+                    model_size_mb,
+                    max_model_size_mb,
+                )
+                skipped[uid] = m
+                continue
 
         ok = True
         if m.chute_id:

@@ -215,7 +215,6 @@ async def weights_loop(
     netuid = settings.SCOREVISION_NETUID
     fallback_uid = settings.VALIDATOR_FALLBACK_UID
     tail_blocks_default = settings.VALIDATOR_TAIL_BLOCKS
-    winners_every_n = settings.VALIDATOR_WINNERS_EVERY_N
 
     setup_signal_handler()
     if commit_on_start:
@@ -229,7 +228,6 @@ async def weights_loop(
     subtensor = None
     last_done = -1
     effective_tail = max(tail, tail_blocks_default)
-    set_weights_count = 0
     validator_hotkey_ss58 = get_validator_hotkey_ss58()
     central_validator_hotkey = (settings.SCOREVISION_CENTRAL_VALIDATOR_HOTKEY or "").strip()
     is_central_validator = bool(central_validator_hotkey) and validator_hotkey_ss58 == central_validator_hotkey
@@ -396,24 +394,22 @@ async def weights_loop(
                     VALIDATOR_LOOP_TOTAL.labels(outcome="success").inc()
                     VALIDATOR_LAST_BLOCK_SUCCESS.set(block)
                     logger.info("set_weights OK at block %d", block)
-                    set_weights_count += 1
-                    if winners_every_n > 0 and set_weights_count % winners_every_n == 0:
-                        if is_central_validator and winners_by_element:
-                            payload = {
-                                "block": block,
-                                "window_id": current_window_id,
-                                "netuid": settings.SCOREVISION_NETUID,
-                                "mechid": settings.SCOREVISION_MECHID,
-                                "winners": winners_by_element,
-                            }
-                            timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
-                            try:
-                                key = await asyncio.wait_for(put_winners_snapshot(block, payload), timeout=timeout_s)
-                                logger.info("[weights] winners snapshot stored: %s", key)
-                            except asyncio.TimeoutError:
-                                logger.warning("[weights] winners snapshot timed out")
-                            except Exception as e:
-                                logger.warning("[weights] winners snapshot failed: %s", e)
+                    if is_central_validator and winners_by_element:
+                        payload = {
+                            "block": block,
+                            "window_id": current_window_id,
+                            "netuid": settings.SCOREVISION_NETUID,
+                            "mechid": settings.SCOREVISION_MECHID,
+                            "winners": winners_by_element,
+                        }
+                        timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+                        try:
+                            key = await asyncio.wait_for(put_winners_snapshot(block, payload), timeout=timeout_s)
+                            logger.info("[weights] winners snapshot stored: %s", key)
+                        except asyncio.TimeoutError:
+                            logger.warning("[weights] winners snapshot timed out")
+                        except Exception as e:
+                            logger.warning("[weights] winners snapshot failed: %s", e)
                 else:
                     logger.warning("set_weights failed at block %d", block)
                     VALIDATOR_LOOP_TOTAL.labels(outcome="set_weights_failed").inc()

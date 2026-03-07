@@ -13,6 +13,7 @@ class ChallengeRecord:
     payload: dict[str, Any]
     miner_predictions: dict[str, Any] | None = None
     video_url: str | None = None
+    payload_frames: list[dict[str, Any]] | None = None
     responses_key: str | None = None
     scored_frame_numbers: list[int] | None = None
 
@@ -50,4 +51,3 @@ class MinerMeta:
             "chute_id": self.chute_id,
             "slug": self.slug,
         }
-

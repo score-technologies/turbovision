@@ -523,7 +523,15 @@ async def runner(
 
         logger.info("[Runner] window_start_block=%s (window_id=%s tempo=%s)", window_start_block, window_id, tempo_blocks)
 
-        miners, skipped_miners = await get_miners_from_registry(netuid, element_id=element_id)
+        element = manifest.get_element(id=element_id)
+        if element is None:
+            raise ValueError(f"element id {element_id} not found in manifest")
+
+        miners, skipped_miners = await get_miners_from_registry(
+            netuid,
+            element_id=element_id,
+            max_model_size_mb=getattr(element, "max_model_size_mb", None),
+        )
         if not miners and not skipped_miners:
             logger.warning("[Runner] No eligible miners found on-chain for element_id=%s.", element_id)
             RUNNER_ACTIVE_MINERS.set(0)
@@ -532,10 +540,6 @@ async def runner(
 
         miner_list = list[Miner](miners.values())
         RUNNER_ACTIVE_MINERS.set(len(miner_list))
-
-        element = manifest.get_element(id=element_id)
-        if element is None:
-            raise ValueError(f"element id {element_id} not found in manifest")
 
         use_real_gt = bool(getattr(element, "ground_truth", False))
 
