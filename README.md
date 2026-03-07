@@ -107,7 +107,7 @@ Behavior knobs:
 - `elements[].weight` controls the Element share of final weights.
 - Hotkey blacklist is loaded from `manifest_update/blacklist` (one hotkey per line, `#` for comments).
 - Startup commit: `SCOREVISION_COMMIT_VALIDATOR_ON_START=1` publishes the validator index.
-- Snapshot cadence: `SCOREVISION_WINNERS_EVERY` (every N successful loops).
+- Winners snapshots are emitted on every successful `set_weights` (central validator only).
 
 ## Community & Support
 

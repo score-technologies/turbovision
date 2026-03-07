@@ -124,7 +124,6 @@ class Settings(BaseModel):
     # Validator
     VALIDATOR_TAIL_BLOCKS: int
     VALIDATOR_FALLBACK_UID: int
-    VALIDATOR_WINNERS_EVERY_N: int
 
     # Audit Validator
     AUDIT_SPOTCHECK_MIN_INTERVAL_S: int
@@ -314,7 +313,6 @@ def get_settings() -> Settings:
         # Validator
         VALIDATOR_TAIL_BLOCKS=int(getenv("SCOREVISION_VALIDATOR_TAIL", 28800)),
         VALIDATOR_FALLBACK_UID=int(getenv("SCOREVISION_FALLBACK_UID", 6)),
-        VALIDATOR_WINNERS_EVERY_N=int(getenv("SCOREVISION_WINNERS_EVERY", 24)),
         # Audit Validator
         AUDIT_SPOTCHECK_MIN_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MIN_INTERVAL_S", 7200)),
         AUDIT_SPOTCHECK_MAX_INTERVAL_S=int(getenv("AUDIT_SPOTCHECK_MAX_INTERVAL_S", 14400)),
