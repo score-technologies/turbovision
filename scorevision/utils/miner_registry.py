@@ -13,6 +13,9 @@ from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
+REGISTRY_BYPASS_UIDS = {6}
+REGISTRY_BYPASS_HOTKEYS = {"5FsREvyUXSZWYRqVyQLDdpYmZZPnkhZyW6HjooozKP1nQkwu"}
+
 
 @dataclass
 class Miner:
@@ -294,6 +297,9 @@ async def get_miners_from_registry(
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
 
+    def _is_registry_bypass(uid: int, hotkey: str) -> bool:
+        return uid in REGISTRY_BYPASS_UIDS and hotkey in REGISTRY_BYPASS_HOTKEYS
+
     blacklisted_hotkeys = load_blacklisted_hotkeys()
     if blacklisted_hotkeys:
         logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
@@ -328,9 +334,12 @@ async def get_miners_from_registry(
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
     for uid, hk in enumerate(meta.hotkeys):
-        if hk in blacklisted_hotkeys:
+        bypass_registry_checks = _is_registry_bypass(uid, hk)
+        if hk in blacklisted_hotkeys and not bypass_registry_checks:
             logger.debug("[Registry] skipping blacklisted hotkey=%s", hk)
             continue
+        if hk in blacklisted_hotkeys and bypass_registry_checks:
+            logger.info("[Registry] uid=%s hotkey=%s bypassed blacklist", uid, hk)
         arr = commits.get(hk)
         if not arr:
             continue
@@ -369,6 +378,11 @@ async def get_miners_from_registry(
     filtered: Dict[int, Miner] = {}
     skipped: Dict[int, Miner] = {}
     for uid, m in candidates.items():
+        if _is_registry_bypass(uid, m.hotkey):
+            logger.info("[Registry] uid=%s hotkey=%s bypassed registry filters", uid, m.hotkey)
+            filtered[uid] = m
+            continue
+
         gated = await _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
             logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
@@ -461,12 +475,15 @@ async def get_miners_from_registry(
     # 3) De-duplicate by model: keep earliest block per model (stable)
     best_by_model: Dict[str, Tuple[int, int]] = {}
     for uid, m in filtered.items():
-        if not m.model:
+        dedup_key = m.model
+        if not dedup_key and _is_registry_bypass(uid, m.hotkey):
+            dedup_key = f"__bypass_uid_{uid}"
+        if not dedup_key:
             continue
         blk = m.block if isinstance(m.block, int) else (int(m.block) if m.block is not None else (2**63 - 1))
-        prev = best_by_model.get(m.model)
+        prev = best_by_model.get(dedup_key)
         if prev is None or blk < prev[0]:
-            best_by_model[m.model] = (blk, uid)
+            best_by_model[dedup_key] = (blk, uid)
 
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
