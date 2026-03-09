@@ -531,6 +531,7 @@ async def runner(
             netuid,
             element_id=element_id,
             max_model_size_mb=getattr(element, "max_model_size_mb", None),
+            onnx_only=getattr(element, "onnx_model", None),
         )
         if not miners and not skipped_miners:
             logger.warning("[Runner] No eligible miners found on-chain for element_id=%s.", element_id)

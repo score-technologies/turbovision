@@ -31,6 +31,8 @@ _HF_MODEL_GATING_CACHE: Dict[str, Tuple[bool, float]] = {}
 _HF_GATING_TTL = 300  # seconds
 _HF_MODEL_SIZE_CACHE: Dict[Tuple[str, str], Tuple[Optional[float], float]] = {}
 _HF_MODEL_SIZE_TTL = 300  # seconds
+_HF_ONNX_ONLY_CACHE: Dict[Tuple[str, str], Tuple[Optional[bool], float]] = {}
+_HF_ONNX_ONLY_TTL = 300  # seconds
 
 
 async def _hf_is_gated(model_id: str) -> Optional[bool]:
@@ -140,6 +142,82 @@ def _hf_repo_total_size_mb(model_id: str, revision: Optional[str]) -> Optional[f
         return None
 
 
+def _hf_repo_has_only_onnx_models(
+    model_id: str, revision: Optional[str]
+) -> Optional[bool]:
+    revision_key = str(revision or "")
+    cache_key = (model_id, revision_key)
+    now = time.time()
+    cached = _HF_ONNX_ONLY_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _HF_ONNX_ONLY_TTL:
+        logger.debug(
+            "[HF] onnx cache hit model=%s revision=%s onnx_only=%s",
+            model_id,
+            revision_key,
+            cached[0],
+        )
+        return cached[0]
+
+    try:
+        tok = os.getenv("HF_TOKEN")
+        api = HfApi(token=tok) if tok else HfApi()
+        model_exts = (
+            ".onnx",
+            ".safetensors",
+            ".bin",
+            ".pt",
+            ".pth",
+            ".ckpt",
+            ".h5",
+            ".keras",
+            ".pb",
+            ".tflite",
+            ".msgpack",
+            ".gguf",
+        )
+
+        has_onnx = False
+        found_non_onnx_model = False
+
+        for node in api.list_repo_tree(
+            repo_id=model_id,
+            repo_type="model",
+            revision=revision,
+            recursive=True,
+            expand=True,
+        ):
+            path = str(getattr(node, "path", "") or "").lower()
+            if not path:
+                continue
+            if not path.endswith(model_exts):
+                continue
+            if path.endswith(".onnx"):
+                has_onnx = True
+                continue
+            found_non_onnx_model = True
+            break
+
+        onnx_only = has_onnx and not found_non_onnx_model
+        _HF_ONNX_ONLY_CACHE[cache_key] = (onnx_only, now)
+        logger.debug(
+            "[HF] onnx scan model=%s revision=%s has_onnx=%s non_onnx_model=%s",
+            model_id,
+            revision_key,
+            has_onnx,
+            found_non_onnx_model,
+        )
+        return onnx_only
+    except Exception as e:
+        logger.info(
+            "[HF] failed to verify onnx-only model repo=%s revision=%s: %s",
+            model_id,
+            revision_key,
+            e,
+        )
+        _HF_ONNX_ONLY_CACHE[cache_key] = (None, now)
+        return None
+
+
 # ------------------------------ Chutes helpers -------------------------------- #
 async def _chutes_get_json(url: str, headers: Dict[str, str]) -> Optional[dict]:
     timeout = aiohttp.ClientTimeout(total=15)
@@ -206,10 +284,11 @@ async def get_miners_from_registry(
     *,
     element_id: str | None = None,
     max_model_size_mb: float | None = None,
+    onnx_only: bool | None = None,
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision, optional HF repo size
-    cap, and Chutes slug; then returns at most one miner per model
+    cap, optional ONNX-only model artifact policy, and Chutes slug; then returns at most one miner per model
     (earliest block wins).
     """
     settings = get_settings()
@@ -320,6 +399,25 @@ async def get_miners_from_registry(
                     m.slug,
                     model_size_mb,
                     max_model_size_mb,
+                )
+                skipped[uid] = m
+                continue
+
+        if onnx_only is True:
+            if not m.model:
+                logger.info(
+                    "[Registry] uid=%s slug=%s skipped: missing HF model id for onnx check",
+                    uid,
+                    m.slug,
+                )
+                skipped[uid] = m
+                continue
+            model_is_onnx_only = _hf_repo_has_only_onnx_models(m.model, m.revision)
+            if model_is_onnx_only is not True:
+                logger.info(
+                    "[Registry] uid=%s slug=%s skipped: HF repo is not onnx-only",
+                    uid,
+                    m.slug,
                 )
                 skipped[uid] = m
                 continue

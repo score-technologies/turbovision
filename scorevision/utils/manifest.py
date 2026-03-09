@@ -329,6 +329,13 @@ class Element(BaseModel):
             "serving this element. Miners above this limit are excluded from registry."
         ),
     )
+    onnx_model: bool | None = Field(
+        default=None,
+        description=(
+            "If true, miners serving this element must expose only ONNX model artifacts "
+            "in their Hugging Face repository revision."
+        ),
+    )
     salt: Salt = Field(default_factory=Salt)
     keypoint_template: ChallengeType | None = None
     objects: list[str] | None = None
