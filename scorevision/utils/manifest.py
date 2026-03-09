@@ -361,11 +361,28 @@ class Element(BaseModel):
         return KEYPOINT_TEMPLATES.get(self.keypoint_template)
 
     @property
+    def evaluation_id(self) -> str:
+        """
+        ID variant used by evaluation logic to infer element family.
+        Keeps the full public/API id intact while allowing namespaced ids
+        like "namespace/Detect-Person".
+        """
+        raw_id = str(self.id or "").strip()
+        if "/" in raw_id:
+            suffix = raw_id.rsplit("/", 1)[-1].strip()
+            if suffix:
+                return suffix
+        return raw_id
+
+    @property
     def category(self) -> ElementPrefix:
+        evaluated = self.evaluation_id
         for element_prefix in ElementPrefix:
-            if self.id.startswith(element_prefix):
+            if evaluated.startswith(element_prefix.value):
                 return element_prefix
-        raise ValueError(f"Unrecognised element {self.id}")
+        raise ValueError(
+            f"Unrecognised element id for category inference: id='{self.id}', evaluation_id='{evaluated}'"
+        )
 
     @model_validator(mode="after")
     def validate_id(self):
