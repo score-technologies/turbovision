@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from aiohttp import ClientResponseError
 from base64 import b64decode
-from numpy import ndarray, frombuffer, uint8
+from numpy import ndarray, frombuffer, uint8, zeros
 from cv2 import imdecode, IMREAD_COLOR
 from scorevision.utils.settings import get_settings
 from scorevision.utils.bittensor_helpers import load_hotkey_keypair
@@ -29,6 +29,9 @@ from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
     CHALLENGE_ID_LOOKUP,
 )
+from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
+from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
 from scorevision.utils.manifest import Manifest
 
 logger = getLogger(__name__)
@@ -36,6 +39,75 @@ logger = getLogger(__name__)
 
 class ScoreVisionChallengeError(Exception):
     pass
+
+
+def _parse_ground_truth_payload(
+    ground_truth: Any, challenge_id: int
+) -> list[PseudoGroundTruth]:
+    if isinstance(ground_truth, list) and all(
+        isinstance(item, PseudoGroundTruth) for item in ground_truth
+    ):
+        return ground_truth
+
+    if not isinstance(ground_truth, dict):
+        return []
+
+    annotations = ground_truth.get("annotations")
+    if not isinstance(annotations, list):
+        return []
+
+    grouped: dict[int, list[BoundingBox]] = {}
+    for ann in annotations:
+        if not isinstance(ann, dict):
+            continue
+        bbox = ann.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+        except (TypeError, ValueError):
+            continue
+
+        label = ann.get("class") or ann.get("label")
+        if label is None:
+            label = ""
+
+        frame_idx = ann.get("frame_idx")
+        if isinstance(frame_idx, str) and frame_idx.isdigit():
+            frame_idx = int(frame_idx)
+        if not isinstance(frame_idx, int):
+            frame_idx = 0
+
+        grouped.setdefault(frame_idx, []).append(
+            BoundingBox(
+                bbox_2d=(x1, y1, x2, y2),
+                label=str(label),
+                cluster_id=None,
+            )
+        )
+
+    if not grouped:
+        return []
+
+    spatial_stub = zeros((1, 1, 3), dtype=uint8)
+    temporal_stub = zeros((1, 1, 3), dtype=uint8)
+    pseudo_gt: list[PseudoGroundTruth] = []
+    for frame_number in sorted(grouped.keys()):
+        pseudo_gt.append(
+            PseudoGroundTruth(
+                video_name=str(challenge_id),
+                frame_number=frame_number,
+                spatial_image=spatial_stub,
+                temporal_image=temporal_stub,
+                annotation=FrameAnnotation(
+                    bboxes=grouped[frame_number],
+                    category=Action.NONE,
+                    confidence=100,
+                    reason="ScoreVision API ground truth",
+                ),
+            )
+        )
+    return pseudo_gt
 
 
 def _looks_like_image_url(url: str) -> bool:
@@ -581,7 +653,18 @@ async def get_ground_truth_from_scorevision(
             element_id,
             data,
         )
-        return data.get("ground_truth")
+        ground_truth = data.get("ground_truth")
+        parsed = _parse_ground_truth_payload(ground_truth, int(challenge_id))
+        if parsed:
+            logger.info(
+                "[GroundTruth] parsed %s pseudo_gt frame(s) from API payload",
+                len(parsed),
+            )
+            return parsed
+        logger.warning(
+            "[GroundTruth] could not parse API ground_truth payload into pseudo_gt, returning raw payload"
+        )
+        return ground_truth
 
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,
