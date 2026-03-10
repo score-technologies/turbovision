@@ -258,6 +258,12 @@ async def prepare_challenge_payload(
         all_frame_numbers = [
             int(entry["frame_id"]) for entry in payload_frames_sorted
         ]
+        frame_urls_by_id: dict[int, str] = {}
+        for entry in payload_frames_sorted:
+            fid = int(entry["frame_id"])
+            url = entry.get("url")
+            if isinstance(url, str) and url:
+                frame_urls_by_id[fid] = url
 
         if len(set(all_frame_numbers)) != len(all_frame_numbers):
             raise ScoreVisionChallengeError("Duplicate frame_id values in payload.frames")
@@ -331,7 +337,13 @@ async def prepare_challenge_payload(
             b64 = image_to_b64string(frame)
             if not b64:
                 raise ScoreVisionChallengeError("Failed to encode frame image data")
-            payload_out_frames.append(TVFrame(frame_id=fid, data=b64))
+            payload_out_frames.append(
+                TVFrame(
+                    frame_id=fid,
+                    url=frame_urls_by_id.get(fid),
+                    data=b64,
+                )
+            )
 
         payload_out = TVPredictInput(
             url=None,
@@ -411,7 +423,7 @@ async def prepare_challenge_payload(
             raise ScoreVisionChallengeError("Failed to encode image challenge frame data")
         payload_out = TVPredictInput(
             url=None,
-            frames=[TVFrame(frame_id=0, data=b64)],
+            frames=[TVFrame(frame_id=0, url=video_url, data=b64)],
             meta=meta,
         )
 

@@ -329,6 +329,25 @@ async def emit_shard(
                     payload_frames.append(frame.model_dump(mode="json"))
                 elif isinstance(frame, dict):
                     payload_frames.append(frame)
+        if payload_frames:
+            sanitized_frames: list[dict] = []
+            for frame in payload_frames:
+                if not isinstance(frame, dict):
+                    continue
+                frame_id = frame.get("frame_id")
+                url = frame.get("url")
+                data = frame.get("data")
+                row: dict = {}
+                if frame_id is not None:
+                    row["frame_id"] = frame_id
+                if isinstance(url, str) and url:
+                    row["url"] = url
+                elif isinstance(data, str) and data:
+                    # Keep base64 only as fallback when no URL exists.
+                    row["data"] = data
+                if row:
+                    sanitized_frames.append(row)
+            payload_frames = sanitized_frames or None
     except Exception:
         payload_frames = None
 
