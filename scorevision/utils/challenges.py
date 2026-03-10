@@ -7,6 +7,7 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
+from urllib.parse import urlparse
 from aiohttp import ClientResponseError
 from base64 import b64decode
 from numpy import ndarray, frombuffer, uint8
@@ -35,6 +36,11 @@ logger = getLogger(__name__)
 
 class ScoreVisionChallengeError(Exception):
     pass
+
+
+def _looks_like_image_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp"))
 
 
 def _safe_int(value: str | None) -> int | None:
@@ -270,6 +276,73 @@ async def prepare_challenge_payload(
     )
     if not video_url:
         raise ScoreVisionChallengeError("Challenge missing video_url/asset_url/clip_url")
+
+    if _looks_like_image_url(video_url):
+        logger.info("Detected image challenge URL, loading as single-frame payload: %s", video_url)
+        frame = await _download_frame_from_url(video_url)
+        frame_store = InMemoryFrameStore({0: frame})
+        total_frames = 1
+
+        if frame_numbers is not None:
+            selected_frame_numbers = [fn for fn in frame_numbers if fn == 0]
+            if not selected_frame_numbers:
+                selected_frame_numbers = [0]
+            n_select = len(selected_frame_numbers)
+            logger.info(
+                "Selected Image Frame (explicit): %s (total=%s)",
+                selected_frame_numbers,
+                total_frames,
+            )
+        else:
+            selected_frame_numbers = [0]
+            n_select = 1
+            logger.info("Selected Image Frame (dynamic): %s (total=%s)", selected_frame_numbers, total_frames)
+
+        select_frames: list[ndarray] = []
+        flow_frames: list[ndarray] = []
+        for fn in selected_frame_numbers:
+            image = await asyncio.to_thread(frame_store.get_frame, fn)
+            select_frames.append(image)
+            flow = await asyncio.to_thread(frame_store.get_flow, fn)
+            flow_frames.append(flow)
+
+        height, width = select_frames[0].shape[:2]
+        meta = {
+            "version": 1,
+            "width": width or 0,
+            "height": height or 0,
+            "fps": int(
+                challenge.get("fps")
+                or payload.get("fps")
+                or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
+            ),
+            "task_id": challenge.get("task_id"),
+            "challenge_type": challenge.get("challenge_type"),
+            "n_frames_total": total_frames,
+            "batch_size": batch_size,
+            "n_keypoints": 32,  # TODO: update based on challenge type
+            "min_frames_required": n_select,
+            "frames_source": "image_url",
+        }
+        if "seed" in challenge:
+            meta["seed"] = challenge["seed"]
+
+        b64 = image_to_b64string(select_frames[0])
+        if not b64:
+            raise ScoreVisionChallengeError("Failed to encode image challenge frame data")
+        payload_out = TVPredictInput(
+            url=None,
+            frames=[TVFrame(frame_id=0, data=b64)],
+            meta=meta,
+        )
+
+        return (
+            payload_out,
+            selected_frame_numbers,
+            select_frames,
+            flow_frames,
+            frame_store,
+        )
 
     cached_store: FrameStore | None = None
     cached_path: Path | None = None
@@ -573,6 +646,7 @@ async def get_next_challenge_v3(
                 raise ScoreVisionChallengeError(
                     "Empty challenge payload from /api/challenge/v3."
                 )
+            logger.info("Challenge API raw response: %s", dumps(challenge, default=str))
 
             if "id" in challenge and "task_id" not in challenge:
                 challenge["task_id"] = challenge.pop("id")
