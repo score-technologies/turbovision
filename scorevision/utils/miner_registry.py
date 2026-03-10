@@ -17,6 +17,13 @@ REGISTRY_BYPASS_UIDS = {6}
 REGISTRY_BYPASS_HOTKEYS = {"5FsREvyUXSZWYRqVyQLDdpYmZZPnkhZyW6HjooozKP1nQkwu"}
 
 
+def is_registry_bypass(uid: int | None, hotkey: str | None) -> bool:
+    if uid is None or not hotkey:
+        return False
+    hk = str(hotkey).strip()
+    return uid in REGISTRY_BYPASS_UIDS and hk in REGISTRY_BYPASS_HOTKEYS
+
+
 @dataclass
 class Miner:
     uid: int
@@ -297,9 +304,6 @@ async def get_miners_from_registry(
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
 
-    def _is_registry_bypass(uid: int, hotkey: str) -> bool:
-        return uid in REGISTRY_BYPASS_UIDS and hotkey in REGISTRY_BYPASS_HOTKEYS
-
     blacklisted_hotkeys = load_blacklisted_hotkeys()
     if blacklisted_hotkeys:
         logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
@@ -334,7 +338,7 @@ async def get_miners_from_registry(
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
     for uid, hk in enumerate(meta.hotkeys):
-        bypass_registry_checks = _is_registry_bypass(uid, hk)
+        bypass_registry_checks = is_registry_bypass(uid, hk)
         if hk in blacklisted_hotkeys and not bypass_registry_checks:
             logger.debug("[Registry] skipping blacklisted hotkey=%s", hk)
             continue
@@ -378,7 +382,7 @@ async def get_miners_from_registry(
     filtered: Dict[int, Miner] = {}
     skipped: Dict[int, Miner] = {}
     for uid, m in candidates.items():
-        if _is_registry_bypass(uid, m.hotkey):
+        if is_registry_bypass(uid, m.hotkey):
             logger.info("[Registry] uid=%s hotkey=%s bypassed registry filters", uid, m.hotkey)
             filtered[uid] = m
             continue
@@ -476,7 +480,7 @@ async def get_miners_from_registry(
     best_by_model: Dict[str, Tuple[int, int]] = {}
     for uid, m in filtered.items():
         dedup_key = m.model
-        if not dedup_key and _is_registry_bypass(uid, m.hotkey):
+        if not dedup_key and is_registry_bypass(uid, m.hotkey):
             dedup_key = f"__bypass_uid_{uid}"
         if not dedup_key:
             continue

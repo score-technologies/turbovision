@@ -590,6 +590,8 @@ async def runner(
                     payload=payload,
                     expected_model=miner.model,
                     expected_revision=miner.revision,
+                    miner_uid=getattr(miner, "uid", None),
+                    miner_hotkey=getattr(miner, "hotkey", None),
                 )
                 RUNNER_MINER_LATENCY_MS.labels(miner=miner_label).set(miner_output.latency_ms)
                 RUNNER_MINER_CALLS_TOTAL.labels(outcome="success").inc()

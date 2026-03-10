@@ -18,6 +18,7 @@ from scorevision.utils.chutes_helpers import (
     warmup_chute,
     validate_chute_integrity,
 )
+from scorevision.utils.miner_registry import is_registry_bypass
 
 logger = getLogger(__name__)
 
@@ -27,8 +28,30 @@ async def call_miner_model_on_chutes(
     payload: TVPredictInput,
     expected_model: str | None = None,
     expected_revision: str | None = None,
+    miner_uid: int | None = None,
+    miner_hotkey: str | None = None,
 ) -> SVRunOutput:
     logger.info("Verifying chute model is valid")
+
+    if is_registry_bypass(miner_uid, miner_hotkey):
+        logger.info(
+            "[Integrity] bypass enabled for uid=%s hotkey=%s",
+            miner_uid,
+            miner_hotkey,
+        )
+        res = await predict_sv(payload=payload, slug=slug, chute_id=chute_id)
+        lat_ms = res.latency_seconds * 1000.0
+        return SVRunOutput(
+            success=res.success,
+            latency_ms=lat_ms,
+            predictions=res.predictions if res.success else None,
+            error=res.error,
+            model=res.model or expected_model,
+            latency_p50_ms=lat_ms,
+            latency_p95_ms=lat_ms,
+            latency_p99_ms=lat_ms,
+            latency_max_ms=lat_ms,
+        )
 
     trustworthy, hf_repo_name, hf_repo_revision = await validate_chute_integrity(
         chute_id=chute_id

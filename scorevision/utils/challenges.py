@@ -575,6 +575,12 @@ async def get_ground_truth_from_scorevision(
             raise ScoreVisionChallengeError(f"HTTP error while fetching ground truth: {e}")
 
         data = await response.json()
+        logger.info(
+            "[GroundTruth] task_id=%s element_id=%s full_response=%r",
+            challenge_id,
+            element_id,
+            data,
+        )
         return data.get("ground_truth")
 
 async def get_next_challenge_v3(

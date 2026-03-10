@@ -40,6 +40,26 @@ from scorevision.utils.rtf import (
 logger = getLogger(__name__)
 
 
+def _collect_scored_frame_numbers(pseudo_gt_annotations: list[object]) -> list[int]:
+    frame_numbers: list[int] = []
+    for idx, pgt in enumerate(pseudo_gt_annotations):
+        value = getattr(pgt, "frame_number", None)
+        if value is None and isinstance(pgt, dict):
+            value = pgt.get("frame_number")
+        if isinstance(value, int):
+            frame_numbers.append(value)
+            continue
+        if isinstance(value, str) and value.isdigit():
+            frame_numbers.append(int(value))
+            continue
+        logger.warning(
+            "Skipping invalid pseudo_gt_annotations[%s] type=%s (missing frame_number)",
+            idx,
+            type(pgt).__name__,
+        )
+    return frame_numbers
+
+
 def _normalize_cluster_id(raw_cluster: object) -> ShirtColor | None:
     if raw_cluster is None:
         return None
@@ -274,7 +294,7 @@ def post_vlm_ranking(
 
     acc_value = final_score
 
-    scored_frame_numbers = [pgt.frame_number for pgt in pseudo_gt_annotations]
+    scored_frame_numbers = _collect_scored_frame_numbers(pseudo_gt_annotations)
 
     return SVEvaluation(
         acc_breakdown=breakdown_dict,
