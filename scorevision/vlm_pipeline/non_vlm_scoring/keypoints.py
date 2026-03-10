@@ -32,7 +32,6 @@ from cv2 import (
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 
 from scorevision.chute_template.schemas import SVFrame
-from scorevision.utils.data_models import SVChallenge
 from scorevision.utils.pillar_metric_registry import register_metric
 from scorevision.utils.manifest import ElementPrefix, PillarName, KeypointTemplate
 
@@ -348,11 +347,11 @@ def evaluate_keypoints_for_frame(
 def evaluate_keypoints(
     miner_predictions: dict[int, dict],
     frames: Any,
-    challenge_type: SVChallenge,
-    keypoints_template: KeypointTemplate | None,
+    challenge_type_id: int | None = None,
+    keypoints_template: KeypointTemplate | None = None,
     **kwargs,
 ) -> float:
-    # TODO: use challenge_type to switch the template and keypoints
+    # TODO: use challenge_type_id to switch the template and keypoints
     if keypoints_template is None:
         raise ValueError("No Keypoints template was specified")
     template_image = keypoints_template.template

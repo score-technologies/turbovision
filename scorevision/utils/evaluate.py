@@ -1,9 +1,5 @@
 from logging import getLogger
 
-from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
-    ChallengeType,
-    parse_challenge_type,
-)
 from scorevision.utils.data_models import (
     SVChallenge,
     SVRunOutput,
@@ -159,9 +155,13 @@ def post_vlm_ranking(
     settings = get_settings()
     logger.info(payload.meta)
 
-    challenge_type = challenge.challenge_type
-    if challenge_type is None:
-        challenge_type = parse_challenge_type(payload.meta.get("challenge_type"))
+    challenge_type_id = challenge.challenge_type_id
+    if challenge_type_id is None:
+        raw = payload.meta.get("challenge_type_id")
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            challenge_type_id = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            challenge_type_id = int(raw.strip())
 
     if manifest is not None and element_id:
         element = manifest.get_element(id=element_id)
@@ -193,7 +193,6 @@ def post_vlm_ranking(
         miner_run.success
         and frame_count >= min_frames_required
         and (expected_total <= 0 or frame_count <= expected_total)
-        and challenge_type is not None
         and manifest is not None
     ):
         breakdown_dict = get_element_scores(
@@ -201,13 +200,13 @@ def post_vlm_ranking(
             pseudo_gt_annotations=pseudo_gt_annotations,
             miner_run=miner_run,
             frame_store=frame_store,
-            challenge_type=challenge_type,
+            challenge_type_id=challenge_type_id,
             element_id=element_id,
         )
     else:
         logger.info(
             f"Miner success={miner_run.success} frames={frame_count} "
-            f"challenge_type={getattr(challenge_type, 'value', None)} (must not be None)."
+            f"challenge_type_id={challenge_type_id}."
             f"manifest_present={manifest is not None}."
         )
     details = {
@@ -219,7 +218,7 @@ def post_vlm_ranking(
         "challenge": {
             "id_hash": challenge.challenge_id,
             "api_task_id": challenge.api_task_id,
-            "type": getattr(challenge.challenge_type, "value", None),
+            "type_id": challenge_type_id,
         },
         "prompt": challenge.prompt,
     }
@@ -314,7 +313,7 @@ def get_element_scores(
     pseudo_gt_annotations: list[PseudoGroundTruth],
     miner_run: SVRunOutput,
     frame_store: FrameStore,
-    challenge_type: ChallengeType,
+    challenge_type_id: int | None,
     element_id: str | None = None
 ) -> dict:
     settings = get_settings()
@@ -348,7 +347,7 @@ def get_element_scores(
                 image_height=settings.SCOREVISION_IMAGE_HEIGHT,
                 image_width=settings.SCOREVISION_IMAGE_WIDTH,
                 frames=frame_store,
-                challenge_type=challenge_type,
+                challenge_type_id=challenge_type_id,
                 keypoints_template=element.keypoints,
             )
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)

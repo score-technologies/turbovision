@@ -338,14 +338,18 @@ async def build_spotcheck_challenge_context(
         return None
 
     element = manifest.get_element(id=challenge_record.element_id)
-    challenge_type = element.keypoint_template.value if element and element.keypoint_template else "football"
-    logger.info("Using challenge_type=%s for spotcheck", challenge_type)
+    challenge_type_id = None
+    if element and element.keypoint_template is not None:
+        challenge_type_id = {"football": 0, "cricket": 1, "basketball": 2}.get(
+            element.keypoint_template.value
+        )
+    logger.info("Using challenge_type_id=%s for spotcheck", challenge_type_id)
 
     chal_api = {
         "task_id": challenge_record.challenge_id,
         "element_id": challenge_record.element_id,
         "window_id": challenge_record.window_id,
-        "challenge_type": challenge_type,
+        "challenge_type_id": challenge_type_id,
     }
     if challenge_record.video_url:
         chal_api["video_url"] = challenge_record.video_url

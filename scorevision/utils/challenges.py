@@ -24,11 +24,6 @@ from scorevision.utils.video_processing import (
 )
 from scorevision.utils.image_processing import image_to_b64string
 from scorevision.chute_template.schemas import TVFrame, TVPredictInput
-from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
-    parse_challenge_type,
-    ChallengeType,
-    CHALLENGE_ID_LOOKUP,
-)
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
@@ -124,16 +119,30 @@ def _safe_int(value: str | None) -> int | None:
         return None
 
 
-def _coerce_challenge_type(challenge: dict) -> ChallengeType:
-    ct = parse_challenge_type(challenge.get("challenge_type"))
-    if ct:
-        return ct
+def _coerce_challenge_type_id(challenge: dict) -> int | None:
     ct_id = challenge.get("challenge_type_id")
-    if isinstance(ct_id, int):
-        return CHALLENGE_ID_LOOKUP.get(ct_id, ChallengeType.FOOTBALL)
-    if isinstance(ct_id, str) and ct_id.isdigit():
-        return CHALLENGE_ID_LOOKUP.get(int(ct_id), ChallengeType.FOOTBALL)
-    return ChallengeType.FOOTBALL
+    if isinstance(ct_id, int) and not isinstance(ct_id, bool):
+        return ct_id
+    if isinstance(ct_id, str):
+        s = ct_id.strip()
+        if s.isdigit():
+            return int(s)
+
+    # Backward compatibility for legacy API payloads that still return strings.
+    ct = challenge.get("challenge_type")
+    if isinstance(ct, int) and not isinstance(ct, bool):
+        return ct
+    if isinstance(ct, str):
+        s = ct.strip()
+        if s.isdigit():
+            return int(s)
+        return {
+            "football": 0,
+            "soccer": 0,
+            "cricket": 1,
+            "basketball": 2,
+        }.get(s.lower())
+    return None
 
 
 def _coerce_payload_frames(payload: dict) -> list[dict[str, object]]:
@@ -205,12 +214,10 @@ def _build_offline_challenge(
     manifest_hash: str | None = None,
     window_id: str | None = None,
     task_id: int | None = None,
-    challenge_type: str | ChallengeType | None = None,
+    challenge_type_id: int | None = None,
     fps: int | None = None,
     seed: int | None = None,
 ) -> dict:
-    ct = parse_challenge_type(challenge_type) if challenge_type else None
-    ct_value = (ct or ChallengeType.FOOTBALL).value
     offline_task_id = task_id if task_id is not None else 1
     task_id_int = int(offline_task_id)
     payload = {"video_url": video_url}
@@ -222,7 +229,7 @@ def _build_offline_challenge(
         "element_id": element_id,
         "window_id": window_id or "offline",
         "manifest_hash": manifest_hash,
-        "challenge_type": ct_value,
+        "challenge_type_id": challenge_type_id if challenge_type_id is not None else 0,
         "seed": seed or 0,
         "video_url": video_url,
         "asset_url": video_url,
@@ -309,7 +316,7 @@ async def prepare_challenge_payload(
                 or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
             ),
             "task_id": challenge.get("task_id"),
-            "challenge_type": challenge.get("challenge_type"),
+            "challenge_type_id": challenge.get("challenge_type_id"),
             "n_frames_total": total_frames,
             "batch_size": batch_size,
             "n_keypoints": 32,  # TODO: update based on challenge type
@@ -389,7 +396,7 @@ async def prepare_challenge_payload(
                 or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
             ),
             "task_id": challenge.get("task_id"),
-            "challenge_type": challenge.get("challenge_type"),
+            "challenge_type_id": challenge.get("challenge_type_id"),
             "n_frames_total": total_frames,
             "batch_size": batch_size,
             "n_keypoints": 32,  # TODO: update based on challenge type
@@ -490,7 +497,7 @@ async def prepare_challenge_payload(
             or settings.SCOREVISION_VIDEO_FRAMES_PER_SECOND
         ),
         "task_id": challenge.get("task_id"),
-        "challenge_type": challenge.get("challenge_type"),
+        "challenge_type_id": challenge.get("challenge_type_id"),
         "n_frames_total": total_frames,
         "batch_size": batch_size,
         "n_keypoints": 32,  # TODO: update based on challenge type
@@ -531,7 +538,7 @@ def build_svchallenge_from_parts(
     cid = sha256(
         dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    ct = parse_challenge_type(chal_api.get("challenge_type"))
+    ct_id = _coerce_challenge_type_id(chal_api)
     return SVChallenge(
         env="SVEnv",
         payload=payload,
@@ -542,7 +549,7 @@ def build_svchallenge_from_parts(
         frames=frames,
         dense_optical_flow_frames=flows,
         api_task_id=chal_api.get("task_id"),
-        challenge_type=ct,
+        challenge_type_id=ct_id,
     )
 
 
@@ -679,13 +686,18 @@ async def get_next_challenge_v3(
             raise ScoreVisionChallengeError(
                 "Offline challenge requires an element_id argument."
             )
+        offline_challenge_type_id = _safe_int(os.getenv("SV_OFFLINE_CHALLENGE_TYPE_ID"))
+        if offline_challenge_type_id is None:
+            offline_challenge_type_id = _coerce_challenge_type_id(
+                {"challenge_type": os.getenv("SV_OFFLINE_CHALLENGE_TYPE")}
+            )
         return _build_offline_challenge(
             element_id=element_id,
             video_url=offline_url,
             manifest_hash=manifest_hash,
             window_id=os.getenv("SV_OFFLINE_WINDOW_ID", None),
             task_id=_safe_int(os.getenv("SV_OFFLINE_TASK_ID")),
-            challenge_type=os.getenv("SV_OFFLINE_CHALLENGE_TYPE", "football"),
+            challenge_type_id=offline_challenge_type_id,
             fps=_safe_int(os.getenv("SV_OFFLINE_FPS")),
             seed=_safe_int(os.getenv("SV_OFFLINE_SEED")) or 0,
         )
@@ -751,8 +763,7 @@ async def get_next_challenge_v3(
             if not (has_video_url or has_payload_frames):
                 raise ScoreVisionChallengeError("Challenge missing video url or payload frames.")
 
-            ct = _coerce_challenge_type(challenge)
-            challenge["challenge_type"] = ct.value
+            challenge["challenge_type_id"] = _coerce_challenge_type_id(challenge)
 
             logger.info(
                 "Fetched challenge: task_id=%s element_id=%s",
