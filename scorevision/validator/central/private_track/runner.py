@@ -14,7 +14,8 @@ from scorevision.utils.settings import get_settings
 from scorevision.validator.central.private_track.challenges import Challenge, select_challenge
 from scorevision.validator.central.private_track.miners import send_challenge
 from scorevision.validator.central.private_track.registry import RegisteredMiner, get_registered_miners
-from scorevision.validator.central.private_track.scoring import score_predictions
+from scorevision.utils.docker_hub import fetch_image_digest
+from scorevision.validator.central.private_track.scoring import PRIVATE_SCORING_VERSION, score_predictions
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
 from scorevision.validator.models import PrivateEvaluationResult
 
@@ -125,6 +126,7 @@ async def _challenge_miner(
     keypair,
     timeout: float,
     block: int,
+    image_digest: str,
 ) -> dict:
     try:
         attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
@@ -166,6 +168,10 @@ async def _challenge_miner(
             video_url=challenge.video_url,
             response_time_s=attempt.elapsed_s,
             timed_out=attempt.timed_out,
+            image_repo=miner.image_repo,
+            image_tag=miner.image_tag,
+            image_digest=image_digest,
+            scoring_version=PRIVATE_SCORING_VERSION,
         ))
     except Exception as e:
         logger.error("Miner %s challenge processing failed: %s", miner.hotkey, e)
@@ -181,6 +187,10 @@ async def _challenge_miner(
             block=block,
             video_url=challenge.video_url,
             timed_out=True,
+            image_repo=miner.image_repo,
+            image_tag=miner.image_tag,
+            image_digest=image_digest,
+            scoring_version=PRIVATE_SCORING_VERSION,
         ))
 
 
@@ -221,9 +231,12 @@ async def challenge_loop() -> None:
             )
 
             block = int(await subtensor.get_current_block())
+            digests = await asyncio.gather(*[
+                fetch_image_digest(m.image_repo, m.image_tag) for m in miners
+            ])
             results = list(await asyncio.gather(*[
-                _challenge_miner(miner, challenge, keypair, settings.PRIVATE_MINER_TIMEOUT_S, block)
-                for miner in miners
+                _challenge_miner(miner, challenge, keypair, settings.PRIVATE_MINER_TIMEOUT_S, block, digest)
+                for miner, digest in zip(miners, digests)
             ]))
 
             await _upload_shard(results, block, keypair.ss58_address)
@@ -278,13 +291,20 @@ async def spotcheck_loop() -> None:
             miner = registered_hotkeys[chosen["miner_hotkey"]]
             coldkey = metagraph.coldkeys[miner.uid]
 
+            image_repo = chosen.get("image_repo", miner.image_repo)
+            image_tag = chosen.get("image_tag", miner.image_tag)
+            image_digest = chosen.get("image_digest", "")
+            scoring_version = chosen.get("scoring_version", 0)
+
             spotcheck = PendingSpotcheck(
                 datetime_spotcheck=datetime.now(timezone.utc),
                 miner_hotkey=miner.hotkey,
                 miner_coldkey=coldkey,
-                miner_username=miner.image_repo.split("/")[0] if miner.image_repo else "",
-                miner_image_repo=miner.image_repo,
-                miner_image_tag=miner.image_tag,
+                miner_username=image_repo.split("/")[0] if image_repo else "",
+                miner_image_repo=image_repo,
+                miner_image_tag=image_tag,
+                miner_image_digest=image_digest,
+                scoring_version=scoring_version,
                 challenge_id=chosen["challenge_id"],
                 challenge_url=chosen.get("video_url", ""),
                 original_score=float(chosen["score"]),
