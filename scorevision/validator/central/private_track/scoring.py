@@ -2,6 +2,8 @@ from scorevision.utils.actions import ACTION_CONFIGS, Action
 from scorevision.utils.schemas import FramePrediction
 from scorevision.utils.settings import get_settings
 
+PRIVATE_SCORING_VERSION = 1
+
 
 def frame_to_seconds(frame: int) -> float:
     return frame / get_settings().PRIVATE_FRAME_RATE

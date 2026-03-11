@@ -67,6 +67,10 @@ class PrivateEvaluationResult:
     video_url: str = ""
     response_time_s: float = 0.0
     timed_out: bool = False
+    image_repo: str = ""
+    image_tag: str = ""
+    image_digest: str = ""
+    scoring_version: int = 0
 
 
 @dataclass
