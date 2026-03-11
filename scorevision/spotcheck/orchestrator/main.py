@@ -27,7 +27,7 @@ from scorevision.spotcheck.orchestrator.job_factory import (
     generate_spotcheck_id,
 )
 from scorevision.spotcheck.orchestrator.miner_registry import fetch_registered_miners
-from scorevision.spotcheck.orchestrator.pending_spotcheck_client import fetch_pending_spotchecks
+from scorevision.spotcheck.orchestrator.pending_spotcheck_client import fetch_pending_spotchecks, remove_completed_spotcheck
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("orchestrator")
@@ -79,20 +79,25 @@ async def _resolve_targets(cfg: SpotcheckConfig) -> list[dict]:
 
     if cfg.test_mode:
         logger.info("Test mode — skipping miner registration check, using all %d pending targets", len(pending))
-        return pending
+        targets = pending
+    else:
+        miners = await fetch_registered_miners(cfg.netuid, cfg.subtensor_network)
+        alive_hotkeys = set(miners.keys())
 
-    miners = await fetch_registered_miners(cfg.netuid, cfg.subtensor_network)
-    alive_hotkeys = set(miners.keys())
+        targets = []
+        for target in pending:
+            hotkey = target["miner_hotkey"]
+            if hotkey not in alive_hotkeys:
+                logger.info("Skipping %s — miner no longer registered", hotkey[:16])
+                continue
+            targets.append(target)
 
-    targets = []
-    for target in pending:
-        hotkey = target["miner_hotkey"]
-        if hotkey not in alive_hotkeys:
-            logger.info("Skipping %s — miner no longer registered", hotkey[:16])
-            continue
-        targets.append(target)
+        logger.info("Pending: %d | Alive miners: %d | Eligible: %d", len(pending), len(alive_hotkeys), len(targets))
 
-    logger.info("Pending: %d | Alive miners: %d | Eligible: %d", len(pending), len(alive_hotkeys), len(targets))
+    if len(targets) > cfg.max_spotchecks_per_run:
+        logger.info("Capping to %d oldest spotchecks (total eligible: %d)", cfg.max_spotchecks_per_run, len(targets))
+        targets = targets[:cfg.max_spotchecks_per_run]
+
     return targets
 
 
@@ -103,6 +108,7 @@ async def _run_single_spotcheck(
     target: dict,
 ) -> None:
     hotkey_short = target["miner_hotkey"][:16]
+    challenge_id = target["challenge_id"]
 
     image_ref = target.get("image_digest") or target["image_tag"]
     image_size_gb = await fetch_image_size_gb(target["image_repo"], image_ref)
@@ -112,8 +118,9 @@ async def _run_single_spotcheck(
         logger.warning("REJECTED %s — image %.2f GB exceeds limit %.0f GB", hotkey_short, image_size_gb, cfg.max_image_size_gb)
         if not cfg.test_mode:
             await report_failed_spotcheck(cfg.blacklist_api_url, target["miner_hotkey"], "image_too_large", cfg.auth_token)
+            await remove_completed_spotcheck(cfg.spotcheck_api_url, challenge_id, cfg.auth_token)
         else:
-            logger.info("Test mode — skipping blacklist report for %s", hotkey_short)
+            logger.info("Test mode — skipping blacklist report and removal for %s", hotkey_short)
         return
 
     ground_truth = await fetch_ground_truth(cfg.gt_api_url, target["challenge_id"], cfg.auth_token)
@@ -133,6 +140,10 @@ async def _run_single_spotcheck(
 
         if reason is None:
             logger.info("PASSED: %s", hotkey_short)
+            if not cfg.test_mode:
+                await remove_completed_spotcheck(cfg.spotcheck_api_url, challenge_id, cfg.auth_token)
+            else:
+                logger.info("Test mode — skipping removal for %s", hotkey_short)
             return
 
         is_infra_failure = reason in INFRASTRUCTURE_REASONS or _is_gpu_preemption(core_api, reason)
@@ -141,8 +152,9 @@ async def _run_single_spotcheck(
             logger.warning("FAILED: %s — image no longer available", hotkey_short)
             if not cfg.test_mode:
                 await report_failed_spotcheck(cfg.blacklist_api_url, target["miner_hotkey"], "image_unavailable", cfg.auth_token)
+                await remove_completed_spotcheck(cfg.spotcheck_api_url, challenge_id, cfg.auth_token)
             else:
-                logger.info("Test mode — skipping blacklist report for %s", hotkey_short)
+                logger.info("Test mode — skipping blacklist report and removal for %s", hotkey_short)
             return
 
         if is_infra_failure and attempt < cfg.max_spotcheck_retries:
@@ -157,6 +169,11 @@ async def _run_single_spotcheck(
                 await report_failed_spotcheck(cfg.blacklist_api_url, target["miner_hotkey"], reason, cfg.auth_token)
             else:
                 logger.info("Test mode — skipping blacklist report for %s", hotkey_short)
+
+        if not cfg.test_mode:
+            await remove_completed_spotcheck(cfg.spotcheck_api_url, challenge_id, cfg.auth_token)
+        else:
+            logger.info("Test mode — skipping removal for %s", hotkey_short)
         return
 
 

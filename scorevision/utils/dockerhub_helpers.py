@@ -4,7 +4,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DOCKERHUB_API = "https://hub.docker.com/v2"
-SCORE_DOCKERHUB_USER = "scorevision"
+SCORE_DOCKERHUB_USER = "manakoai"
 
 
 def get_auth_token(username: str, password: str) -> str | None:

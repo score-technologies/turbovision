@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.12-slim-bookworm
 
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -8,22 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ make python3-dev libffi-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /wheels
-COPY pyproject.toml README.md ./
-COPY scorevision ./scorevision
-RUN pip install --upgrade pip wheel setuptools hatchling && \
-    pip wheel --wheel-dir /wheels .
-
-FROM python:3.12-slim-bookworm
-
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
 WORKDIR /app
-COPY --from=builder /wheels /wheels
-RUN pip install --no-index --find-links=/wheels scorevision && \
-    pip uninstall -y opencv-python && \
-    pip install opencv-python-headless && \
-    rm -rf /wheels
+
+RUN pip install --upgrade pip && \
+    pip install httpx pydantic python-dotenv
+
+COPY scorevision ./scorevision
+RUN echo "" > scorevision/__init__.py && \
+    echo "" > scorevision/validator/__init__.py && \
+    echo "" > scorevision/validator/central/__init__.py
 
 ENTRYPOINT ["python", "-m", "scorevision.spotcheck.runner.main"]
