@@ -34,3 +34,20 @@ async def fetch_pending_spotchecks(api_url: str, auth_token: str) -> list[dict]:
 
     logger.info("Fetched %d pending spotchecks", len(targets))
     return targets
+
+
+async def remove_completed_spotcheck(api_url: str, challenge_id: str, auth_token: str) -> bool:
+    url = f"{api_url}/api/spotchecks/pending/{challenge_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.delete(
+                url,
+                headers={"Authorization": f"Bearer {auth_token}"},
+            )
+            response.raise_for_status()
+        logger.info("Removed completed spotcheck %s", challenge_id)
+        return True
+    except Exception as e:
+        logger.error("Failed to remove spotcheck %s: %s", challenge_id, e)
+        return False

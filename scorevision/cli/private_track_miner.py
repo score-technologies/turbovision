@@ -1,8 +1,12 @@
+import logging
 import os
+from json import dumps
 from pathlib import Path
 from scorevision.cli import console
 from scorevision.cli.errors import ConfigError, DockerBuildError, DockerPushError, DockerRunError
 from scorevision.utils.docker_helpers import DockerImage, build_image, login_dockerhub, push_image, run_container
+
+logger = logging.getLogger(__name__)
 
 
 def get_miner_config() -> tuple[str, str]:
@@ -74,9 +78,36 @@ def push_miner_image(image: DockerImage) -> None:
 
 
 async def commit_on_chain(image: DockerImage) -> None:
+    from bittensor import wallet, async_subtensor
+    from scorevision.utils.settings import get_settings
+
     console.info("Committing on-chain")
-    # TODO: Implement private track on-chain commit (register image_repo + image_tag)
-    console.warn("Private track on-chain commit not yet implemented\n")
+    settings = get_settings()
+    w = wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
+    )
+    payload = {
+        "role": "miner",
+        "track": "private",
+        "image_repo": image.repository,
+        "image_tag": image.tag,
+        "hotkey": w.hotkey.ss58_address,
+    }
+    logger.info("Commit payload: %s", payload)
+    try:
+        sub = async_subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
+        await sub.initialize()
+        await sub.set_reveal_commitment(
+            wallet=w,
+            netuid=settings.SCOREVISION_NETUID,
+            data=dumps(payload),
+            blocks_until_reveal=1,
+        )
+        console.success("On-chain commitment submitted\n")
+    except Exception as e:
+        logger.error("On-chain commit failed: %s: %s", type(e).__name__, e)
+        console.warn(f"On-chain commit failed: {e}\n")
 
 
 def start_miner_container(image: DockerImage) -> None:

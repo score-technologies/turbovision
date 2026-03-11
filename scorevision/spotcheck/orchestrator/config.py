@@ -21,6 +21,7 @@ class SpotcheckConfig:
     max_image_size_gb: float
     miner_ready_timeout_s: int
     max_spotcheck_retries: int
+    max_spotchecks_per_run: int
     auth_token: str
     test_mode: bool
 
@@ -42,8 +43,9 @@ def load_config() -> SpotcheckConfig:
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         allowed_video_domains=os.environ.get("ALLOWED_VIDEO_DOMAINS", "scoredata.me"),
         max_image_size_gb=float(os.environ.get("MAX_IMAGE_SIZE_GB", "30")),
-        miner_ready_timeout_s=int(os.environ.get("MINER_READY_TIMEOUT_S", "600")),
-        max_spotcheck_retries=int(os.environ.get("MAX_SPOTCHECK_RETRIES", "1")),
+        miner_ready_timeout_s=int(os.environ.get("MINER_READY_TIMEOUT_S", "720")),
+        max_spotcheck_retries=int(os.environ.get("MAX_SPOTCHECK_RETRIES", "2")),
+        max_spotchecks_per_run=int(os.environ.get("MAX_SPOTCHECKS_PER_RUN", "20")),
         auth_token=os.environ["SPOTCHECK_AUTH_TOKEN"],
         test_mode=os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes"),
     )
