@@ -1,7 +1,6 @@
 import asyncio
 import gc
 import os
-import signal
 from logging import getLogger
 from pathlib import Path
 from typing import Any, Optional, Dict
@@ -29,7 +28,7 @@ from scorevision.utils.cloudflare_helpers import (
 )
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.evaluate import post_vlm_ranking
-from scorevision.utils.manifest import Element, Manifest, load_manifest_from_public_index
+from scorevision.utils.manifest import Element, Manifest
 from scorevision.utils.miner_registry import Miner, get_miners_from_registry
 from scorevision.utils.predict import call_miner_model_on_chutes
 from scorevision.utils.prometheus import (
@@ -49,6 +48,14 @@ from scorevision.utils.prometheus import (
 from scorevision.utils.video_processing import FrameStore
 from scorevision.utils.settings import get_settings
 from scorevision.utils.windows import get_current_window_id, get_window_start_block
+from scorevision.validator.central.scheduling import (
+    cancel_removed_element_tasks,
+    extract_element_tempos,
+    load_manifest,
+    setup_shutdown_handler,
+    to_pos_int,
+    update_element_state,
+)
 from scorevision.vlm_pipeline.non_vlm_scoring.smoothness import (
     filter_low_quality_pseudo_gt_annotations,
 )
@@ -200,27 +207,6 @@ def _enough_bboxes_per_frame(
     return ok_frames >= min_frames_required
 
 
-def _to_pos_int(x: object) -> int | None:
-    try:
-        if x is None:
-            return None
-        if isinstance(x, bool):
-            return None
-        if isinstance(x, int):
-            return x if x > 0 else None
-        if isinstance(x, float):
-            xi = int(x)
-            return xi if xi > 0 else None
-        if isinstance(x, str):
-            s = x.strip()
-            if s.isdigit():
-                xi = int(s)
-                return xi if xi > 0 else None
-    except Exception:
-        pass
-    return None
-
-
 def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     if not isinstance(chal_api, dict):
         return None
@@ -244,40 +230,6 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     return None
 
 
-def _extract_element_tempos_from_manifest(manifest: Manifest, default_tempo_blocks: int) -> Dict[str, int]:
-    result: Dict[str, int] = {}
-    elems = getattr(manifest, "elements", None)
-
-    if isinstance(elems, dict):
-        for raw_eid, cfg in elems.items():
-            eid = str(raw_eid)
-            window_block = None
-            if isinstance(cfg, dict):
-                window_block = cfg.get("window_block") or cfg.get("tempo")
-            else:
-                window_block = getattr(cfg, "window_block", None) or getattr(cfg, "tempo", None)
-            tempo = _to_pos_int(window_block) or default_tempo_blocks
-            result[eid] = tempo
-        return result
-
-    if isinstance(elems, (list, tuple)):
-        for elem in elems:
-            if isinstance(elem, dict):
-                eid = elem.get("element_id") or elem.get("id")
-                window_block = elem.get("window_block") or elem.get("tempo")
-            else:
-                eid = getattr(elem, "element_id", None) or getattr(elem, "id", None)
-                window_block = getattr(elem, "window_block", None) or getattr(elem, "tempo", None)
-            if not eid:
-                continue
-            tempo = _to_pos_int(window_block) or default_tempo_blocks
-            result[str(eid)] = tempo
-        return result
-
-    logger.warning("[RunnerLoop] Manifest 'elements' is neither dict nor list; no per-element scheduling.")
-    return result
-
-
 def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | None) -> None:
     store_obj = video_cache.get("store") or frame_store
     if store_obj:
@@ -294,21 +246,12 @@ def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | 
     video_cache.clear()
 
 
-def _setup_shutdown_handler() -> None:
-    def handler():
-        logger.warning("Received shutdown signal, stopping runner...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda s, f: handler())
-
-
 async def _commit_central_validator_on_start(netuid: int) -> None:
     if os.getenv("SCOREVISION_COMMIT_VALIDATOR_ON_START", "1") in ("0", "false", "False"):
         return
 
     settings = get_settings()
-    delay_blocks = _to_pos_int(os.getenv("VALIDATOR_COMMIT_START_DELAY_BLOCKS")) or 3
+    delay_blocks = to_pos_int(os.getenv("VALIDATOR_COMMIT_START_DELAY_BLOCKS")) or 3
     if delay_blocks > 0:
         logger.info(
             "[central-validator-commit] delaying startup commit by %d block(s)...",
@@ -374,42 +317,6 @@ async def _commit_central_validator_on_start(netuid: int) -> None:
     )
     if not ok:
         logger.warning("[central-validator-commit] commitment failed.")
-
-
-async def _load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
-    if path_manifest is not None:
-        return Manifest.load_yaml(path_manifest)
-    if getattr(settings, "URL_MANIFEST", None):
-        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
-        return await load_manifest_from_public_index(settings.URL_MANIFEST, block_number=block, cache_dir=cache_dir)
-    raise RuntimeError(
-        "URL_MANIFEST is required when --manifest-path is not provided."
-    )
-
-
-def _cancel_removed_element_tasks(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int]) -> None:
-    removed = set(element_state.keys()) - set(element_tempos.keys())
-    for element_id in removed:
-        entry = element_state.pop(element_id, None)
-        if entry and entry.get("task") is not None:
-            task = entry["task"]
-            if not task.done():
-                logger.info("[RunnerLoop] Cancelling runner task for removed element_id=%s", element_id)
-                task.cancel()
-
-
-def _update_element_state(element_state: Dict[str, Dict[str, Any]], element_tempos: Dict[str, int], block: int) -> None:
-    for element_id, tempo in element_tempos.items():
-        entry = element_state.get(element_id)
-        window_id = get_current_window_id(block)
-        anchor = get_window_start_block(window_id, tempo=tempo)
-
-        if entry is None:
-            element_state[element_id] = {"tempo": tempo, "anchor": anchor, "task": None}
-            logger.info("[RunnerLoop] Registered new element_id=%s with tempo=%s blocks (anchor=%s)", element_id, tempo, anchor)
-        else:
-            entry["tempo"] = tempo
-            entry["anchor"] = anchor
 
 
 def _trigger_scheduled_runners(element_state: Dict[str, Dict[str, Any]], block: int, manifest: Manifest) -> None:
@@ -514,7 +421,7 @@ async def runner(
 
         logger.info("[Runner] Using window_id=%s for element_id=%s", window_id, element_id)
 
-        tempo_by_element = _extract_element_tempos_from_manifest(manifest, default_element_tempo) if manifest else {}
+        tempo_by_element = extract_element_tempos(manifest, default_element_tempo, track_filter="open-source") if manifest else {}
         tempo_blocks = int(tempo_by_element.get(str(element_id), default_element_tempo))
         try:
             window_start_block = get_window_start_block(window_id, tempo=tempo_blocks)
@@ -787,7 +694,7 @@ async def runner_loop(path_manifest: Path | None = None):
     reconnect_delay = settings.RUNNER_RECONNECT_DELAY_S
     default_element_tempo = settings.RUNNER_DEFAULT_ELEMENT_TEMPO
 
-    _setup_shutdown_handler()
+    setup_shutdown_handler(shutdown_event)
 
     subtensor = None
     element_state: Dict[str, Dict[str, Any]] = {}
@@ -828,7 +735,7 @@ async def runner_loop(path_manifest: Path | None = None):
             RUNNER_BLOCK_HEIGHT.set(block)
 
             try:
-                new_manifest = await _load_manifest(path_manifest, settings, block)
+                new_manifest = await load_manifest(path_manifest, settings, block)
             except Exception as e:
                 logger.error("[RunnerLoop] Failed to load Manifest at block %s: %s", block, e)
                 try:
@@ -847,9 +754,9 @@ async def runner_loop(path_manifest: Path | None = None):
                 logger.info("[RunnerLoop] Manifest hash changed (old=%s new=%s) → rebuilding element_state", manifest_hash, new_hash)
                 manifest = new_manifest
                 manifest_hash = new_hash
-                element_tempos = _extract_element_tempos_from_manifest(manifest, default_element_tempo)
-                _cancel_removed_element_tasks(element_state, element_tempos)
-                _update_element_state(element_state, element_tempos, block)
+                element_tempos = extract_element_tempos(manifest, default_element_tempo, track_filter="open-source")
+                cancel_removed_element_tasks(element_state, element_tempos, log_prefix="[RunnerLoop] ")
+                update_element_state(element_state, element_tempos, block, log_prefix="[RunnerLoop] ")
             else:
                 manifest = new_manifest
 

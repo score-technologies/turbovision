@@ -58,6 +58,7 @@ async def test_challenge_miner_scores_when_response_is_on_time():
             keypair=None,
             timeout=30.0,
             block=1234,
+            image_digest="sha256:abc123",
         )
 
     score_mock.assert_called_once()
@@ -92,6 +93,7 @@ async def test_challenge_miner_excludes_timeout_from_weights():
             keypair=None,
             timeout=30.0,
             block=1234,
+            image_digest="sha256:abc123",
         )
 
     score_mock.assert_not_called()

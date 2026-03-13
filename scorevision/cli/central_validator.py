@@ -72,11 +72,13 @@ def run_os_runner_process(path_manifest: str | None):
     asyncio.run(runner_loop(path_manifest=manifest_path))
 
 
-def run_pt_runner_process():
-    from scorevision.validator.central.private_track.runner import run_challenge_process
+def run_pt_runner_process(path_manifest: str | None = None):
+    from pathlib import Path
+    from scorevision.validator.central.private_track.runner import challenge_loop
     setup_logging()
 
-    run_challenge_process()
+    manifest_path = Path(path_manifest) if path_manifest else None
+    asyncio.run(challenge_loop(path_manifest=manifest_path))
 
 
 def run_pt_spotcheck_process():
@@ -145,9 +147,10 @@ def private_track():
 
 
 @private_track.command("runner")
-def pt_runner_cmd():
+@click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
+def pt_runner_cmd(manifest: str | None):
     setup_logging()
-    run_pt_runner_process()
+    run_pt_runner_process(manifest)
 
 
 @private_track.command("spotcheck")
@@ -191,6 +194,6 @@ def start_all_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
         multiprocessing.Process(target=run_signer_process, name="signer"),
         multiprocessing.Process(target=run_os_runner_process, args=(manifest,), name="os-runner"),
         multiprocessing.Process(target=run_weights_process, args=(tail, m_min, tempo, manifest), name="weights"),
-        multiprocessing.Process(target=run_pt_runner_process, name="pt-runner"),
+        multiprocessing.Process(target=run_pt_runner_process, args=(manifest,), name="pt-runner"),
         multiprocessing.Process(target=run_pt_spotcheck_process, name="pt-spotcheck"),
     ])
