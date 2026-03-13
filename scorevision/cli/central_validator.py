@@ -19,13 +19,31 @@ def setup_signal_handlers():
     signal.signal(signal.SIGINT, handler)
 
 
-def run_runner_process(path_manifest: str | None):
-    from pathlib import Path
-    from scorevision.validator.central import runner_loop
+def start_and_manage_processes(procs: list[multiprocessing.Process]):
+    for proc in procs:
+        proc.start()
+
+    pid_summary = ", ".join(f"{proc.name} pid={proc.pid}" for proc in procs)
+    logger.info("All processes started (%s)", pid_summary)
+
+    try:
+        for proc in procs:
+            proc.join()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, terminating processes...")
+        for proc in procs:
+            proc.terminate()
+        for proc in procs:
+            proc.join(timeout=5)
+
+    logger.info("Central validator shutdown complete")
+
+
+def run_signer_process():
+    from scorevision.validator.core import run_signer
     setup_logging()
 
-    manifest_path = Path(path_manifest) if path_manifest else None
-    asyncio.run(runner_loop(path_manifest=manifest_path))
+    asyncio.run(run_signer())
 
 
 def run_weights_process(tail: int, m_min: int, tempo: int, path_manifest: str | None):
@@ -45,11 +63,27 @@ def run_weights_process(tail: int, m_min: int, tempo: int, path_manifest: str | 
     )
 
 
-def run_signer_process():
-    from scorevision.validator.core import run_signer
+def run_os_runner_process(path_manifest: str | None):
+    from pathlib import Path
+    from scorevision.validator.central import runner_loop
     setup_logging()
 
-    asyncio.run(run_signer())
+    manifest_path = Path(path_manifest) if path_manifest else None
+    asyncio.run(runner_loop(path_manifest=manifest_path))
+
+
+def run_pt_runner_process():
+    from scorevision.validator.central.private_track.runner import run_challenge_process
+    setup_logging()
+
+    run_challenge_process()
+
+
+def run_pt_spotcheck_process():
+    from scorevision.validator.central.private_track.runner import run_spotcheck_process
+    setup_logging()
+
+    run_spotcheck_process()
 
 
 @click.group("central-validator")
@@ -67,66 +101,26 @@ def open_source():
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=150, help="Weights loop tempo in blocks")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
-def start_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
+def os_start_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     setup_signal_handlers()
 
-    logger.info("Starting central validator with three processes")
+    logger.info("Starting open-source central validator")
+    logger.info("  Signer service: starting...")
     logger.info("  Runner loop: manifest=%s", manifest or "auto")
     logger.info("  Weights loop: tempo=%d blocks, tail=%d, m_min=%d", tempo, tail, m_min)
-    logger.info("  Signer service: starting...")
 
-    signer_proc = multiprocessing.Process(
-        target=run_signer_process,
-        name="central-signer",
-    )
-    runner_proc = multiprocessing.Process(
-        target=run_runner_process,
-        args=(manifest,),
-        name="central-runner",
-    )
-    weights_proc = multiprocessing.Process(
-        target=run_weights_process,
-        args=(tail, m_min, tempo, manifest),
-        name="central-weights",
-    )
-
-    signer_proc.start()
-    runner_proc.start()
-    weights_proc.start()
-
-    logger.info(
-        "All processes started (signer pid=%d, runner pid=%d, weights pid=%d)",
-        signer_proc.pid,
-        runner_proc.pid,
-        weights_proc.pid,
-    )
-
-    try:
-        signer_proc.join()
-        runner_proc.join()
-        weights_proc.join()
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received, terminating processes...")
-        signer_proc.terminate()
-        runner_proc.terminate()
-        weights_proc.terminate()
-        signer_proc.join(timeout=5)
-        runner_proc.join(timeout=5)
-        weights_proc.join(timeout=5)
-
-    logger.info("Central validator shutdown complete")
+    start_and_manage_processes([
+        multiprocessing.Process(target=run_signer_process, name="os-signer"),
+        multiprocessing.Process(target=run_os_runner_process, args=(manifest,), name="os-runner"),
+        multiprocessing.Process(target=run_weights_process, args=(tail, m_min, tempo, manifest), name="os-weights"),
+    ])
 
 
 @open_source.command("runner")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
-def runner_cmd(manifest: str | None):
-    from pathlib import Path
-    from scorevision.validator.central import runner_loop
+def os_runner_cmd(manifest: str | None):
     setup_logging()
-
-    manifest_path = Path(manifest) if manifest else None
-    logger.info("Starting runner-only mode (manifest=%s)", manifest or "auto")
-    asyncio.run(runner_loop(path_manifest=manifest_path))
+    run_os_runner_process(manifest)
 
 
 @open_source.command("weights")
@@ -134,31 +128,15 @@ def runner_cmd(manifest: str | None):
 @click.option("--m-min", default=25, help="Minimum samples per miner")
 @click.option("--tempo", default=150, help="Weights loop tempo in blocks")
 @click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
-def weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
-    from pathlib import Path
-    from scorevision.validator.core import weights_loop
+def os_weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
     setup_logging()
-
-    manifest_path = Path(manifest) if manifest else None
-    logger.info("Starting weights-only mode (tempo=%d blocks)", tempo)
-    asyncio.run(
-        weights_loop(
-            tail=tail,
-            m_min=m_min,
-            tempo=tempo,
-            path_manifest=manifest_path,
-            commit_on_start=False,
-        )
-    )
+    run_weights_process(tail, m_min, tempo, manifest)
 
 
 @open_source.command("signer")
-def signer_cmd():
-    from scorevision.validator.core import run_signer
+def os_signer_cmd():
     setup_logging()
-
-    logger.info("Starting signer-only mode")
-    asyncio.run(run_signer())
+    run_signer_process()
 
 
 @central_validator.group("private-track")
@@ -167,18 +145,52 @@ def private_track():
 
 
 @private_track.command("runner")
-def private_runner_cmd():
-    from scorevision.validator.central.private_track.runner import run_challenge_process
+def pt_runner_cmd():
     setup_logging()
-
-    logger.info("Starting private track challenge runner")
-    run_challenge_process()
+    run_pt_runner_process()
 
 
 @private_track.command("spotcheck")
-def private_spotcheck_cmd():
-    from scorevision.validator.central.private_track.runner import run_spotcheck_process
+def pt_spotcheck_cmd():
     setup_logging()
+    run_pt_spotcheck_process()
 
-    logger.info("Starting private track spot check loop")
-    run_spotcheck_process()
+
+@private_track.command("weights")
+@click.option("--tail", default=28800, help="Tail blocks for data fetching")
+@click.option("--m-min", default=25, help="Minimum samples per miner")
+@click.option("--tempo", default=100, help="Weights loop tempo in blocks")
+@click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
+def pt_weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
+    setup_logging()
+    run_weights_process(tail, m_min, tempo, manifest)
+
+
+@private_track.command("signer")
+def pt_signer_cmd():
+    setup_logging()
+    run_signer_process()
+
+
+@central_validator.command("start")
+@click.option("--tail", default=28800, help="Tail blocks for data fetching")
+@click.option("--m-min", default=25, help="Minimum samples per miner")
+@click.option("--tempo", default=150, help="Weights loop tempo in blocks")
+@click.option("--manifest", default=None, type=click.Path(exists=True), help="Path to manifest file")
+def start_all_cmd(tail: int, m_min: int, tempo: int, manifest: str | None):
+    setup_signal_handlers()
+
+    logger.info("Starting unified central validator (open-source + private-track)")
+    logger.info("  Signer service: starting...")
+    logger.info("  Runner loop (open-source): manifest=%s", manifest or "auto")
+    logger.info("  Weights loop (both tracks): tempo=%d blocks, tail=%d, m_min=%d", tempo, tail, m_min)
+    logger.info("  Private-track challenge runner: starting...")
+    logger.info("  Private-track spotcheck loop: starting...")
+
+    start_and_manage_processes([
+        multiprocessing.Process(target=run_signer_process, name="signer"),
+        multiprocessing.Process(target=run_os_runner_process, args=(manifest,), name="os-runner"),
+        multiprocessing.Process(target=run_weights_process, args=(tail, m_min, tempo, manifest), name="weights"),
+        multiprocessing.Process(target=run_pt_runner_process, name="pt-runner"),
+        multiprocessing.Process(target=run_pt_spotcheck_process, name="pt-spotcheck"),
+    ])

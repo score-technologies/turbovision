@@ -7,7 +7,7 @@ from scorevision.validator.audit import (
     calculate_next_spotcheck_delay,
 )
 from scorevision.validator.models import SpotcheckResult, ChallengeRecord
-from scorevision.validator.audit import spotcheck as spotcheck_mod
+from scorevision.validator.audit.open_source import spotcheck as spotcheck_mod
 
 
 def test_calculate_match_percentage_identical():
