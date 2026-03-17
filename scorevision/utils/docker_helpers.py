@@ -127,9 +127,9 @@ def stop_container(container_id: str, remove: bool = True) -> bool:
     return result.returncode == 0
 
 
-def login_dockerhub(username: str, token: str) -> bool:
+def login_ghcr(username: str, token: str) -> bool:
     result = subprocess.run(
-        ["docker", "login", "-u", username, "--password-stdin"],
+        ["docker", "login", "ghcr.io", "-u", username, "--password-stdin"],
         input=token.encode(),
         capture_output=True,
     )

@@ -6,7 +6,8 @@ from dataclasses import dataclass
 class SpotcheckConfig:
     namespace: str
     runner_image: str
-    dockerhub_secret: str
+    ghcr_secret: str
+    ghcr_token: str
     runner_image_secret: str
     match_threshold: str
     miner_timeout_s: str
@@ -30,7 +31,8 @@ def load_config() -> SpotcheckConfig:
     return SpotcheckConfig(
         namespace=os.environ.get("SPOTCHECK_NAMESPACE", "spotcheck"),
         runner_image=os.environ["RUNNER_IMAGE"],
-        dockerhub_secret=os.environ.get("DOCKERHUB_SECRET", "dockerhub-creds"),
+        ghcr_secret=os.environ.get("GHCR_SECRET", "ghcr-creds"),
+        ghcr_token=os.environ.get("GHCR_TOKEN", ""),
         runner_image_secret=os.environ.get("RUNNER_IMAGE_SECRET", "manakoai-registry"),
         match_threshold=os.environ.get("MATCH_THRESHOLD", "0.98"),
         miner_timeout_s=os.environ.get("MINER_TIMEOUT_S", "120"),

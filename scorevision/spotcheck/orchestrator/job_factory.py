@@ -74,7 +74,7 @@ def build_miner_job(
         containers=[container],
         restart_policy="OnFailure",
         automount_service_account_token=False,
-        image_pull_secrets=[k8s.V1LocalObjectReference(name=cfg.dockerhub_secret)],
+        image_pull_secrets=[k8s.V1LocalObjectReference(name=cfg.ghcr_secret)],
         tolerations=[
             k8s.V1Toleration(
                 key="spotcheck-gpu", operator="Equal",

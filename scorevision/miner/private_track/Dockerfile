@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
-    fastapi uvicorn httpx pydantic opencv-python-headless \
+    fastapi uvicorn httpx pydantic opencv-python-headless cryptography \
     "fiber @ git+https://github.com/rayonlabs/fiber.git@a41ab890708757140a3cf4aae8e5af57a8b03159"
 
 COPY scorevision/miner/private_track/ ./scorevision/miner/private_track/

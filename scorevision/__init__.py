@@ -26,14 +26,13 @@ def app(verbosity: int):
 
 @app.command("deploy-pt-miner")
 @click.option("--tag", required=True, help="Docker image tag (e.g., v1.0.0)")
-@click.option("--no-push", is_flag=True, help="Skip pushing to DockerHub")
-@click.option("--no-share", is_flag=True, help="Skip adding Score as collaborator")
+@click.option("--no-push", is_flag=True, help="Skip pushing to GHCR")
 @click.option("--no-commit", is_flag=True, help="Skip on-chain commitment")
 @click.option("--no-start", is_flag=True, help="Skip starting the container")
-def pt_deploy_miner_cmd(tag: str, no_push: bool, no_share: bool, no_commit: bool, no_start: bool):
+def pt_deploy_miner_cmd(tag: str, no_push: bool, no_commit: bool, no_start: bool):
     from scorevision.cli.private_track_miner import deploy_miner
     setup_logging()
-    run(deploy_miner(tag, no_push, no_share, no_commit, no_start))
+    run(deploy_miner(tag, no_push, no_commit, no_start))
 
 
 @app.command("deploy-os-miner")

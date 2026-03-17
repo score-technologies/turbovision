@@ -31,7 +31,7 @@ pip install -e .
 cp env.example .env
 # Edit .env with your credentials
 
-# Build, push to your DockerHub, share with Score, commit on-chain, and start
+# Build, push to GHCR, commit on-chain, and start
 sv -v deploy-pt-miner --tag v1.0.0
 ```
 
@@ -39,19 +39,16 @@ sv -v deploy-pt-miner --tag v1.0.0
 
 ### `sv -v deploy-pt-miner`
 
-Builds your Docker image, pushes it to your private DockerHub repo, adds Score as a collaborator, commits on-chain, and starts the service.
+Builds your Docker image, pushes it to your private GHCR repo, commits on-chain, and starts the service.
 
 ```bash
-# Full workflow: build → push → share → commit → start
+# Full workflow: build → push → commit → start
 sv -v deploy-pt-miner --tag v1.0.0
-
-# Local testing: build → push → start (skip sharing and on-chain)
-sv -v deploy-pt-miner --tag v1.0.0 --no-share --no-commit
 
 # Build only (for local testing)
 sv -v deploy-pt-miner --tag v1.0.0 --no-push --no-start
 
-# Build, push, share, but don't commit or start
+# Build, push, but don't commit or start
 sv -v deploy-pt-miner --tag v1.0.0 --no-commit --no-start
 ```
 
@@ -59,51 +56,44 @@ sv -v deploy-pt-miner --tag v1.0.0 --no-commit --no-start
 | Flag | Description |
 |------|-------------|
 | `--tag` | **Required.** Docker image tag (e.g., `v1.0.0`, `latest`) |
-| `--no-push` | Skip pushing to DockerHub |
-| `--no-share` | Skip adding Score as collaborator (for testing) |
+| `--no-push` | Skip pushing to GHCR |
 | `--no-commit` | Skip on-chain commitment |
 | `--no-start` | Skip starting the container |
 
-## DockerHub Setup
+## GHCR Setup
 
-### Why Private Repos?
+### Why Private Images?
 
 Your Docker image contains your model/solution. To keep it private from other miners while allowing Score to verify it:
 
-1. **You** own a private DockerHub repo
-2. **You** add `scorevision` as a read-only collaborator
+1. **You** own a private GHCR package
+2. **You** add `DataAndMike` as a read-only collaborator via the GHCR UI
 3. **Score** can pull your image for spot checks
-4. **Other miners** cannot access your repo
+4. **Other miners** cannot access your package
 
 ### Setup Steps
 
-1. **Create a DockerHub account** (if you don't have one): https://hub.docker.com
-
-2. **Create an Access Token:**
-   - Go to https://hub.docker.com/settings/security
-   - Click "Personal access tokens"
-   - Click "Generate new token"
-   - Description: `privatevision`
-   - Expiration Date: `None`
-   - Permissions: "Read, Write, Delete"
+1. **Create a GitHub Personal Access Token (PAT):**
+   - Go to https://github.com/settings/tokens
+   - Click "Generate new token (classic)"
+   - Select scopes: `write:packages`, `read:packages`, `delete:packages`
    - Copy the token
 
-3. **Configure `.env`:**
+2. **Configure `.env`:**
    ```bash
-   DOCKERHUB_USERNAME=your-username
-   DOCKERHUB_TOKEN=dckr_pat_xxxxx  # Your access token
-   DOCKERHUB_REPO=pt-solution      # Your repo name (will be created if needed)
+   GITHUB_USERNAME=your-github-username
+   GITHUB_TOKEN=ghp_xxxxx  # Your PAT with write:packages scope
+   GHCR_REPO=pt-solution   # Your repo name (default: pt-solution)
    ```
 
-4. **Deploy:**
+3. **Deploy:**
    ```bash
    sv -v deploy-pt-miner --tag v1.0.0
    ```
 
    The CLI will automatically:
-   - Create `your-username/pt-solution` as a private repo
-   - Add `scorevision` as a read-only collaborator
-   - Push your image
+   - Build your Docker image
+   - Push to `ghcr.io/your-username/pt-solution:v1.0.0`
    - Commit on-chain
 
    You will see an output like this at the end:
@@ -123,7 +113,17 @@ Your Docker image contains your model/solution. To keep it private from other mi
    ```bash
    docker stop container_id
    ```
-   
+
+4. **Share with Score (one-time manual step):**
+
+   After your first push, grant Score read access to your private GHCR package:
+
+   1. Go to `https://github.com/users/YOUR_USERNAME/packages/container/pt-solution/settings`
+   2. Under **Manage access**, click **Invite teams or people**
+   3. Add `DataAndMike` with **Read** access
+
+   Without this step, your miner will fail spot-checks and be blacklisted.
+
 
 ## Environment Variables
 
@@ -131,7 +131,7 @@ Create a `.env` file:
 
 ```bash
 # ──────────────────────────────────────────────────────────────────────────
-# 💰 Bittensor Wallet Configuration
+# Bittensor Wallet Configuration
 # ──────────────────────────────────────────────────────────────────────────
 BITTENSOR_WALLET_COLD=default
 BITTENSOR_WALLET_HOT=default
@@ -141,15 +141,15 @@ BITTENSOR_SUBTENSOR_ENDPOINT=test
 BITTENSOR_SUBTENSOR_FALLBACK=wss://test.finney.opentensor.ai:443
 
 # =============================================================================
-# ⛏️ PRIVATE TRACK MINER
+# PRIVATE TRACK MINER
 # =============================================================================
 
 MINER_PORT=8000
 
-# DockerHub - miners use their own private repo
-DOCKERHUB_USERNAME=your-dockerhub-username
-DOCKERHUB_TOKEN=your-access-token
-DOCKERHUB_REPO=pt-solution  # Your private repo name (default: pt-solution)
+# GHCR - miners use their own private package
+GITHUB_USERNAME=your-github-username
+GITHUB_TOKEN=your-github-pat
+GHCR_REPO=pt-solution  # Your private repo name (default: pt-solution)
 
 # Fiber security
 SUBTENSOR_NETWORK=finney
@@ -190,7 +190,7 @@ sv -v deploy-pt-miner --tag test --no-push --no-start
 docker run -p 8000:8000 \
   -e BLACKLIST_ENABLED=false \
   -e VERIFY_ENABLED=false \
-  your-username/pt-solution:test
+  ghcr.io/your-username/pt-solution:test
 ```
 
 You should see on startup:
@@ -200,16 +200,13 @@ INFO: Verify: DISABLED
 WARNING: All security DISABLED - local testing only
 ```
 
-### 3. Test with DockerHub (Without On-Chain)
+### 3. Test with GHCR (Without On-Chain)
 
-Test the full DockerHub workflow without committing on-chain:
+Test the full GHCR workflow without committing on-chain:
 
 ```bash
-# Build → Push → Share with Score → Start (but skip on-chain commit)
-pv miner --tag test --no-commit
-
-# Or skip sharing too (pure local test)
-pv miner --tag test --no-share --no-commit
+# Build → Push → Start (but skip on-chain commit)
+sv -v deploy-pt-miner --tag test --no-commit
 ```
 
 ### 4. Test Locally (With Wallet)
@@ -224,23 +221,23 @@ docker run -p 8000:8000 \
   -e NETUID=44 \
   -e SUBTENSOR_NETWORK=finney \
   -e MIN_STAKE_THRESHOLD=1000 \
-  your-username/pt-solution:test
+  ghcr.io/your-username/pt-solution:test
 ```
 
 ### 5. Deploy to Production
 
 ```bash
-# Full deploy: build → push → share → commit on-chain → start
-pv miner --tag v1.0.0
+# Full deploy: build → push → commit on-chain → start
+sv -v deploy-pt-miner --tag v1.0.0
 ```
 
 The CLI will:
 1. Build your Docker image
-2. Create/verify your private repo on DockerHub
-3. Add `scorevision` as read-only collaborator
-4. Push to `your-username/pt-solution:v1.0.0`
-5. Commit `{"image_repo": "your-username/pt-solution", "image_tag": "v1.0.0"}` on-chain
-6. Start the container locally
+2. Push to `ghcr.io/your-username/pt-solution:v1.0.0`
+3. Commit `{"image_repo": "ghcr.io/your-username/pt-solution", "image_tag": "v1.0.0"}` on-chain
+4. Start the container locally
+
+After deployment, **share with Score** (see [GHCR Setup](#ghcr-setup) step 4).
 
 **For production**, always run with wallet mounted and security enabled:
 
@@ -252,7 +249,7 @@ docker run -d -p 8000:8000 \
   -e NETUID=44 \
   -e SUBTENSOR_NETWORK=finney \
   -e MIN_STAKE_THRESHOLD=1000 \
-  your-username/pt-solution:v1.0.0
+  ghcr.io/your-username/pt-solution:v1.0.0
 ```
 
 ### 6. Verify On-Chain Commitment
@@ -313,7 +310,7 @@ BLACKLIST_ENABLED=false
 VERIFY_ENABLED=false
 ```
 
-**⚠️ Never run with security disabled in production!**
+**Never run with security disabled in production!**
 
 ## Spot Checks
 
@@ -355,13 +352,13 @@ docker build -f Dockerfile.miner -t test .
 
 ### Push fails
 ```bash
-echo $DOCKERHUB_TOKEN | docker login -u $DOCKERHUB_USERNAME --password-stdin
+echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USERNAME --password-stdin
 ```
 
 ### On-chain commit fails
 - Ensure `COLDKEY` and `HOTKEY` are correct
 - Check you're registered on subnet 44
 
-### "Failed to add collaborator"
-- Check your access token has write permissions
-- Try manually: DockerHub → Your Repo → Settings → Collaborators → Add `scorevision`
+### "Image not accessible"
+- Ensure you've added `DataAndMike` as a collaborator with Read access on your GHCR package
+- Go to `https://github.com/users/YOUR_USERNAME/packages/container/pt-solution/settings` to check

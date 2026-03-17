@@ -3,7 +3,7 @@ import json
 import logging
 from urllib.parse import urlparse, urlunparse
 from kubernetes import client as k8s, config as k8s_config
-from scorevision.utils.docker_hub import exceeds_size_limit, fetch_image_size_gb
+from scorevision.utils.docker_hub import check_image_accessible, exceeds_size_limit, fetch_image_size_gb
 from scorevision.validator.central.private_track.scoring import PRIVATE_SCORING_VERSION
 from scorevision.spotcheck.orchestrator.blacklist_client import report_failed_spotcheck
 from scorevision.spotcheck.orchestrator.config import SpotcheckConfig, load_config
@@ -111,7 +111,18 @@ async def _run_single_spotcheck(
     challenge_id = target["challenge_id"]
 
     image_ref = target.get("image_digest") or target["image_tag"]
-    image_size_gb = await fetch_image_size_gb(target["image_repo"], image_ref)
+
+    accessible = await check_image_accessible(target["image_repo"], image_ref, ghcr_pat=cfg.ghcr_token)
+    if not accessible:
+        logger.warning("FAILED %s — image not accessible (miner has not shared GHCR package with Score)", hotkey_short)
+        if not cfg.test_mode:
+            await report_failed_spotcheck(cfg.blacklist_api_url, target["miner_hotkey"], "image_unavailable", cfg.auth_token)
+            await remove_completed_spotcheck(cfg.spotcheck_api_url, challenge_id, cfg.auth_token)
+        else:
+            logger.info("Test mode — skipping blacklist report and removal for %s", hotkey_short)
+        return
+
+    image_size_gb = await fetch_image_size_gb(target["image_repo"], image_ref, ghcr_pat=cfg.ghcr_token)
     if image_size_gb is not None:
         logger.info("Image %s size: %.2f GB", image_ref, image_size_gb)
     if exceeds_size_limit(image_size_gb, cfg.max_image_size_gb):

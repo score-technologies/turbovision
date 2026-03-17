@@ -4,27 +4,29 @@ from json import dumps
 from pathlib import Path
 from scorevision.cli import console
 from scorevision.cli.errors import ConfigError, DockerBuildError, DockerPushError, DockerRunError
-from scorevision.utils.docker_helpers import DockerImage, build_image, login_dockerhub, push_image, run_container
+from scorevision.utils.docker_helpers import DockerImage, build_image, login_ghcr, push_image, run_container
 
 logger = logging.getLogger(__name__)
 
+GHCR_REGISTRY = "ghcr.io"
+
 
 def get_miner_config() -> tuple[str, str]:
-    username = os.environ.get("DOCKERHUB_USERNAME")
-    repo_name = os.environ.get("DOCKERHUB_REPO", "pt-solution")
+    username = os.environ.get("GITHUB_USERNAME")
+    repo_name = os.environ.get("GHCR_REPO", "pt-solution")
 
     if not username:
-        raise ConfigError("DOCKERHUB_USERNAME required - see MINER.md")
+        raise ConfigError("GITHUB_USERNAME required - see MINER.md")
 
     return username, repo_name
 
 
-def get_dockerhub_credentials() -> tuple[str, str]:
-    username = os.environ.get("DOCKERHUB_USERNAME")
-    token = os.environ.get("DOCKERHUB_TOKEN")
+def get_ghcr_credentials() -> tuple[str, str]:
+    username = os.environ.get("GITHUB_USERNAME")
+    token = os.environ.get("GITHUB_TOKEN")
 
     if not username or not token:
-        raise ConfigError("DOCKERHUB_USERNAME and DOCKERHUB_TOKEN required")
+        raise ConfigError("GITHUB_USERNAME and GITHUB_TOKEN required")
 
     return username, token
 
@@ -39,37 +41,11 @@ def build_miner_image(image: DockerImage) -> None:
     console.success("Build complete\n")
 
 
-def setup_dockerhub_repo(username: str, token: str, repo_name: str) -> None:
-    from scorevision.utils.dockerhub_helpers import create_private_repo, get_auth_token
-
-    console.info(f"Ensuring repo exists: {username}/{repo_name}")
-    auth_token = get_auth_token(username, token)
-    if not auth_token:
-        raise DockerPushError("DockerHub authentication failed")
-
-    if not create_private_repo(auth_token, username, repo_name):
-        raise DockerPushError(f"Failed to create/verify repo: {username}/{repo_name}")
-    console.success("Repo ready\n")
-
-
-def share_with_score(username: str, token: str, repo_name: str) -> None:
-    from scorevision.utils.dockerhub_helpers import add_collaborator, get_auth_token, SCORE_DOCKERHUB_USER
-
-    console.info(f"Adding {SCORE_DOCKERHUB_USER} as collaborator")
-    auth_token = get_auth_token(username, token)
-    if not auth_token:
-        raise DockerPushError("DockerHub authentication failed")
-
-    if not add_collaborator(auth_token, username, repo_name, SCORE_DOCKERHUB_USER, "read"):
-        raise DockerPushError(f"Failed to add {SCORE_DOCKERHUB_USER} as collaborator")
-    console.success(f"{SCORE_DOCKERHUB_USER} can now pull your images\n")
-
-
 def push_miner_image(image: DockerImage) -> None:
-    username, token = get_dockerhub_credentials()
+    username, token = get_ghcr_credentials()
 
-    if not login_dockerhub(username, token):
-        raise DockerPushError("DockerHub login failed")
+    if not login_ghcr(username, token):
+        raise DockerPushError("GHCR login failed")
 
     console.info(f"Pushing {image.full_name}")
     if not push_image(image):
@@ -124,23 +100,20 @@ def start_miner_container(image: DockerImage) -> None:
     console.success(f"Miner running: {container_id[:12]}\n")
 
 
-async def deploy_miner(tag: str, no_push: bool, no_share: bool, no_commit: bool, no_start: bool) -> None:
+async def deploy_miner(tag: str, no_push: bool, no_commit: bool, no_start: bool) -> None:
     try:
         username, repo_name = get_miner_config()
-        image = DockerImage(repository=f"{username}/{repo_name}", tag=tag)
+        image = DockerImage(repository=f"{GHCR_REGISTRY}/{username}/{repo_name}", tag=tag)
 
         build_miner_image(image)
 
         if not no_push:
-            dockerhub_username, dockerhub_token = get_dockerhub_credentials()
-
-            setup_dockerhub_repo(dockerhub_username, dockerhub_token, repo_name)
             push_miner_image(image)
 
-            if not no_share:
-                share_with_score(dockerhub_username, dockerhub_token, repo_name)
-            else:
-                console.warn("Skipping Score collaborator share\n")
+            console.warn(
+                "Remember to share your package with Score via GHCR package settings.\n"
+                "See MINER.md for instructions.\n"
+            )
 
             if not no_commit:
                 await commit_on_chain(image)

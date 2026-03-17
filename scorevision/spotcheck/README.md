@@ -24,7 +24,7 @@ The checker container that:
 
 ## Configuration
 
-All environment variables and their defaults are defined in `orchestrator/config.py` (`SpotcheckConfig`). Sensitive values (`SPOTCHECK_AUTH_TOKEN`, `DOCKERHUB_SECRET`) are stored as Kubernetes Secrets and injected via `envFrom` or `valueFrom.secretKeyRef` in the CronJob/Job manifests.
+All environment variables and their defaults are defined in `orchestrator/config.py` (`SpotcheckConfig`). Sensitive values (`SPOTCHECK_AUTH_TOKEN`, `GHCR_SECRET`) are stored as Kubernetes Secrets and injected via `envFrom` or `valueFrom.secretKeyRef` in the CronJob/Job manifests.
 
 ## Docker Images
 

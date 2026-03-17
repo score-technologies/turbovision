@@ -3,8 +3,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-AUTH_URL = "https://auth.docker.io/token"
-REGISTRY_URL = "https://registry-1.docker.io/v2"
+GHCR_AUTH_URL = "https://ghcr.io/token"
+GHCR_REGISTRY_URL = "https://ghcr.io/v2"
 BYTES_PER_GB = 1024 ** 3
 
 MANIFEST_ACCEPT = (
@@ -15,15 +15,34 @@ MANIFEST_ACCEPT = (
 )
 
 
-async def _get_auth_token(image_repo: str) -> str | None:
+async def _get_auth_token(image_repo: str, ghcr_pat: str = "") -> str | None:
     params = {
-        "service": "registry.docker.io",
+        "service": "ghcr.io",
         "scope": f"repository:{image_repo}:pull",
     }
+    auth = ("token", ghcr_pat) if ghcr_pat else None
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(AUTH_URL, params=params)
+        resp = await client.get(GHCR_AUTH_URL, params=params, auth=auth)
         resp.raise_for_status()
         return resp.json().get("token")
+
+
+async def check_image_accessible(image_repo: str, reference: str, ghcr_pat: str = "") -> bool:
+    try:
+        token = await _get_auth_token(image_repo, ghcr_pat=ghcr_pat)
+        if not token:
+            return False
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": MANIFEST_ACCEPT,
+        }
+        url = f"{GHCR_REGISTRY_URL}/{image_repo}/manifests/{reference}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.head(url, headers=headers)
+            return resp.status_code == 200
+    except Exception as exc:
+        logger.warning("Image access check failed for %s:%s: %s", image_repo, reference, exc)
+        return False
 
 
 async def fetch_image_digest(image_repo: str, image_tag: str) -> str:
@@ -35,7 +54,7 @@ async def fetch_image_digest(image_repo: str, image_tag: str) -> str:
             "Authorization": f"Bearer {token}",
             "Accept": MANIFEST_ACCEPT,
         }
-        url = f"{REGISTRY_URL}/{image_repo}/manifests/{image_tag}"
+        url = f"{GHCR_REGISTRY_URL}/{image_repo}/manifests/{image_tag}"
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.head(url, headers=headers)
             resp.raise_for_status()
@@ -45,9 +64,9 @@ async def fetch_image_digest(image_repo: str, image_tag: str) -> str:
         return ""
 
 
-async def fetch_image_size_gb(image_repo: str, reference: str) -> float | None:
+async def fetch_image_size_gb(image_repo: str, reference: str, ghcr_pat: str = "") -> float | None:
     try:
-        token = await _get_auth_token(image_repo)
+        token = await _get_auth_token(image_repo, ghcr_pat=ghcr_pat)
         if not token:
             return None
         return await _get_manifest_size(image_repo, reference, token)
@@ -69,7 +88,7 @@ async def _get_manifest_size(
         "Authorization": f"Bearer {token}",
         "Accept": MANIFEST_ACCEPT,
     }
-    url = f"{REGISTRY_URL}/{image_repo}/manifests/{reference}"
+    url = f"{GHCR_REGISTRY_URL}/{image_repo}/manifests/{reference}"
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
