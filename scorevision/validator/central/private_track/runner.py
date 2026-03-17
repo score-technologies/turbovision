@@ -155,6 +155,17 @@ async def _upload_private_response_blob(
         return None
 
 
+_PUBLIC_SHARD_FIELDS = {
+    "score", "challenge_id", "miner_hotkey", "miner_uid",
+    "block", "timestamp", "image_repo", "image_tag",
+    "image_digest", "scoring_version", "timed_out",
+}
+
+
+def _strip_for_public_shard(result: dict) -> dict:
+    return {k: v for k, v in result.items() if k in _PUBLIC_SHARD_FIELDS}
+
+
 async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> str | None:
     settings = get_settings()
     prefix = settings.PRIVATE_R2_RESULTS_PREFIX
@@ -171,7 +182,7 @@ async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> st
             await client.put_object(
                 Bucket=cfg.bucket,
                 Key=key,
-                Body=dumps(results, separators=(",", ":")),
+                Body=dumps([_strip_for_public_shard(r) for r in results], separators=(",", ":")),
                 ContentType="application/json",
             )
         await add_index_key_if_new(

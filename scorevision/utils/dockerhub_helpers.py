@@ -4,7 +4,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DOCKERHUB_API = "https://hub.docker.com/v2"
-SCORE_DOCKERHUB_USER = "manakoai"
+SCORE_DOCKERHUB_USER = "mikhaelscore"
 
 
 def get_auth_token(username: str, password: str) -> str | None:
@@ -62,7 +62,7 @@ def add_collaborator(
     if response.status_code in (200, 201, 204):
         logger.info("Added %s as %s collaborator to %s/%s", collaborator, permission, namespace, repo_name)
         return True
-    logger.error("Failed to add collaborator: %s", response.text)
+    logger.error("Failed to add collaborator (HTTP %s): %s", response.status_code, response.text)
     return False
 
 

@@ -58,6 +58,25 @@ def run_spotcheck_process(
     ))
 
 
+def run_pt_spotcheck_process(
+    min_interval: int,
+    max_interval: int,
+    tail_blocks: int,
+    threshold: float,
+    commit_on_start: bool,
+):
+    from scorevision.validator.audit.private_track.spotcheck import private_spotcheck_loop
+    setup_logging()
+
+    asyncio.run(private_spotcheck_loop(
+        min_interval_seconds=min_interval,
+        max_interval_seconds=max_interval,
+        tail_blocks=tail_blocks,
+        threshold=threshold,
+        commit_on_start=commit_on_start,
+    ))
+
+
 def run_signer_process():
     from scorevision.validator.core import run_signer
     setup_logging()
@@ -279,6 +298,53 @@ def private_weights_cmd(tail: int, m_min: int, tempo: int, manifest: str | None)
     )
 
 
+@private_track.command("spotcheck")
+@click.option("--min-interval", default=None, type=int, help="Min interval between spotchecks (seconds)")
+@click.option("--max-interval", default=None, type=int, help="Max interval between spotchecks (seconds)")
+@click.option("--tail", default=28800, help="Tail blocks for data fetching")
+@click.option("--threshold", default=None, type=float, help="Match threshold (0.0-1.0)")
+@click.option("--once", is_flag=True, help="Run single spotcheck and exit")
+@click.option("--no-commit", is_flag=True, help="Skip on-chain audit index commitment on startup")
+def pt_spotcheck_cmd(
+    min_interval: int | None,
+    max_interval: int | None,
+    tail: int,
+    threshold: float | None,
+    once: bool,
+    no_commit: bool,
+):
+    from scorevision.validator.audit.private_track.spotcheck import (
+        private_spotcheck_loop,
+        run_single_private_spotcheck,
+    )
+    setup_logging()
+
+    settings = get_settings()
+
+    if min_interval is None:
+        min_interval = settings.PRIVATE_AUDIT_SPOTCHECK_MIN_INTERVAL_S
+    if max_interval is None:
+        max_interval = settings.PRIVATE_AUDIT_SPOTCHECK_MAX_INTERVAL_S
+    if threshold is None:
+        threshold = settings.PRIVATE_SPOTCHECK_MATCH_THRESHOLD
+
+    if once:
+        logger.info("Running single private-track spotcheck (tail=%d, threshold=%.0f%%)", tail, threshold * 100)
+        asyncio.run(run_single_private_spotcheck(
+            tail_blocks=tail,
+            threshold=threshold,
+        ))
+    else:
+        logger.info("Starting private-track spotcheck loop (interval=%d-%d seconds)", min_interval, max_interval)
+        asyncio.run(private_spotcheck_loop(
+            min_interval_seconds=min_interval,
+            max_interval_seconds=max_interval,
+            tail_blocks=tail,
+            threshold=threshold,
+            commit_on_start=not no_commit,
+        ))
+
+
 @audit_validator.command("start")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
@@ -309,12 +375,17 @@ def start_all_cmd(
     if threshold is None:
         threshold = settings.AUDIT_SPOTCHECK_THRESHOLD
 
+    pt_spotcheck_min = settings.PRIVATE_AUDIT_SPOTCHECK_MIN_INTERVAL_S
+    pt_spotcheck_max = settings.PRIVATE_AUDIT_SPOTCHECK_MAX_INTERVAL_S
+    pt_threshold = settings.PRIVATE_SPOTCHECK_MATCH_THRESHOLD
+
     setup_signal_handlers()
 
     logger.info("Starting unified audit validator (open-source + private-track)")
     logger.info("  Signer service: starting...")
     logger.info("  Weights loop (both tracks): tempo=%d blocks, tail=%d, m_min=%d", tempo, tail, m_min)
     logger.info("  Open-source spotcheck loop: interval=%d-%d seconds, threshold=%.0f%%", spotcheck_min, spotcheck_max, threshold * 100)
+    logger.info("  Private-track spotcheck loop: interval=%d-%d seconds, threshold=%.0f%%", pt_spotcheck_min, pt_spotcheck_max, pt_threshold * 100)
 
     signer_proc = multiprocessing.Process(
         target=run_signer_process,
@@ -325,35 +396,41 @@ def start_all_cmd(
         args=(tail, m_min, tempo, manifest),
         name="audit-weights",
     )
-    spotcheck_proc = multiprocessing.Process(
+    os_spotcheck_proc = multiprocessing.Process(
         target=run_spotcheck_process,
         args=(spotcheck_min, spotcheck_max, tail, threshold, element_id, not no_commit),
-        name="audit-spotcheck",
+        name="audit-os-spotcheck",
+    )
+    pt_spotcheck_proc = multiprocessing.Process(
+        target=run_pt_spotcheck_process,
+        args=(pt_spotcheck_min, pt_spotcheck_max, tail, pt_threshold, not no_commit),
+        name="audit-pt-spotcheck",
     )
 
     signer_proc.start()
     weights_proc.start()
-    spotcheck_proc.start()
+    os_spotcheck_proc.start()
+    pt_spotcheck_proc.start()
 
     logger.info(
-        "All processes started (signer pid=%d, weights pid=%d, spotcheck pid=%d)",
+        "All processes started (signer pid=%d, weights pid=%d, os-spotcheck pid=%d, pt-spotcheck pid=%d)",
         signer_proc.pid,
         weights_proc.pid,
-        spotcheck_proc.pid,
+        os_spotcheck_proc.pid,
+        pt_spotcheck_proc.pid,
     )
 
     try:
         signer_proc.join()
         weights_proc.join()
-        spotcheck_proc.join()
+        os_spotcheck_proc.join()
+        pt_spotcheck_proc.join()
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received, terminating processes...")
-        signer_proc.terminate()
-        weights_proc.terminate()
-        spotcheck_proc.terminate()
-        signer_proc.join(timeout=5)
-        weights_proc.join(timeout=5)
-        spotcheck_proc.join(timeout=5)
+        for proc in (signer_proc, weights_proc, os_spotcheck_proc, pt_spotcheck_proc):
+            proc.terminate()
+        for proc in (signer_proc, weights_proc, os_spotcheck_proc, pt_spotcheck_proc):
+            proc.join(timeout=5)
 
     logger.info("Audit validator shutdown complete")
 

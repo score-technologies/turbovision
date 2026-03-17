@@ -61,6 +61,8 @@ def _legacy_score_predictions(
     if gt_total_weight == 0:
         return 0.0
 
+    predictions = sorted(predictions, key=lambda p: p.frame)
+
     matched_score = 0.0
     unmatched_penalty = 0.0
     used_indices: set[int] = set()
