@@ -36,6 +36,7 @@ async def get_local_fallback_winner_for_element(
     tail: int,
     m_min: int,
     hk_to_uid: dict[str, int],
+    lane: str = "public",
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
     settings = get_settings()
     fallback_uid = settings.VALIDATOR_FALLBACK_UID
@@ -47,6 +48,9 @@ async def get_local_fallback_winner_for_element(
         try:
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:
+                continue
+            payload_lane = str(payload.get("lane") or "public").strip() or "public"
+            if lane and payload_lane != lane:
                 continue
             miner_uid, score = extract_miner_and_score(payload, hk_to_uid)
             if miner_uid is None:
@@ -142,6 +146,7 @@ async def get_winner_for_element(
     m_min: int,
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
+    lane: str = "public",
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
     settings = get_settings()
     subtensor = await get_subtensor()
@@ -167,6 +172,7 @@ async def get_winner_for_element(
             tail=tail,
             m_min=m_min,
             hk_to_uid=hk_to_uid,
+            lane=lane,
         )
 
     sums_by_miner: dict[int, float] = {}
@@ -185,6 +191,10 @@ async def get_winner_for_element(
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:
                 diagnostics["skip_element_mismatch"] += 1
+                continue
+            payload_lane = str(payload.get("lane") or "public").strip() or "public"
+            if lane and payload_lane != lane:
+                diagnostics["skip_lane_mismatch"] += 1
                 continue
             telemetry = payload.get("telemetry") or {}
             miner_info = telemetry.get("miner") or {}

@@ -292,6 +292,8 @@ async def emit_shard(
     chute_id: str | None = None,
     commitment_meta: dict | None = None,
     commit_block: int | None = None,
+    store_response_blob: bool = True,
+    responses_key_override: str | None = None,
 ) -> None:
     rid = f"{(element_id or 'na')}:{miner_hotkey_ss58[:6]}:{challenge.challenge_id[:8]}:{uuid.uuid4().hex[:6]}"
 
@@ -345,7 +347,8 @@ async def emit_shard(
         prefix = f"{base_prefix}/{safe_element_id}/{miner_hotkey_ss58}/{commit_block_for_path:09d}/"
 
     eval_key = f"{prefix}evaluation/{shard_block:09d}-{challenge.challenge_id}.json"
-    resp_key = f"{prefix}responses/{shard_block:09d}-{challenge.challenge_id}.json"
+    default_resp_key = f"{prefix}responses/{shard_block:09d}-{challenge.challenge_id}.json"
+    resp_key = responses_key_override or (default_resp_key if store_response_blob else None)
 
     video_url = None
     try:
@@ -385,7 +388,7 @@ async def emit_shard(
     except Exception:
         payload_frames = None
 
-    if getattr(miner_run, "predictions", None) is not None:
+    if store_response_blob and getattr(miner_run, "predictions", None) is not None and resp_key:
         logger.info(f"[emit:{rid}] uploading responses blob to {resp_key}")
         resp_blob = {
             "video_url": video_url,

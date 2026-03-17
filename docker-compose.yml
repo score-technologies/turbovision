@@ -65,6 +65,40 @@ services:
         "set -e; target=\"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\"; if [ -z \"$$target\" ]; then echo \"[runner-gate] SCOREVISION_CENTRAL_VALIDATOR_HOTKEY not set -> runner disabled\"; exec sleep infinity; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; echo \"[runner-gate] local_hotkey=$$current\"; echo \"[runner-gate] target_hotkey=$$target\"; if [ \"$$current\" = \"$$target\" ]; then echo \"[runner-gate] hotkey match -> starting central runner\"; exec sv -v central-validator runner; fi; echo \"[runner-gate] hotkey mismatch -> runner disabled on this node\"; exec sleep infinity",
       ]
 
+  central-private-runner:
+    <<: *common
+    container_name: scorevision-central-private-runner
+    profiles: ["owner"]
+    environment:
+      SIGNER_URL: http://central-signer:8080
+      SCOREVISION_BLACKLIST_PATH: /app/blacklist
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+    volumes:
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ./blacklist:/app/blacklist:ro
+    depends_on:
+      central-signer:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/bin/sh",
+          "-lc",
+          "if [ -z \"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\" ]; then exit 0; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; if [ \"$$current\" = \"$$SCOREVISION_CENTRAL_VALIDATOR_HOTKEY\" ]; then kill -0 1; else exit 0; fi",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command:
+      [
+        "/bin/sh",
+        "-lc",
+        "set -e; target=\"$${SCOREVISION_CENTRAL_VALIDATOR_HOTKEY:-}\"; if [ -z \"$$target\" ]; then echo \"[pt-runner-gate] SCOREVISION_CENTRAL_VALIDATOR_HOTKEY not set -> private runner disabled\"; exec sleep infinity; fi; current=\"$$(python -c 'import os,bittensor as bt; w=bt.wallet(name=os.getenv(\"BITTENSOR_WALLET_COLD\",\"default\"), hotkey=os.getenv(\"BITTENSOR_WALLET_HOT\",\"default\")); print(w.hotkey.ss58_address)')\"; echo \"[pt-runner-gate] local_hotkey=$$current\"; echo \"[pt-runner-gate] target_hotkey=$$target\"; if [ \"$$current\" = \"$$target\" ]; then echo \"[pt-runner-gate] hotkey match -> starting private-track runner\"; exec sv -v central-validator private-track runner; fi; echo \"[pt-runner-gate] hotkey mismatch -> private runner disabled on this node\"; exec sleep infinity",
+      ]
+
   central-signer:
     <<: *common
     container_name: scorevision-central-signer

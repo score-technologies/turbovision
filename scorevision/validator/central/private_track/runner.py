@@ -7,11 +7,14 @@ from json import dumps
 from pathlib import Path
 from typing import Any, Dict, Optional
 import httpx
+from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair, reset_subtensor
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
+from scorevision.utils.cloudflare_helpers import emit_shard
+from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.docker_hub import fetch_image_digest
 from scorevision.utils.manifest import Manifest
-from scorevision.utils.r2 import add_index_key_if_new, central_r2_config, create_s3_client
+from scorevision.utils.r2 import R2Config, add_index_key_if_new, central_r2_config, create_s3_client
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.request_signing import build_signed_headers
 from scorevision.utils.settings import get_settings
@@ -21,7 +24,10 @@ from scorevision.validator.central.private_track.challenges import (
 )
 from scorevision.validator.central.private_track.miners import send_challenge
 from scorevision.validator.central.private_track.registry import RegisteredMiner, get_registered_miners
-from scorevision.validator.central.private_track.scoring import PRIVATE_SCORING_VERSION, score_predictions
+from scorevision.validator.central.private_track.scoring import (
+    PRIVATE_SCORING_VERSION,
+    score_predictions_with_breakdown,
+)
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
 from scorevision.validator.central.scheduling import (
     cancel_removed_element_tasks,
@@ -41,6 +47,112 @@ LOG_PREFIX = "[PTRunner] "
 
 def _is_weight_eligible_result(result: dict) -> bool:
     return result.get("timed_out") is not True
+
+
+def _private_responses_r2_config() -> R2Config:
+    settings = get_settings()
+    bucket = (settings.PRIVATE_RESPONSES_R2_BUCKET or settings.SCOREVISION_BUCKET or "").strip()
+    account_id = (
+        settings.PRIVATE_RESPONSES_R2_ACCOUNT_ID.get_secret_value()
+        or settings.CENTRAL_R2_ACCOUNT_ID.get_secret_value()
+    )
+    access_key_id = (
+        settings.PRIVATE_RESPONSES_R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+        or settings.CENTRAL_R2_WRITE_ACCESS_KEY_ID.get_secret_value()
+    )
+    secret_access_key = (
+        settings.PRIVATE_RESPONSES_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+        or settings.CENTRAL_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value()
+    )
+    return R2Config(
+        bucket=bucket,
+        account_id=account_id,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        concurrency=settings.CENTRAL_R2_CONCURRENCY,
+    )
+
+
+def _private_responses_prefix() -> str:
+    settings = get_settings()
+    return (settings.PRIVATE_RESPONSES_R2_PREFIX or "private_responses").strip().strip("/")
+
+
+def _private_response_key(
+    *,
+    element_id: str,
+    miner_hotkey: str,
+    commit_block: int,
+    block: int,
+    challenge_id: str,
+) -> str:
+    safe_element = (element_id or "unknown-element").replace("/", "_")
+    prefix = _private_responses_prefix()
+    return (
+        f"{prefix}/{safe_element}/{miner_hotkey}/{max(0, int(commit_block)):09d}/"
+        f"responses/{block:09d}-{challenge_id}.json"
+    )
+
+
+async def _upload_private_response_blob(
+    *,
+    element_id: str,
+    miner: RegisteredMiner,
+    challenge: Challenge,
+    block: int,
+    response_predictions: list[dict] | None,
+) -> str | None:
+    if not response_predictions:
+        return None
+
+    cfg = _private_responses_r2_config()
+    if not (cfg.bucket and cfg.account_id and cfg.access_key_id and cfg.secret_access_key):
+        logger.warning(
+            "%sPrivate responses R2 is not configured, skipping response upload",
+            LOG_PREFIX,
+        )
+        return None
+
+    key = _private_response_key(
+        element_id=element_id,
+        miner_hotkey=miner.hotkey,
+        commit_block=miner.commit_block,
+        block=block,
+        challenge_id=challenge.challenge_id,
+    )
+    index_key = f"{_private_responses_prefix()}/index.json"
+    payload = {
+        "track": "private",
+        "element_id": element_id,
+        "challenge_id": challenge.challenge_id,
+        "video_url": challenge.video_url,
+        "miner_hotkey": miner.hotkey,
+        "miner_uid": miner.uid,
+        "predictions": response_predictions,
+    }
+
+    client_factory = lambda: create_s3_client(
+        cfg,
+        error_message="Private responses R2 is not configured",
+    )
+    try:
+        async with client_factory() as client:
+            await client.put_object(
+                Bucket=cfg.bucket,
+                Key=key,
+                Body=dumps(payload, separators=(",", ":")),
+                ContentType="application/json",
+            )
+        await add_index_key_if_new(
+            client_factory=client_factory,
+            bucket=cfg.bucket,
+            key=key,
+            index_key=index_key,
+        )
+        return key
+    except Exception as e:
+        logger.error("%sFailed to upload private response blob: %s", LOG_PREFIX, e)
+        return None
 
 
 async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> str | None:
@@ -125,19 +237,28 @@ async def _challenge_miner(
     keypair,
     timeout: float,
     block: int,
+    element_id: str,
+    pillar_weights: dict[str, float] | None,
     image_digest: str,
-) -> dict:
+) -> tuple[dict, list[dict] | None]:
     try:
         attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
         response = attempt.response
         is_scored = response is not None and not attempt.timed_out
+        response_predictions = None
 
         if is_scored:
-            score = score_predictions(response.predictions, challenge.ground_truth)
+            score, score_breakdown = score_predictions_with_breakdown(
+                response.predictions,
+                challenge.ground_truth,
+                pillar_weights=pillar_weights,
+            )
             pred_count = len(response.predictions)
+            response_predictions = [pred.model_dump() for pred in response.predictions]
         else:
             score = 0.0
             pred_count = 0
+            score_breakdown = {}
 
         if is_scored:
             logger.info(
@@ -156,6 +277,7 @@ async def _challenge_miner(
 
         return asdict(PrivateEvaluationResult(
             challenge_id=challenge.challenge_id,
+            element_id=element_id,
             miner_hotkey=miner.hotkey,
             miner_uid=miner.uid,
             score=score,
@@ -171,11 +293,13 @@ async def _challenge_miner(
             image_tag=miner.image_tag,
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
-        ))
+            score_breakdown=score_breakdown,
+        )), response_predictions
     except Exception as e:
         logger.error("Miner %s challenge processing failed: %s", miner.hotkey, e)
         return asdict(PrivateEvaluationResult(
             challenge_id=challenge.challenge_id,
+            element_id=element_id,
             miner_hotkey=miner.hotkey,
             miner_uid=miner.uid,
             score=0.0,
@@ -190,7 +314,93 @@ async def _challenge_miner(
             image_tag=miner.image_tag,
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
-        ))
+            score_breakdown={},
+        )), None
+
+
+async def _emit_private_score_to_public_db(
+    *,
+    element_id: str,
+    manifest_hash: str,
+    challenge: Challenge,
+    miner: RegisteredMiner,
+    result: dict,
+    private_responses_key: str | None,
+    trigger_block: int,
+) -> None:
+    challenge_obj = SVChallenge(
+        env="private-track",
+        payload=TVPredictInput(url=challenge.video_url, meta={"track": "private"}),
+        meta={
+            "source": "private_track",
+            "task_id": challenge.challenge_id,
+        },
+        prompt="private-track challenge",
+        challenge_id=challenge.challenge_id,
+        frame_numbers=[],
+        frames=[],
+        dense_optical_flow_frames=[],
+        api_task_id=challenge.challenge_id,
+    )
+
+    latency_ms = float(result.get("response_time_s", 0.0)) * 1000.0
+    timed_out = bool(result.get("timed_out", False))
+    score = float(result.get("score", 0.0))
+    score_breakdown = result.get("score_breakdown") or {"private_track_score": score}
+    miner_run = SVRunOutput(
+        success=not timed_out,
+        latency_ms=latency_ms,
+        predictions=None,
+        error=None if not timed_out else "private-track timeout",
+        model=f"{miner.image_repo}:{miner.image_tag}" if miner.image_repo and miner.image_tag else None,
+        latency_p50_ms=latency_ms,
+        latency_p95_ms=latency_ms,
+        latency_p99_ms=latency_ms,
+        latency_max_ms=latency_ms,
+    )
+    evaluation = SVEvaluation(
+        acc_breakdown=score_breakdown,
+        acc=score,
+        latency_ms=latency_ms,
+        score=score,
+        details={
+            "track": "private",
+            "timed_out": timed_out,
+            "prediction_count": result.get("prediction_count", 0),
+            "ground_truth_count": result.get("ground_truth_count", 0),
+        },
+        latency_p95_ms=latency_ms,
+        latency_pass=not timed_out,
+        rtf=None,
+        scored_frame_numbers=[gt.frame for gt in challenge.ground_truth],
+    )
+    commitment_meta = {
+        "track": "private",
+        "element_id": element_id,
+        "commit_block": miner.commit_block,
+        "image_repo": miner.image_repo,
+        "image_tag": miner.image_tag,
+        "image_digest": result.get("image_digest"),
+    }
+
+    await emit_shard(
+        slug=f"private-{miner.uid}",
+        challenge=challenge_obj,
+        miner_run=miner_run,
+        evaluation=evaluation,
+        miner_hotkey_ss58=miner.hotkey,
+        trigger_block=trigger_block,
+        element_id=element_id,
+        manifest_hash=manifest_hash,
+        lane="private",
+        model=miner.image_repo,
+        revision=miner.image_tag,
+        chute_id=None,
+        commitment_meta=commitment_meta,
+        commit_block=miner.commit_block,
+        store_response_blob=False,
+        responses_key_override=private_responses_key,
+    )
 
 
 async def _run_challenge_for_element(
@@ -201,6 +411,13 @@ async def _run_challenge_for_element(
     subtensor,
 ) -> None:
     settings = get_settings()
+    element = manifest.get_element(element_id)
+    pillar_weights: dict[str, float] | None = None
+    if element and element.metrics and element.metrics.pillars:
+        pillar_weights = {
+            str(k.value if hasattr(k, "value") else k): float(v)
+            for k, v in element.metrics.pillars.items()
+        }
 
     blacklist_api = None
     if settings.BLACKLIST_API_URL:
@@ -234,10 +451,48 @@ async def _run_challenge_for_element(
     digests = await asyncio.gather(*[
         fetch_image_digest(m.image_repo, m.image_tag) for m in miners
     ])
-    results = list(await asyncio.gather(*[
-        _challenge_miner(miner, challenge, keypair, settings.PRIVATE_MINER_TIMEOUT_S, block, digest)
+    outcomes = list(await asyncio.gather(*[
+        _challenge_miner(
+            miner,
+            challenge,
+            keypair,
+            settings.PRIVATE_MINER_TIMEOUT_S,
+            block,
+            element_id,
+            pillar_weights,
+            digest,
+        )
         for miner, digest in zip(miners, digests)
     ]))
+
+    results: list[dict] = []
+    for miner, (result, response_predictions) in zip(miners, outcomes):
+        private_responses_key = await _upload_private_response_blob(
+            element_id=element_id,
+            miner=miner,
+            challenge=challenge,
+            block=block,
+            response_predictions=response_predictions,
+        )
+        result["private_responses_key"] = private_responses_key
+        results.append(result)
+        try:
+            await _emit_private_score_to_public_db(
+                element_id=element_id,
+                manifest_hash=manifest.hash,
+                challenge=challenge,
+                miner=miner,
+                result=result,
+                private_responses_key=private_responses_key,
+                trigger_block=block,
+            )
+        except Exception as e:
+            logger.error(
+                "%sFailed to emit private score to public db for miner=%s: %s",
+                LOG_PREFIX,
+                miner.hotkey,
+                e,
+            )
 
     await _upload_shard(results, block, keypair.ss58_address)
 

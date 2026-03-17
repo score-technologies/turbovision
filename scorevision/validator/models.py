@@ -56,6 +56,7 @@ class OpenSourceMinerMeta:
 @dataclass
 class PrivateEvaluationResult:
     challenge_id: str
+    element_id: str
     miner_hotkey: str
     miner_uid: int
     score: float
@@ -71,6 +72,8 @@ class PrivateEvaluationResult:
     image_tag: str = ""
     image_digest: str = ""
     scoring_version: int = 0
+    score_breakdown: dict[str, float] | None = None
+    private_responses_key: str | None = None
 
 
 @dataclass

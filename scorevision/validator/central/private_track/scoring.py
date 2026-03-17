@@ -2,7 +2,7 @@ from scorevision.utils.actions import ACTION_CONFIGS, Action
 from scorevision.utils.schemas import FramePrediction
 from scorevision.utils.settings import get_settings
 
-PRIVATE_SCORING_VERSION = 1
+PRIVATE_SCORING_VERSION = 2
 
 
 def frame_to_seconds(frame: int) -> float:
@@ -44,7 +44,7 @@ def find_best_match(
     return best_idx, best_decay
 
 
-def score_predictions(
+def _legacy_score_predictions(
     predictions: list[FramePrediction],
     ground_truth: list[FramePrediction],
 ) -> float:
@@ -80,3 +80,63 @@ def score_predictions(
             unmatched_penalty += config.weight
 
     return max(min((matched_score - unmatched_penalty) / gt_total_weight, 1.0), 0.0)
+
+
+def _normalize_pillar_weights(pillar_weights: dict[str, float] | None) -> dict[str, float]:
+    if not pillar_weights:
+        return {}
+    out: dict[str, float] = {}
+    for raw_key, raw_weight in pillar_weights.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError):
+            continue
+        if weight <= 0:
+            continue
+        out[key] = out.get(key, 0.0) + weight
+    total = sum(out.values())
+    if total <= 0:
+        return {}
+    return {k: v / total for k, v in out.items()}
+
+
+def score_predictions_with_breakdown(
+    predictions: list[FramePrediction],
+    ground_truth: list[FramePrediction],
+    pillar_weights: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
+    legacy_score = _legacy_score_predictions(predictions, ground_truth)
+    normalized_weights = _normalize_pillar_weights(pillar_weights)
+    if not normalized_weights:
+        return legacy_score, {"private_track_score": legacy_score}
+
+    weighted_sum = 0.0
+    breakdown: dict[str, float] = {}
+
+    for pillar, weight in normalized_weights.items():
+        # Primary private pillar: exact legacy private scoring.
+        # Keep backward compatibility for older manifests.
+        if pillar in ("soccer_action", "private_legacy_score"):
+            pillar_score = legacy_score
+        else:
+            pillar_score = 0.0
+        breakdown[pillar] = pillar_score
+        weighted_sum += pillar_score * weight
+
+    return max(0.0, min(1.0, weighted_sum)), breakdown
+
+
+def score_predictions(
+    predictions: list[FramePrediction],
+    ground_truth: list[FramePrediction],
+    pillar_weights: dict[str, float] | None = None,
+) -> float:
+    score, _ = score_predictions_with_breakdown(
+        predictions,
+        ground_truth,
+        pillar_weights=pillar_weights,
+    )
+    return score

@@ -6,6 +6,7 @@ from scorevision.validator.central.private_track.scoring import (
     find_best_match,
     frame_to_seconds,
     score_predictions,
+    score_predictions_with_breakdown,
 )
 from scorevision.utils.schemas import FramePrediction
 
@@ -71,3 +72,41 @@ def test_score_predictions_unmatched_penalty():
         ]
         score = score_predictions(preds, gt)
         assert score == 0.0
+
+
+def test_score_predictions_with_private_legacy_only():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [FramePrediction(frame=25, action="pass")]
+        score = score_predictions(preds, gt, pillar_weights={"soccer_action": 1.0})
+        assert score == 1.0
+
+
+def test_score_predictions_with_private_legacy_pillar_matches_legacy_value():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [
+            FramePrediction(frame=25, action="pass"),
+            FramePrediction(frame=200, action="goal"),
+        ]
+        legacy = score_predictions(preds, gt)
+        score, breakdown = score_predictions_with_breakdown(
+            preds,
+            gt,
+            pillar_weights={"soccer_action": 1.0},
+        )
+        assert score == legacy
+        assert breakdown["soccer_action"] == legacy
+
+
+def test_score_predictions_with_unsupported_pillar_returns_zero_weighted_score():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [FramePrediction(frame=25, action="pass")]
+        score, breakdown = score_predictions_with_breakdown(
+            preds,
+            gt,
+            pillar_weights={"role": 1.0},
+        )
+        assert score == 0.0
+        assert breakdown["role"] == 0.0

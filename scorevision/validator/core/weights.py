@@ -45,7 +45,6 @@ from scorevision.utils.manifest import (
     Manifest,
     load_manifest_from_public_index,
 )
-from scorevision.validator.audit.private_track.audit import get_private_winner
 from scorevision.validator.payload import extract_elements_from_manifest
 from scorevision.validator.scoring import days_to_blocks
 from scorevision.validator.winner import get_winner_for_element
@@ -330,23 +329,17 @@ async def weights_loop(
                         winner_uid = None
                         winner_meta = None
 
-                        if track == "private":
-                            meta = await subtensor.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
-                            winner_uid, winner_meta = await get_private_winner(
-                                tail_blocks=tail_for_element,
-                                min_samples=private_min_samples,
-                                metagraph_hotkeys=meta.hotkeys,
-                                blacklisted_hotkeys=blacklisted_hotkeys or set(),
-                            )
-                        else:
-                            winner_uid, _, winner_meta = await get_winner_for_element(
-                                element_id=element_id,
-                                current_window_id=current_window_id,
-                                tail=tail_for_element,
-                                m_min=m_min,
-                                blacklisted_hotkeys=blacklisted_hotkeys,
-                                validator_hotkey_ss58=validator_hotkey_ss58,
-                            )
+                        lane = "private" if track == "private" else "public"
+                        min_samples = private_min_samples if track == "private" else m_min
+                        winner_uid, _, winner_meta = await get_winner_for_element(
+                            element_id=element_id,
+                            current_window_id=current_window_id,
+                            tail=tail_for_element,
+                            m_min=min_samples,
+                            blacklisted_hotkeys=blacklisted_hotkeys,
+                            validator_hotkey_ss58=validator_hotkey_ss58,
+                            lane=lane,
+                        )
 
                         if winner_uid is None:
                             logger.warning("[weights] No winner for element_id=%s", element_id)
