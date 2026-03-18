@@ -7,7 +7,7 @@ from hashlib import sha256
 from json import dumps
 from random import randint
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from aiohttp import ClientResponseError
 from base64 import b64decode
 from numpy import ndarray, frombuffer, uint8, zeros
@@ -110,6 +110,62 @@ def _looks_like_image_url(url: str) -> bool:
     return path.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp"))
 
 
+def _normalize_challenge_asset_url(url: str) -> str:
+    """
+    Normalize challenge object URLs to a stable public endpoint.
+
+    Some challenge payloads contain pre-signed R2 URLs that can expire before processing.
+    For known challenge-object paths we rewrite to the public manako host.
+    """
+    try:
+        parsed = urlparse(url)
+        marker = "/challenge-objects/"
+        if marker not in parsed.path:
+            return url
+
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        is_presigned = "X-Amz-Algorithm" in query or "X-Amz-Signature" in query
+        is_r2_storage_host = parsed.netloc.endswith(".r2.cloudflarestorage.com")
+        if not (is_presigned or is_r2_storage_host):
+            return url
+
+        suffix = parsed.path[parsed.path.index(marker) :]
+        rewritten = f"https://manako.scoredata.me{suffix}"
+        if rewritten != url:
+            logger.info("Rewrote challenge asset URL to public endpoint: %s", rewritten)
+        return rewritten
+    except Exception:
+        return url
+
+
+def _normalize_challenge_payload_urls(challenge: dict) -> None:
+    if not isinstance(challenge, dict):
+        return
+
+    for key in ("video_url", "asset_url"):
+        value = challenge.get(key)
+        if isinstance(value, str) and value:
+            challenge[key] = _normalize_challenge_asset_url(value)
+
+    payload = challenge.get("payload")
+    if not isinstance(payload, dict):
+        return
+
+    for key in ("video_url", "clip_url", "asset_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            payload[key] = _normalize_challenge_asset_url(value)
+
+    frames = payload.get("frames")
+    if isinstance(frames, list):
+        for frame in frames:
+            if not isinstance(frame, dict):
+                continue
+            value = frame.get("url")
+            if isinstance(value, str) and value:
+                frame["url"] = _normalize_challenge_asset_url(value)
+
+
 def _safe_int(value: str | None) -> int | None:
     if value is None:
         return None
@@ -155,6 +211,8 @@ def _coerce_payload_frames(payload: dict) -> list[dict[str, object]]:
             continue
         frame_id = item.get("frame_id") or item.get("frameid") or item.get("id")
         url = item.get("url")
+        if isinstance(url, str) and url:
+            url = _normalize_challenge_asset_url(url)
         data = item.get("data")
         if isinstance(frame_id, str) and frame_id.isdigit():
             frame_id = int(frame_id)
@@ -172,6 +230,7 @@ def _decode_frame_bytes(data: bytes) -> ndarray:
 
 
 async def _download_frame_from_url(url: str) -> ndarray:
+    url = _normalize_challenge_asset_url(url)
     session = await get_async_client()
     async with session.get(url) as response:
         if response.status != 200:
@@ -246,6 +305,7 @@ async def prepare_challenge_payload(
     frame_numbers: list[int] | None = None,
 ) -> tuple[TVPredictInput, list[int], list[ndarray], list[ndarray], FrameStore | InMemoryFrameStore]:
     settings = get_settings()
+    _normalize_challenge_payload_urls(challenge)
 
     payload = challenge.get("payload") or {}
     payload_frames = _coerce_payload_frames(payload)
@@ -367,6 +427,7 @@ async def prepare_challenge_payload(
     )
     if not video_url:
         raise ScoreVisionChallengeError("Challenge missing video_url/asset_url/clip_url")
+    video_url = _normalize_challenge_asset_url(video_url)
 
     if _looks_like_image_url(video_url):
         logger.info("Detected image challenge URL, loading as single-frame payload: %s", video_url)
@@ -759,6 +820,7 @@ async def get_next_challenge_v3(
                 raise ScoreVisionChallengeError(
                     "Empty challenge payload from /api/challenge/v3."
                 )
+            _normalize_challenge_payload_urls(challenge)
             logger.info("Challenge API raw response: %s", dumps(challenge, default=str))
 
             if "id" in challenge and "task_id" not in challenge:
