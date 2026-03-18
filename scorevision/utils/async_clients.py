@@ -15,6 +15,11 @@ async def _close_all_clients_async():
         except Exception:
             pass
     _SESSIONS.clear()
+    _SEMAPHORES.clear()
+
+
+async def close_http_clients_async():
+    await _close_all_clients_async()
 
 
 def close_http_clients():

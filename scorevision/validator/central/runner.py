@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict
 
 from scorevision.chute_template.schemas import TVPredictInput
-from scorevision.utils.async_clients import close_http_clients
+from scorevision.utils.async_clients import close_http_clients_async
 from scorevision.utils.bittensor_helpers import (
     _already_committed_same_index,
     get_subtensor,
@@ -764,7 +764,6 @@ async def runner(
         RUNNER_LAST_RUN_DURATION_SECONDS.set(run_duration)
         _cleanup_video_cache(video_cache, frame_store)
         RUNNER_RUNS_TOTAL.labels(result=run_result).inc()
-        close_http_clients()
         gc.collect()
 
 
@@ -870,4 +869,5 @@ async def runner_loop(path_manifest: Path | None = None):
             except asyncio.TimeoutError:
                 pass
 
+    await close_http_clients_async()
     logger.info("Runner loop shutting down gracefully...")
