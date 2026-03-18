@@ -27,14 +27,23 @@ async def send_challenge(
     video_url: str,
     timeout_s: float,
     miner_url: str,
+    miner_hotkey: str = "",
 ) -> tuple[ChallengeResponse | None, float, bool]:
     request = ChallengeRequest(challenge_id=challenge_id, video_url=video_url)
     start = time.perf_counter()
 
+    headers = {}
+    if miner_hotkey:
+        headers["X-Miner-Hotkey"] = miner_hotkey
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=timeout_s)) as client:
             response = await asyncio.wait_for(
-                client.post(f"{miner_url}/challenge", json=request.model_dump()),
+                client.post(
+                    f"{miner_url}/challenge",
+                    json=request.model_dump(),
+                    headers=headers,
+                ),
                 timeout=timeout_s,
             )
             elapsed = time.perf_counter() - start

@@ -41,7 +41,11 @@ async def run(cfg: RunnerConfig) -> None:
 
     print("Miner ready. Sending challenge...", flush=True)
     response, elapsed, timed_out = await send_challenge(
-        cfg.challenge_id, cfg.video_url, cfg.miner_timeout_s, cfg.miner_url,
+        challenge_id=cfg.challenge_id,
+        video_url=cfg.video_url,
+        timeout_s=cfg.miner_timeout_s,
+        miner_url=cfg.miner_url,
+        miner_hotkey=cfg.miner_hotkey,
     )
 
     if timed_out:
