@@ -436,7 +436,12 @@ async def _run_challenge_for_element(
 
     metagraph = await subtensor.metagraph(settings.SCOREVISION_NETUID)
     blacklist = await fetch_blacklisted_hotkeys(blacklist_api)
-    miners = await get_registered_miners(subtensor, metagraph, blacklist)
+    miners = await get_registered_miners(
+        subtensor,
+        metagraph,
+        blacklist,
+        element_id=element_id,
+    )
 
     if not miners:
         logger.warning("%sNo registered private track miners for element=%s", LOG_PREFIX, element_id)

@@ -2,9 +2,12 @@ import logging
 import os
 from json import dumps
 from pathlib import Path
+import click
 from scorevision.cli import console
 from scorevision.cli.errors import ConfigError, DockerBuildError, DockerPushError, DockerRunError
 from scorevision.utils.docker_helpers import DockerImage, build_image, login_ghcr, push_image, run_container
+from scorevision.utils.manifest import get_current_manifest, load_manifest_from_public_index
+from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +56,63 @@ def push_miner_image(image: DockerImage) -> None:
     console.success("Push complete\n")
 
 
-async def commit_on_chain(image: DockerImage) -> None:
+async def _resolve_private_element_id_from_manifest(
+    element_id: str | None,
+    *,
+    skip_commit: bool,
+) -> str | None:
+    if element_id:
+        return element_id
+    if skip_commit:
+        return None
+
+    settings = get_settings()
+    manifest = None
+
+    if getattr(settings, "URL_MANIFEST", None):
+        cache_dir = getattr(settings, "SCOREVISION_CACHE_DIR", None)
+        try:
+            manifest = await load_manifest_from_public_index(
+                settings.URL_MANIFEST,
+                cache_dir=cache_dir,
+            )
+        except Exception as e:
+            click.echo(f"Warning: unable to load manifest from URL_MANIFEST: {e}")
+
+    if manifest is None:
+        try:
+            manifest = get_current_manifest()
+        except Exception as e:
+            raise click.ClickException(
+                "Unable to load manifest. Configure URL_MANIFEST or SCOREVISION_MANIFEST_PATH/SV_MANIFEST_PATH."
+            ) from e
+
+    private_element_ids: list[str] = []
+    for element in manifest.elements:
+        eid = str(getattr(element, "id", "")).strip()
+        if not eid:
+            continue
+        track = str(getattr(element, "track", "") or "").strip()
+        if track == "private":
+            private_element_ids.append(eid)
+
+    private_element_ids = list(dict.fromkeys(private_element_ids))
+    if not private_element_ids:
+        raise click.ClickException("No private track element IDs found in the current manifest.")
+
+    click.echo("Available private element IDs from manifest:")
+    for idx, eid in enumerate(private_element_ids, start=1):
+        click.echo(f"  {idx}. {eid}")
+
+    choice = click.prompt(
+        "Select private element ID (number)",
+        type=click.IntRange(1, len(private_element_ids)),
+    )
+    return private_element_ids[choice - 1]
+
+
+async def commit_on_chain(image: DockerImage, element_id: str) -> None:
     from bittensor import wallet, async_subtensor
-    from scorevision.utils.settings import get_settings
 
     console.info("Committing on-chain")
     settings = get_settings()
@@ -68,6 +125,7 @@ async def commit_on_chain(image: DockerImage) -> None:
         "track": "private",
         "image_repo": image.repository,
         "image_tag": image.tag,
+        "element_id": str(element_id),
         "hotkey": w.hotkey.ss58_address,
     }
     logger.info("Commit payload: %s", payload)
@@ -100,10 +158,20 @@ def start_miner_container(image: DockerImage) -> None:
     console.success(f"Miner running: {container_id[:12]}\n")
 
 
-async def deploy_miner(tag: str, no_push: bool, no_commit: bool, no_start: bool) -> None:
+async def deploy_miner(
+    tag: str,
+    no_push: bool,
+    no_commit: bool,
+    no_start: bool,
+    element_id: str | None,
+) -> None:
     try:
         username, repo_name = get_miner_config()
         image = DockerImage(repository=f"{GHCR_REGISTRY}/{username}/{repo_name}", tag=tag)
+        selected_element_id = await _resolve_private_element_id_from_manifest(
+            element_id,
+            skip_commit=no_commit,
+        )
 
         build_miner_image(image)
 
@@ -116,7 +184,9 @@ async def deploy_miner(tag: str, no_push: bool, no_commit: bool, no_start: bool)
             )
 
             if not no_commit:
-                await commit_on_chain(image)
+                if not selected_element_id:
+                    raise click.ClickException("A private element_id is required for on-chain commit.")
+                await commit_on_chain(image, selected_element_id)
             else:
                 console.warn("Skipping on-chain commit\n")
 

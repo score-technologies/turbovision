@@ -29,10 +29,21 @@ def app(verbosity: int):
 @click.option("--no-push", is_flag=True, help="Skip pushing to GHCR")
 @click.option("--no-commit", is_flag=True, help="Skip on-chain commitment")
 @click.option("--no-start", is_flag=True, help="Skip starting the container")
-def pt_deploy_miner_cmd(tag: str, no_push: bool, no_commit: bool, no_start: bool):
+@click.option(
+    "--element-id",
+    default=None,
+    help="Private track element ID to commit. If omitted, the CLI prompts from manifest private elements.",
+)
+def pt_deploy_miner_cmd(
+    tag: str,
+    no_push: bool,
+    no_commit: bool,
+    no_start: bool,
+    element_id: str | None,
+):
     from scorevision.cli.private_track_miner import deploy_miner
     setup_logging()
-    run(deploy_miner(tag, no_push, no_commit, no_start))
+    run(deploy_miner(tag, no_push, no_commit, no_start, element_id))
 
 
 @app.command("deploy-os-miner")
