@@ -150,6 +150,7 @@ def test_parse_miner_prediction_maps_cluster_id_for_team_scoring():
                             "y2": 30,
                             "cls_id": 0,
                             "team_id": 2,
+                            "conf": 0.91,
                         },
                     ],
                     "keypoints": [],
@@ -166,3 +167,37 @@ def test_parse_miner_prediction_maps_cluster_id_for_team_scoring():
     assert bboxes[0].cluster_id == TEAM1_SHIRT_COLOUR
     assert bboxes[1].cluster_id == TEAM1_SHIRT_COLOUR
     assert bboxes[2].cluster_id == TEAM2_SHIRT_COLOUR
+    assert bboxes[2].score == 0.91
+
+
+def test_parse_miner_prediction_prefers_score_over_conf():
+    miner_run = SVRunOutput(
+        success=True,
+        latency_ms=0.0,
+        predictions={
+            "frames": [
+                {
+                    "frame_id": 9,
+                    "boxes": [
+                        {
+                            "x1": 0,
+                            "y1": 0,
+                            "x2": 10,
+                            "y2": 10,
+                            "cls_id": 0,
+                            "score": 0.77,
+                            "conf": 0.22,
+                        }
+                    ],
+                    "keypoints": [],
+                }
+            ]
+        },
+        error=None,
+        model=None,
+    )
+
+    parsed = parse_miner_prediction(miner_run=miner_run, object_names=["player"])
+    bboxes = parsed[9]["bboxes"]
+
+    assert bboxes[0].score == 0.77

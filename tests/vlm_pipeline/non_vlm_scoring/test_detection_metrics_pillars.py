@@ -96,3 +96,36 @@ def test_detection_metrics_registered_for_detection_elements():
         assert (element_prefix, PillarName.MAP50) in METRIC_REGISTRY
         assert (element_prefix, PillarName.PRECISION) in METRIC_REGISTRY
         assert (element_prefix, PillarName.RECALL) in METRIC_REGISTRY
+
+
+def test_map50_uses_detection_confidence_ranking():
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+                BoundingBox(bbox_2d=(20, 20, 30, 30), label="player"),
+            ],
+        )
+    ]
+
+    high_first = {
+        1: {
+            "bboxes": [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player", score=0.99),
+                BoundingBox(bbox_2d=(50, 50, 60, 60), label="player", score=0.98),
+            ]
+        }
+    }
+    low_first = {
+        1: {
+            "bboxes": [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player", score=0.01),
+                BoundingBox(bbox_2d=(50, 50, 60, 60), label="player", score=0.99),
+            ]
+        }
+    }
+
+    assert compare_map50(pseudo_gt=pseudo_gt, miner_predictions=high_first) > compare_map50(
+        pseudo_gt=pseudo_gt, miner_predictions=low_first
+    )

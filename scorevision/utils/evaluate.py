@@ -129,6 +129,7 @@ def parse_miner_prediction(
                                 int(bbox["y2"]),
                             ],
                             label=looked_up,
+                            score=bbox.get("score", bbox.get("conf")),
                             cluster_id=cluster_id,
                         )
                     )

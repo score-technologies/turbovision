@@ -19,6 +19,10 @@ class BoundingBox(BaseModel):
         description="x_min, y_min, x_max, y_max in pixels (where x=0 is the left of the image and y=0 is the top of the image",
     )
     label: str | None = Field(..., description="The type of object shown")
+    score: float | None = Field(
+        None,
+        description="Detection confidence score used for ranking predictions in AP/mAP metrics.",
+    )
     cluster_id: ShirtColor | None = Field(
         None,
         description="Based on the visual appearance and colours of the object, assign a cluster colour to group it with other similar looking objects.",
