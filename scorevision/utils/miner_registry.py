@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import os, json, time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -44,6 +45,8 @@ _HF_MODEL_SIZE_CACHE: Dict[Tuple[str, str], Tuple[Optional[float], float]] = {}
 _HF_MODEL_SIZE_TTL = 300  # seconds
 _HF_ONNX_ONLY_CACHE: Dict[Tuple[str, str], Tuple[Optional[bool], float]] = {}
 _HF_ONNX_ONLY_TTL = 300  # seconds
+_CHUTES_FETCH_RETRIES = max(1, int(os.getenv("SV_REGISTRY_CHUTES_RETRIES", "2")))
+_CHUTES_FETCH_BACKOFF_S = float(os.getenv("SV_REGISTRY_CHUTES_RETRY_BACKOFF_S", "0.5"))
 
 
 async def _hf_is_gated(model_id: str) -> Optional[bool]:
@@ -232,18 +235,22 @@ def _hf_repo_has_only_onnx_models(
 # ------------------------------ Chutes helpers -------------------------------- #
 async def _chutes_get_json(url: str, headers: Dict[str, str]) -> Optional[dict]:
     timeout = aiohttp.ClientTimeout(total=15)
-    async with aiohttp.ClientSession(timeout=timeout) as s:
-        async with s.get(url, headers=headers) as r:
-            if r.status != 200:
-                logger.debug("[Chutes] GET %s -> %s", url, r.status)
-                return None
-            try:
-                data = await r.json()
-                logger.debug("[Chutes] GET %s -> ok", url)
-                return data
-            except Exception as e:
-                logger.debug("[Chutes] JSON decode error for %s: %s", url, e)
-                return None
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(url, headers=headers) as r:
+                if r.status != 200:
+                    logger.debug("[Chutes] GET %s -> %s", url, r.status)
+                    return None
+                try:
+                    data = await r.json()
+                    logger.debug("[Chutes] GET %s -> ok", url)
+                    return data
+                except Exception as e:
+                    logger.debug("[Chutes] JSON decode error for %s: %s", url, e)
+                    return None
+    except Exception as e:
+        logger.info("[Chutes] GET %s failed: %s", url, e)
+        return None
 
 
 async def fetch_chute_info(chute_id: str) -> Optional[dict]:
@@ -251,10 +258,24 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
     if not token or not chute_id:
         logger.debug("[Chutes] missing token or chute_id")
         return None
-    return await _chutes_get_json(
-        f"https://api.chutes.ai/chutes/{chute_id}",
-        headers={"Authorization": token},
-    )
+    url = f"https://api.chutes.ai/chutes/{chute_id}"
+    headers = {"Authorization": token}
+
+    for attempt in range(1, _CHUTES_FETCH_RETRIES + 1):
+        data = await _chutes_get_json(url, headers=headers)
+        if data:
+            return data
+        if attempt < _CHUTES_FETCH_RETRIES:
+            delay_s = _CHUTES_FETCH_BACKOFF_S * (2 ** (attempt - 1))
+            logger.info(
+                "[Chutes] retrying chute lookup chute_id=%s attempt=%s/%s in %.2fs",
+                chute_id,
+                attempt + 1,
+                _CHUTES_FETCH_RETRIES,
+                delay_s,
+            )
+            await asyncio.sleep(delay_s)
+    return None
 
 def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
     best_blk = None
@@ -452,7 +473,11 @@ async def get_miners_from_registry(
         ok = True
         chute_reason = None
         if m.chute_id:
-            info = await fetch_chute_info(m.chute_id)
+            try:
+                info = await fetch_chute_info(m.chute_id)
+            except Exception as e:
+                logger.info("[Registry] uid=%s slug=%s: Chutes lookup error: %s", uid, m.slug, e)
+                info = None
             if not info:
                 logger.info("[Registry] uid=%s slug=%s: Chutes unfetched", uid, m.slug)
                 ok = False

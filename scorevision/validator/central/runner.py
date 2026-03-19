@@ -762,8 +762,13 @@ async def runner(
             RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
             RUNNER_MINER_CALLS_TOTAL.labels(outcome="registry_skipped").inc()
 
-    except Exception as e:
-        logger.error(e)
+    except Exception:
+        logger.exception(
+            "[Runner] Unhandled error (element_id=%s window_id=%s block=%s)",
+            element_id,
+            locals().get("window_id"),
+            block_number,
+        )
         run_result = "error"
 
     finally:
