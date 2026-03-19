@@ -103,6 +103,7 @@ async def test_get_miners_from_registry_skips_when_onnx_only_enabled_and_repo_no
 
     assert kept == {}
     assert 0 in skipped
+    assert skipped[0].registry_skip_reason == "hf_repo_not_onnx_only"
 
 
 @pytest.mark.asyncio

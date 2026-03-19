@@ -30,6 +30,21 @@ from scorevision.utils.signing import _sign_batch
 
 logger = getLogger(__name__)
 _cache_dir = None
+_last_known_emit_block: int | None = None
+
+
+def _remember_emit_block(block: int | None) -> None:
+    global _last_known_emit_block
+    if block is None:
+        return
+    try:
+        _last_known_emit_block = int(block)
+    except Exception:
+        return
+
+
+def _get_cached_emit_block() -> int | None:
+    return _last_known_emit_block
 
 
 async def _safe_get_current_block(st, rid: str, retries: int = 1):
@@ -37,6 +52,7 @@ async def _safe_get_current_block(st, rid: str, retries: int = 1):
     while True:
         try:
             block = await asyncio.wait_for(st.get_current_block(), timeout=5.0)
+            _remember_emit_block(int(block))
             return int(block), st
         except (
             asyncio.TimeoutError,
@@ -277,10 +293,28 @@ async def emit_shard(
     commitment_meta: dict | None = None,
     commit_block: int | None = None,
 ) -> None:
-
-    st = await get_subtensor()
     rid = f"{(element_id or 'na')}:{miner_hotkey_ss58[:6]}:{challenge.challenge_id[:8]}:{uuid.uuid4().hex[:6]}"
-    current_block, st = await _safe_get_current_block(st, rid)
+
+    if trigger_block is not None:
+        current_block = int(trigger_block)
+    elif window_start_block is not None:
+        current_block = int(window_start_block)
+    else:
+        try:
+            st = await get_subtensor()
+            current_block, _ = await _safe_get_current_block(st, rid)
+        except Exception:
+            cached_block = _get_cached_emit_block()
+            if cached_block is None:
+                raise
+            current_block = int(cached_block)
+            logger.warning(
+                "[emit:%s] using cached block=%s because subtensor is unavailable",
+                rid,
+                current_block,
+            )
+
+    _remember_emit_block(current_block)
     shard_block = int(trigger_block) if trigger_block is not None else int(current_block)
     timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
 

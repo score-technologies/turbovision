@@ -687,11 +687,15 @@ async def runner(
         for miner in skipped_miners.values():
             miner_label = miner.slug or str(getattr(miner, "uid", "?"))
             emit_start = event_loop.time()
+            skip_reason = (
+                str(getattr(miner, "registry_skip_reason", "") or "").strip()
+                or "unknown_registry_filter"
+            )
             zero_output = SVRunOutput(
                 success=False,
                 latency_ms=0.0,
                 predictions=None,
-                error="Skipped by miner registry filters",
+                error=f"Skipped by miner registry filters: {skip_reason}",
                 model=miner.model,
                 latency_p50_ms=0.0,
                 latency_p95_ms=0.0,
@@ -703,7 +707,10 @@ async def runner(
                 acc=0.0,
                 latency_ms=0.0,
                 score=0.0,
-                details={"registry_skipped": True},
+                details={
+                    "registry_skipped": True,
+                    "registry_skip_reason": skip_reason,
+                },
                 latency_p95_ms=0.0,
                 latency_pass=False,
                 rtf=None,

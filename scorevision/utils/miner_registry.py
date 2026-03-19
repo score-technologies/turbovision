@@ -34,6 +34,7 @@ class Miner:
     chute_id: Optional[str]
     block: int
     element_id: Optional[str] = None
+    registry_skip_reason: Optional[str] = None
 
 
 # ------------------------- HF gating & revision checks ------------------------- #
@@ -378,6 +379,10 @@ async def get_miners_from_registry(
         logger.warning("[Registry] No on-chain candidates")
         return {}, {}
 
+    def _mark_skipped(uid: int, miner: Miner, reason: str) -> None:
+        miner.registry_skip_reason = reason
+        skipped[uid] = miner
+
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
     skipped: Dict[int, Miner] = {}
@@ -390,7 +395,7 @@ async def get_miners_from_registry(
         gated = await _hf_gated_or_inaccessible(m.model, m.revision)
         if gated is True:
             logger.info("[Registry] uid=%s slug=%s skipped: HF gated/inaccessible", uid, m.slug)
-            skipped[uid] = m
+            _mark_skipped(uid, m, "hf_gated_or_revision_inaccessible")
             continue
         if max_model_size_mb is not None and max_model_size_mb > 0:
             if not m.model:
@@ -399,7 +404,7 @@ async def get_miners_from_registry(
                     uid,
                     m.slug,
                 )
-                skipped[uid] = m
+                _mark_skipped(uid, m, "missing_hf_model_id_for_size_check")
                 continue
             model_size_mb = _hf_repo_total_size_mb(m.model, m.revision)
             if model_size_mb is None:
@@ -408,7 +413,7 @@ async def get_miners_from_registry(
                     uid,
                     m.slug,
                 )
-                skipped[uid] = m
+                _mark_skipped(uid, m, "hf_repo_size_unresolved")
                 continue
             if model_size_mb > max_model_size_mb:
                 logger.info(
@@ -418,7 +423,11 @@ async def get_miners_from_registry(
                     model_size_mb,
                     max_model_size_mb,
                 )
-                skipped[uid] = m
+                _mark_skipped(
+                    uid,
+                    m,
+                    f"hf_repo_size_exceeds_max:{model_size_mb:.2f}>{max_model_size_mb:.2f}",
+                )
                 continue
 
         if onnx_only is True:
@@ -428,7 +437,7 @@ async def get_miners_from_registry(
                     uid,
                     m.slug,
                 )
-                skipped[uid] = m
+                _mark_skipped(uid, m, "missing_hf_model_id_for_onnx_check")
                 continue
             model_is_onnx_only = _hf_repo_has_only_onnx_models(m.model, m.revision)
             if model_is_onnx_only is not True:
@@ -437,19 +446,22 @@ async def get_miners_from_registry(
                     uid,
                     m.slug,
                 )
-                skipped[uid] = m
+                _mark_skipped(uid, m, "hf_repo_not_onnx_only")
                 continue
 
         ok = True
+        chute_reason = None
         if m.chute_id:
             info = await fetch_chute_info(m.chute_id)
             if not info:
                 logger.info("[Registry] uid=%s slug=%s: Chutes unfetched", uid, m.slug)
                 ok = False
+                chute_reason = "chutes_unfetched"
             else:
                 slug_chutes = (info.get("slug") or "").strip()
                 if slug_chutes and slug_chutes != (m.slug or ""):
                     ok = False
+                    chute_reason = f"chutes_slug_mismatch:{slug_chutes}!={m.slug or ''}"
                     logger.info(
                         "[Registry] uid=%s: slug mismatch (chutes=%s, commit=%s)",
                         uid,
@@ -459,6 +471,7 @@ async def get_miners_from_registry(
                 ch_rev = info.get("revision")
                 if ch_rev and m.revision and str(ch_rev) != str(m.revision):
                     ok = False
+                    chute_reason = f"chutes_revision_mismatch:{ch_rev}!={m.revision}"
                     logger.info(
                         "[Registry] uid=%s: revision mismatch (chutes=%s, commit=%s)",
                         uid,
@@ -469,7 +482,7 @@ async def get_miners_from_registry(
         if ok:
             filtered[uid] = m
         else:
-            skipped[uid] = m
+            _mark_skipped(uid, m, chute_reason or "chutes_validation_failed")
 
     logger.info("[Registry] %d miners after filtering", len(filtered))
     if not filtered:
@@ -491,7 +504,19 @@ async def get_miners_from_registry(
 
     keep_uids = {uid for _, uid in best_by_model.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
-    dedup_skipped = {uid: miner for uid, miner in filtered.items() if uid not in keep_uids}
+    dedup_skipped = {}
+    for uid, miner in filtered.items():
+        if uid in keep_uids:
+            continue
+        winner = best_by_model.get(miner.model or "")
+        if winner is not None:
+            winner_blk, winner_uid = winner
+            miner.registry_skip_reason = (
+                f"dedup_by_model_kept_uid:{winner_uid}_block:{winner_blk}"
+            )
+        else:
+            miner.registry_skip_reason = "dedup_by_model"
+        dedup_skipped[uid] = miner
     skipped.update(dedup_skipped)
     logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
     logger.info("[Registry] %d miners skipped", len(skipped))
