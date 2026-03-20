@@ -127,6 +127,22 @@ def stop_container(container_id: str, remove: bool = True) -> bool:
     return result.returncode == 0
 
 
+def get_image_digest(image: DockerImage) -> str:
+    result = subprocess.run(
+        ["docker", "inspect", "--format={{index .RepoDigests 0}}", image.full_name],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        logger.warning("Failed to get image digest for %s", image.full_name)
+        return ""
+    repo_digest = result.stdout.decode().strip()
+    at_idx = repo_digest.find("@")
+    if at_idx == -1:
+        logger.warning("Unexpected RepoDigests format: %s", repo_digest)
+        return ""
+    return repo_digest[at_idx + 1 :]
+
+
 def login_ghcr(username: str, token: str) -> bool:
     result = subprocess.run(
         ["docker", "login", "ghcr.io", "-u", username, "--password-stdin"],

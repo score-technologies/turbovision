@@ -12,7 +12,6 @@ from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypa
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
 from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
-from scorevision.utils.docker_hub import fetch_image_digest
 from scorevision.utils.manifest import Manifest
 from scorevision.utils.r2 import R2Config, add_index_key_if_new, central_r2_config, create_s3_client
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
@@ -464,9 +463,6 @@ async def _run_challenge_for_element(
         element_id,
     )
 
-    digests = await asyncio.gather(*[
-        fetch_image_digest(m.image_repo, m.image_tag) for m in miners
-    ])
     outcomes = list(await asyncio.gather(*[
         _challenge_miner(
             miner,
@@ -476,9 +472,9 @@ async def _run_challenge_for_element(
             block,
             element_id,
             pillar_weights,
-            digest,
+            miner.image_digest,
         )
-        for miner, digest in zip(miners, digests)
+        for miner in miners
     ]))
 
     results: list[dict] = []

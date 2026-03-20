@@ -15,6 +15,7 @@ class RegisteredMiner:
     port: int
     image_repo: str
     image_tag: str
+    image_digest: str
     commit_block: int
 
 
@@ -91,6 +92,7 @@ async def get_registered_miners(
 
         image_repo = obj.get("image_repo")
         image_tag = obj.get("image_tag")
+        image_digest = obj.get("image_digest", "")
 
         if not image_repo or not image_tag:
             continue
@@ -102,6 +104,7 @@ async def get_registered_miners(
             port=int(axon.port),
             image_repo=image_repo,
             image_tag=image_tag,
+            image_digest=image_digest,
             commit_block=int(block),
         ))
 

@@ -41,6 +41,10 @@ def build_miner_job(
         env=[
             k8s.V1EnvVar(name="VERIFY_ENABLED", value="false"),
             k8s.V1EnvVar(name="BLACKLIST_ENABLED", value="false"),
+            k8s.V1EnvVar(name="VERIFY", value="false"),
+            k8s.V1EnvVar(name="BLACKLIST", value="false"),
+            k8s.V1EnvVar(name="NETUID", value=str(cfg.netuid)),
+            k8s.V1EnvVar(name="SPOTCHECK_MODE", value="true"),
         ],
         resources=k8s.V1ResourceRequirements(
             requests={

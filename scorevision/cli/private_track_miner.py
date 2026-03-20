@@ -5,7 +5,7 @@ from pathlib import Path
 import click
 from scorevision.cli import console
 from scorevision.cli.errors import ConfigError, DockerBuildError, DockerPushError, DockerRunError
-from scorevision.utils.docker_helpers import DockerImage, build_image, login_ghcr, push_image, run_container
+from scorevision.utils.docker_helpers import DockerImage, build_image, get_image_digest, login_ghcr, push_image, run_container
 from scorevision.utils.manifest import get_current_manifest, load_manifest_from_public_index
 from scorevision.utils.settings import get_settings
 
@@ -44,7 +44,7 @@ def build_miner_image(image: DockerImage) -> None:
     console.success("Build complete\n")
 
 
-def push_miner_image(image: DockerImage) -> None:
+def push_miner_image(image: DockerImage) -> str:
     username, token = get_ghcr_credentials()
 
     if not login_ghcr(username, token):
@@ -53,7 +53,14 @@ def push_miner_image(image: DockerImage) -> None:
     console.info(f"Pushing {image.full_name}")
     if not push_image(image):
         raise DockerPushError("Docker push failed")
+
+    digest = get_image_digest(image)
+    if digest:
+        console.info(f"Image digest: {digest}")
+    else:
+        console.warn("Could not retrieve image digest — commit will omit it")
     console.success("Push complete\n")
+    return digest
 
 
 async def _resolve_private_element_id_from_manifest(
@@ -111,7 +118,7 @@ async def _resolve_private_element_id_from_manifest(
     return private_element_ids[choice - 1]
 
 
-async def commit_on_chain(image: DockerImage, element_id: str) -> None:
+async def commit_on_chain(image: DockerImage, element_id: str, image_digest: str = "") -> None:
     from bittensor import wallet, async_subtensor
 
     console.info("Committing on-chain")
@@ -125,6 +132,7 @@ async def commit_on_chain(image: DockerImage, element_id: str) -> None:
         "track": "private",
         "image_repo": image.repository,
         "image_tag": image.tag,
+        "image_digest": image_digest,
         "element_id": str(element_id),
         "hotkey": w.hotkey.ss58_address,
     }
@@ -176,7 +184,7 @@ async def deploy_miner(
         build_miner_image(image)
 
         if not no_push:
-            push_miner_image(image)
+            digest = push_miner_image(image)
 
             console.warn(
                 "Remember to share your package with Score via GHCR package settings.\n"
@@ -186,7 +194,7 @@ async def deploy_miner(
             if not no_commit:
                 if not selected_element_id:
                     raise click.ClickException("A private element_id is required for on-chain commit.")
-                await commit_on_chain(image, selected_element_id)
+                await commit_on_chain(image, selected_element_id, image_digest=digest)
             else:
                 console.warn("Skipping on-chain commit\n")
 
