@@ -61,6 +61,7 @@ class PillarName(str, Enum):
     MAP50 = "map50"
     PRECISION = "precision"
     RECALL = "recall"
+    FALSE_POSITIVE = "false_positive"
 
 
 class ElementPrefix(str, Enum):

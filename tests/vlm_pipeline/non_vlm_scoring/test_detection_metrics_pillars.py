@@ -5,6 +5,7 @@ from scorevision.utils.manifest import ElementPrefix, PillarName
 from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
+    compare_false_positive,
     compare_map50,
     compare_precision,
     compare_recall,
@@ -59,6 +60,9 @@ def test_detection_metrics_perfect_match():
     assert compare_recall(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     ) == pytest.approx(1.0)
+    assert compare_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
 
 
 def test_detection_metrics_partial_match():
@@ -89,6 +93,9 @@ def test_detection_metrics_partial_match():
     assert compare_recall(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     ) == pytest.approx(0.5)
+    assert compare_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
 
 
 def test_detection_metrics_registered_for_detection_elements():
@@ -96,6 +103,7 @@ def test_detection_metrics_registered_for_detection_elements():
         assert (element_prefix, PillarName.MAP50) in METRIC_REGISTRY
         assert (element_prefix, PillarName.PRECISION) in METRIC_REGISTRY
         assert (element_prefix, PillarName.RECALL) in METRIC_REGISTRY
+        assert (element_prefix, PillarName.FALSE_POSITIVE) in METRIC_REGISTRY
 
 
 def test_map50_uses_detection_confidence_ranking():
@@ -129,3 +137,31 @@ def test_map50_uses_detection_confidence_ranking():
     assert compare_map50(pseudo_gt=pseudo_gt, miner_predictions=high_first) > compare_map50(
         pseudo_gt=pseudo_gt, miner_predictions=low_first
     )
+
+
+def test_false_positive_uses_ffpi_formula():
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "bboxes": [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+                BoundingBox(bbox_2d=(20, 20, 30, 30), label="player"),
+                BoundingBox(bbox_2d=(40, 40, 50, 50), label="player"),
+                BoundingBox(bbox_2d=(60, 60, 70, 70), label="player"),
+                BoundingBox(bbox_2d=(80, 80, 90, 90), label="player"),
+                BoundingBox(bbox_2d=(100, 100, 110, 110), label="player"),
+            ]
+        }
+    }
+
+    # 1 TP + 5 FP over 1 image => ffpi=5 => max(0, 1 - ffpi/10) = 0.5
+    assert compare_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(0.5)

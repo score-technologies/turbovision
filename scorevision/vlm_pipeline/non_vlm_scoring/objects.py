@@ -237,11 +237,13 @@ def _evaluate_detection_metrics_at_threshold(
         global_tp / (global_tp + global_fp) if (global_tp + global_fp) > 0 else 0.0
     )
     recall = global_tp / global_gt if global_gt > 0 else 0.0
+    ffpi = global_fp / len(per_image) if per_image else 0.0
 
     return {
         "map": _mean(map_candidates),
         "precision": precision,
         "recall": recall,
+        "ffpi": float(ffpi),
         "per_class_ap": per_class_ap,
     }
 
@@ -253,7 +255,7 @@ def _evaluate_detection_metrics(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     )
     if not per_image:
-        return {"map_50": 0.0, "precision": 0.0, "recall": 0.0}
+        return {"map_50": 0.0, "precision": 0.0, "recall": 0.0, "false_positive": 0.0}
 
     at_50 = _evaluate_detection_metrics_at_threshold(
         per_image=per_image,
@@ -263,6 +265,7 @@ def _evaluate_detection_metrics(
         "map_50": float(at_50["map"]),
         "precision": float(at_50["precision"]),
         "recall": float(at_50["recall"]),
+        "false_positive": max(0.0, 1.0 - (float(at_50["ffpi"]) / 10.0)),
     }
 
 
@@ -545,6 +548,18 @@ def compare_recall(
     return _evaluate_detection_metrics(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     )["recall"]
+
+
+@register_metric(
+    (ElementPrefix.PLAYER_DETECTION, PillarName.FALSE_POSITIVE),
+    (ElementPrefix.OBJECT_DETECTION, PillarName.FALSE_POSITIVE),
+)
+def compare_false_positive(
+    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
+) -> float:
+    return _evaluate_detection_metrics(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    )["false_positive"]
 
 
 @register_metric((ElementPrefix.PLAYER_DETECTION, PillarName.PALETTE))
