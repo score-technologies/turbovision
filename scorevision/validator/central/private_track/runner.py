@@ -413,6 +413,21 @@ async def _emit_private_score_to_public_db(
     )
 
 
+def _log_runner_task_failure(task: asyncio.Task, element_id: str, block: int) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    logger.exception(
+        "%sElement task failed (element_id=%s block=%s): %s",
+        LOG_PREFIX,
+        element_id,
+        block,
+        exc,
+    )
+
+
 async def _run_challenge_for_element(
     element_id: str,
     manifest: Manifest,
@@ -420,93 +435,102 @@ async def _run_challenge_for_element(
     keypair,
     subtensor,
 ) -> None:
-    settings = get_settings()
-    element = manifest.get_element(element_id)
-    pillar_weights: dict[str, float] | None = None
-    if element and element.metrics and element.metrics.pillars:
-        pillar_weights = {
-            str(k.value if hasattr(k, "value") else k): float(v)
-            for k, v in element.metrics.pillars.items()
-        }
+    try:
+        settings = get_settings()
+        element = manifest.get_element(element_id)
+        pillar_weights: dict[str, float] | None = None
+        if element and element.metrics and element.metrics.pillars:
+            pillar_weights = {
+                str(k.value if hasattr(k, "value") else k): float(v)
+                for k, v in element.metrics.pillars.items()
+            }
 
-    blacklist_api = None
-    if settings.BLACKLIST_API_URL:
-        blacklist_api = BlacklistAPI(settings.BLACKLIST_API_URL, keypair)
+        blacklist_api = None
+        if settings.BLACKLIST_API_URL:
+            blacklist_api = BlacklistAPI(settings.BLACKLIST_API_URL, keypair)
 
-    metagraph = await subtensor.metagraph(settings.SCOREVISION_NETUID)
-    blacklist = await fetch_blacklisted_hotkeys(blacklist_api)
-    miners = await get_registered_miners(
-        subtensor,
-        metagraph,
-        blacklist,
-        element_id=element_id,
-    )
-
-    if not miners:
-        logger.warning("%sNo registered private track miners for element=%s", LOG_PREFIX, element_id)
-        return
-
-    challenge = await get_challenge_with_ground_truth(
-        manifest_hash=manifest.hash,
-        element_id=element_id,
-        keypair=keypair,
-    )
-    if not challenge:
-        logger.warning("%sNo valid challenge for element=%s", LOG_PREFIX, element_id)
-        return
-
-    logger.info(
-        "%sSending challenge %s to %d miners (element=%s)",
-        LOG_PREFIX,
-        challenge.challenge_id,
-        len(miners),
-        element_id,
-    )
-
-    outcomes = list(await asyncio.gather(*[
-        _challenge_miner(
-            miner,
-            challenge,
-            keypair,
-            settings.PRIVATE_MINER_TIMEOUT_S,
-            block,
-            element_id,
-            pillar_weights,
-            miner.image_digest,
-        )
-        for miner in miners
-    ]))
-
-    results: list[dict] = []
-    for miner, (result, response_predictions) in zip(miners, outcomes):
-        private_responses_key = await _upload_private_response_blob(
+        metagraph = await subtensor.metagraph(settings.SCOREVISION_NETUID)
+        blacklist = await fetch_blacklisted_hotkeys(blacklist_api)
+        miners = await get_registered_miners(
+            subtensor,
+            metagraph,
+            blacklist,
             element_id=element_id,
-            miner=miner,
-            challenge=challenge,
-            block=block,
-            response_predictions=response_predictions,
         )
-        result["private_responses_key"] = private_responses_key
-        results.append(result)
-        try:
-            await _emit_private_score_to_public_db(
-                element_id=element_id,
-                manifest_hash=manifest.hash,
-                challenge=challenge,
-                miner=miner,
-                result=result,
-                private_responses_key=private_responses_key,
-                trigger_block=block,
-            )
-        except Exception as e:
-            logger.error(
-                "%sFailed to emit private score to public db for miner=%s: %s",
-                LOG_PREFIX,
-                miner.hotkey,
-                e,
-            )
 
-    await _upload_shard(results, block, keypair.ss58_address)
+        if not miners:
+            logger.warning("%sNo registered private track miners for element=%s", LOG_PREFIX, element_id)
+            return
+
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash=manifest.hash,
+            element_id=element_id,
+            keypair=keypair,
+        )
+        if not challenge:
+            logger.warning("%sNo valid challenge for element=%s", LOG_PREFIX, element_id)
+            return
+
+        logger.info(
+            "%sSending challenge %s to %d miners (element=%s)",
+            LOG_PREFIX,
+            challenge.challenge_id,
+            len(miners),
+            element_id,
+        )
+
+        outcomes = list(await asyncio.gather(*[
+            _challenge_miner(
+                miner,
+                challenge,
+                keypair,
+                settings.PRIVATE_MINER_TIMEOUT_S,
+                block,
+                element_id,
+                pillar_weights,
+                miner.image_digest,
+            )
+            for miner in miners
+        ]))
+
+        results: list[dict] = []
+        for miner, (result, response_predictions) in zip(miners, outcomes):
+            private_responses_key = await _upload_private_response_blob(
+                element_id=element_id,
+                miner=miner,
+                challenge=challenge,
+                block=block,
+                response_predictions=response_predictions,
+            )
+            result["private_responses_key"] = private_responses_key
+            results.append(result)
+            try:
+                await _emit_private_score_to_public_db(
+                    element_id=element_id,
+                    manifest_hash=manifest.hash,
+                    challenge=challenge,
+                    miner=miner,
+                    result=result,
+                    private_responses_key=private_responses_key,
+                    trigger_block=block,
+                )
+            except Exception as e:
+                logger.error(
+                    "%sFailed to emit private score to public db for miner=%s: %s",
+                    LOG_PREFIX,
+                    miner.hotkey,
+                    e,
+                )
+
+        await _upload_shard(results, block, keypair.ss58_address)
+    except Exception:
+        logger.exception(
+            "%sUnhandled error while running element_id=%s at block=%s",
+            LOG_PREFIX,
+            element_id,
+            block,
+        )
+        raise
 
 
 def _trigger_scheduled_runners(
@@ -530,9 +554,11 @@ def _trigger_scheduled_runners(
             logger.info("%selement_id=%s still running; skipping at block=%s", LOG_PREFIX, element_id, block)
         else:
             logger.info("%sTriggering challenge for element_id=%s at block=%s", LOG_PREFIX, element_id, block)
-            entry["task"] = asyncio.create_task(
+            task = asyncio.create_task(
                 _run_challenge_for_element(element_id, manifest, block, keypair, subtensor)
             )
+            task.add_done_callback(lambda t, e=element_id, b=block: _log_runner_task_failure(t, e, b))
+            entry["task"] = task
 
 
 async def challenge_loop(path_manifest: Path | None = None) -> None:
