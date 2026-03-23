@@ -1,5 +1,5 @@
 x-common: &common #
-  image: docker.io/mikhaelscore/turbovision:latest
+#  image: docker.io/mikhaelscore/turbovision:latest
   build: .
   restart: unless-stopped
   env_file: .env
@@ -28,7 +28,7 @@ services:
     depends_on:
       central-signer:
         condition: service_healthy
-    command: ["sv", "-v", "central-validator", "weights"]
+    command: ["sv", "-v", "central-validator", "open-source", "weights"]
 
   central-runner:
     <<: *common
@@ -118,7 +118,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
-    command: ["sv", "-v", "central-validator", "signer"]
+    command: ["sv", "-v", "central-validator", "open-source", "signer"]
 
   audit-spotcheck:
     <<: *common

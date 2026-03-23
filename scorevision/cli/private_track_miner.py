@@ -153,12 +153,45 @@ async def commit_on_chain(image: DockerImage, element_id: str, image_digest: str
 
 
 def start_miner_container(image: DockerImage) -> None:
+    settings = get_settings()
     port = int(os.environ.get("MINER_PORT", "8000"))
     project_root = Path(__file__).parent.parent.parent
     env_file = project_root / ".env"
+    netuid = os.environ.get("NETUID") or str(settings.SCOREVISION_NETUID)
+
+    # Map scorevision env names to the names expected by fiber.
+    coldkey = os.environ.get("COLDKEY") or settings.BITTENSOR_WALLET_COLD
+    hotkey = os.environ.get("HOTKEY") or settings.BITTENSOR_WALLET_HOT
+    subtensor_network = os.environ.get("SUBTENSOR_NETWORK")
+    subtensor_address = os.environ.get("SUBTENSOR_ADDRESS")
+    endpoint = os.environ.get("BITTENSOR_SUBTENSOR_ENDPOINT") or settings.BITTENSOR_SUBTENSOR_ENDPOINT
+    if not subtensor_network and not subtensor_address and endpoint:
+        if endpoint in {"test", "finney", "local"}:
+            subtensor_network = endpoint
+        else:
+            subtensor_address = endpoint
+
+    env_vars = {
+        "NETUID": netuid,
+        "COLDKEY": coldkey,
+        "HOTKEY": hotkey,
+        "WALLET_NAME": coldkey,
+        "HOTKEY_NAME": hotkey,
+        "SUBTENSOR_NETWORK": subtensor_network,
+        "SUBTENSOR_ADDRESS": subtensor_address,
+    }
+    env_vars = {k: v for k, v in env_vars.items() if v}
+    volumes = [f"{settings.BITTENSOR_WALLET_PATH}:/root/.bittensor/wallets:ro"]
 
     console.info(f"Starting container on port {port}")
-    container_id, error = run_container(image, port, detach=True, env_file=env_file)
+    container_id, error = run_container(
+        image,
+        port,
+        detach=True,
+        env_file=env_file,
+        env_vars=env_vars,
+        volumes=volumes,
+    )
 
     if error:
         raise DockerRunError(f"Container failed to start:\n{error}")

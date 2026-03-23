@@ -83,6 +83,7 @@ def run_container(
     detach: bool = True,
     env_file: Path | None = None,
     env_vars: dict[str, str] | None = None,
+    volumes: list[str] | None = None,
 ) -> tuple[str | None, str | None]:
     logger.info("Running container: %s on port %d", image.full_name, port)
     cmd = ["docker", "run", "-p", f"{port}:{port}"]
@@ -94,6 +95,10 @@ def run_container(
         for key, value in env_vars.items():
             if value is not None:
                 cmd.extend(["-e", f"{key}={value}"])
+
+    if volumes:
+        for volume in volumes:
+            cmd.extend(["-v", volume])
 
     if detach:
         cmd.append("-d")

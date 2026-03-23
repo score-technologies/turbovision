@@ -33,8 +33,11 @@ async def send_challenge(
 
     try:
         payload_bytes = request.model_dump_json().encode()
-        headers = build_signed_headers(hotkey, payload_bytes)
-        headers["X-Miner-Hotkey"] = miner.hotkey
+        headers = build_signed_headers(
+            hotkey,
+            payload_bytes,
+            miner_hotkey=miner.hotkey,
+        )
 
         client_timeout = httpx.Timeout(timeout=timeout)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
@@ -68,6 +71,24 @@ async def send_challenge(
     except (asyncio.TimeoutError, httpx.TimeoutException):
         elapsed_s = perf_counter() - start
         logger.warning("Challenge to %s timed out after %.2fs", miner.hotkey, elapsed_s)
+        return ChallengeAttempt(
+            response=None,
+            elapsed_s=elapsed_s,
+            timed_out=True,
+        )
+    except httpx.HTTPStatusError as e:
+        elapsed_s = perf_counter() - start
+        body = ""
+        try:
+            body = e.response.text
+        except Exception:
+            body = "<unavailable>"
+        logger.error(
+            "Challenge to %s failed with HTTP %s: %s",
+            miner.hotkey,
+            e.response.status_code,
+            body,
+        )
         return ChallengeAttempt(
             response=None,
             elapsed_s=elapsed_s,

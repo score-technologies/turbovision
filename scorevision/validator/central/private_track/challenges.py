@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from logging import getLogger
 import httpx
 from scorevision.utils.challenges import get_next_challenge_v3
-from scorevision.utils.request_signing import build_signed_headers
+from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.schemas import FramePrediction
 from scorevision.utils.settings import get_settings
 
@@ -27,17 +27,19 @@ async def fetch_next_challenge(manifest_hash: str, element_id: str) -> dict:
     )
 
 
-async def fetch_ground_truth(challenge_id: str, keypair) -> list[FramePrediction]:
+async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None = None) -> list[FramePrediction]:
     settings = get_settings()
-    api_url = settings.PRIVATE_GT_API_URL
+    api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
     if not api_url:
-        raise RuntimeError("PRIVATE_GT_API_URL is not configured")
+        raise RuntimeError("Neither PRIVATE_GT_API_URL nor SCOREVISION_API is configured")
 
-    headers = build_signed_headers(keypair)
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(
-            f"{api_url}/api/private-track/ground-truth/{challenge_id}",
-            headers=headers,
+            f"{api_url}/api/tasks/{int(challenge_id)}/ground-truth",
+            params=params,
         )
         response.raise_for_status()
         data = response.json()
@@ -61,15 +63,25 @@ async def get_challenge_with_ground_truth(
             logger.error("Failed to fetch challenge (attempt %d/%d): %s", attempt + 1, max_retries, e)
             continue
 
-        challenge_id = chal.get("task_id")
-        video_url = chal.get("video_url")
+        payload = chal.get("payload") or {}
+        challenge_id = chal.get("task_id") or chal.get("id")
+        video_url = (
+            chal.get("video_url")
+            or chal.get("asset_url")
+            or payload.get("video_url")
+            or payload.get("clip_url")
+        )
 
         if not challenge_id or not video_url:
             logger.warning("Challenge missing task_id or video_url, retrying")
             continue
 
         try:
-            ground_truth = await fetch_ground_truth(challenge_id, keypair)
+            ground_truth = await fetch_ground_truth(
+                challenge_id=challenge_id,
+                keypair=keypair,
+                element_id=element_id,
+            )
         except Exception as e:
             logger.error("Failed to fetch ground truth for %s: %s", challenge_id, e)
             continue
