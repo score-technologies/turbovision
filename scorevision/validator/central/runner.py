@@ -61,6 +61,23 @@ logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
 
 
+def _emit_shard_concurrency() -> int:
+    raw = (os.getenv("SCOREVISION_EMIT_SHARD_CONCURRENCY", "1") or "1").strip()
+    try:
+        val = int(raw)
+    except Exception:
+        val = 1
+    return max(1, val)
+
+
+_EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
+
+
+async def _emit_shard_guarded(**kwargs) -> None:
+    async with _EMIT_SHARD_SEM:
+        await emit_shard(**kwargs)
+
+
 async def _build_pgt_with_retries(
     chal_api: dict,
     element: Element,
@@ -647,7 +664,7 @@ async def runner(
             }
 
             try:
-                await emit_shard(
+                await _emit_shard_guarded(
                     slug=miner.slug,
                     challenge=challenge,
                     miner_run=miner_output,
@@ -727,7 +744,7 @@ async def runner(
             }
 
             try:
-                await emit_shard(
+                await _emit_shard_guarded(
                     slug=miner.slug or f"skipped-{miner.uid}",
                     challenge=challenge,
                     miner_run=zero_output,
