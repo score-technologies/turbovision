@@ -43,3 +43,9 @@ ACTION_CONFIGS: dict[Action, ActionConfig] = {
     Action.FOUL: ActionConfig(7.7, 0.5, 2.5),
     Action.GOAL: ActionConfig(10.9, 0.5, 3.0),
 }
+
+ACTION_CLASS_INDEX: dict[str, int] = {
+    action.value: idx for idx, action in enumerate(Action)
+}
+
+NUM_ACTION_CLASSES: int = len(ACTION_CLASS_INDEX)

@@ -87,7 +87,7 @@ async def fetch_miner_responses(challenge_id: str, keypair) -> dict[str, list[di
 
 def rescore_miner(predictions_raw: list[dict], ground_truth: list[FramePrediction]) -> float:
     predictions = [
-        FramePrediction(frame=p["frame"], action=p["action"])
+        FramePrediction(frame=p["frame"], action=p["action"], confidence=p.get("confidence", 1.0))
         for p in predictions_raw
         if "frame" in p and "action" in p
     ]

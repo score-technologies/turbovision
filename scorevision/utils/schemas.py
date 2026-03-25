@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class FramePrediction(BaseModel):
     frame: int = Field(ge=0)
     action: str
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class ChallengeRequest(BaseModel):

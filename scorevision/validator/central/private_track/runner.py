@@ -23,6 +23,10 @@ from scorevision.validator.central.private_track.challenges import (
 )
 from scorevision.validator.central.private_track.miners import send_challenge
 from scorevision.validator.central.private_track.registry import RegisteredMiner, get_registered_miners
+from scorevision.validator.central.private_track.benchmark import (
+    BenchmarkResult,
+    compute_map_at_1s,
+)
 from scorevision.validator.central.private_track.scoring import (
     PRIVATE_SCORING_VERSION,
     score_predictions_with_breakdown,
@@ -72,68 +76,13 @@ def _private_responses_r2_config() -> R2Config:
     )
 
 
-def _private_responses_prefix() -> str:
-    settings = get_settings()
-    return (settings.PRIVATE_RESPONSES_R2_PREFIX or "private_responses").strip().strip("/")
-
-
-def _private_response_key(
-    *,
-    element_id: str,
-    miner_hotkey: str,
-    commit_block: int,
-    block: int,
-    challenge_id: str,
-) -> str:
-    safe_element = (element_id or "unknown-element").replace("/", "_")
-    prefix = _private_responses_prefix()
-    return (
-        f"{prefix}/{safe_element}/{miner_hotkey}/{max(0, int(commit_block)):09d}/"
-        f"responses/{block:09d}-{challenge_id}.json"
-    )
-
-
-async def _upload_private_response_blob(
-    *,
-    element_id: str,
-    miner: RegisteredMiner,
-    challenge: Challenge,
-    block: int,
-    response_predictions: list[dict] | None,
-) -> str | None:
-    if not response_predictions:
-        return None
-
+async def _upload_to_private_r2(key: str, index_key: str, payload: dict, label: str) -> str | None:
     cfg = _private_responses_r2_config()
     if not (cfg.bucket and cfg.account_id and cfg.access_key_id and cfg.secret_access_key):
-        logger.warning(
-            "%sPrivate responses R2 is not configured, skipping response upload",
-            LOG_PREFIX,
-        )
+        logger.warning("%sPrivate R2 not configured, skipping upload of %s", LOG_PREFIX, label)
         return None
 
-    key = _private_response_key(
-        element_id=element_id,
-        miner_hotkey=miner.hotkey,
-        commit_block=miner.commit_block,
-        block=block,
-        challenge_id=challenge.challenge_id,
-    )
-    index_key = f"{_private_responses_prefix()}/index.json"
-    payload = {
-        "track": "private",
-        "element_id": element_id,
-        "challenge_id": challenge.challenge_id,
-        "video_url": challenge.video_url,
-        "miner_hotkey": miner.hotkey,
-        "miner_uid": miner.uid,
-        "predictions": response_predictions,
-    }
-
-    client_factory = lambda: create_s3_client(
-        cfg,
-        error_message="Private responses R2 is not configured",
-    )
+    client_factory = lambda: create_s3_client(cfg, error_message="Private R2 is not configured")
     try:
         async with client_factory() as client:
             await client.put_object(
@@ -150,8 +99,66 @@ async def _upload_private_response_blob(
         )
         return key
     except Exception as e:
-        logger.error("%sFailed to upload private response blob: %s", LOG_PREFIX, e)
+        logger.error("%sFailed to upload %s: %s", LOG_PREFIX, label, e)
         return None
+
+
+async def _upload_private_response_blob(
+    *,
+    element_id: str,
+    miner: RegisteredMiner,
+    challenge: Challenge,
+    block: int,
+    response_predictions: list[dict] | None,
+) -> str | None:
+    if not response_predictions:
+        return None
+
+    prefix = (get_settings().PRIVATE_RESPONSES_R2_PREFIX or "private_responses").strip().strip("/")
+    safe_element = (element_id or "unknown-element").replace("/", "_")
+    key = (
+        f"{prefix}/{safe_element}/{miner.hotkey}/{max(0, int(miner.commit_block)):09d}/"
+        f"responses/{block:09d}-{challenge.challenge_id}.json"
+    )
+    payload = {
+        "track": "private",
+        "element_id": element_id,
+        "challenge_id": challenge.challenge_id,
+        "video_url": challenge.video_url,
+        "miner_hotkey": miner.hotkey,
+        "miner_uid": miner.uid,
+        "predictions": response_predictions,
+    }
+    return await _upload_to_private_r2(key, f"{prefix}/index.json", payload, f"response blob for miner {miner.hotkey}")
+
+
+async def _upload_benchmark_result(
+    *,
+    element_id: str,
+    miner: RegisteredMiner,
+    challenge: Challenge,
+    block: int,
+    benchmark_result: BenchmarkResult,
+) -> str | None:
+    settings = get_settings()
+    prefix = (settings.PRIVATE_BENCHMARK_R2_PREFIX or "private_benchmark").strip().strip("/")
+    safe_element = (element_id or "unknown-element").replace("/", "_")
+    key = (
+        f"{prefix}/{safe_element}/{miner.hotkey}/{max(0, int(miner.commit_block)):09d}/"
+        f"benchmark/{block:09d}-{challenge.challenge_id}.json"
+    )
+    payload = {
+        "track": "private",
+        "element_id": element_id,
+        "challenge_id": challenge.challenge_id,
+        "miner_hotkey": miner.hotkey,
+        "miner_uid": miner.uid,
+        "block": block,
+        "benchmark_version": settings.BENCHMARK_VERSION,
+        "map_at_1s": benchmark_result.map_at_1s,
+        "per_action_ap": benchmark_result.per_action_ap,
+    }
+    return await _upload_to_private_r2(key, f"{prefix}/index.json", payload, f"benchmark for miner {miner.hotkey}")
 
 
 _PUBLIC_SHARD_FIELDS = {
@@ -241,6 +248,23 @@ async def _push_pending_spotcheck(spotcheck: PendingSpotcheck, keypair=None) -> 
         return False
 
 
+def _safe_compute_benchmark(
+    predictions: list,
+    ground_truth: list,
+    miner_hotkey: str,
+) -> BenchmarkResult | None:
+    try:
+        return compute_map_at_1s(predictions, ground_truth)
+    except Exception as e:
+        logger.error(
+            "%sBenchmark computation failed for miner %s: %s",
+            LOG_PREFIX,
+            miner_hotkey,
+            e,
+        )
+        return None
+
+
 async def _challenge_miner(
     miner: RegisteredMiner,
     challenge: Challenge,
@@ -250,12 +274,13 @@ async def _challenge_miner(
     element_id: str,
     pillar_weights: dict[str, float] | None,
     image_digest: str,
-) -> tuple[dict, list[dict] | None]:
+) -> tuple[dict, list[dict] | None, BenchmarkResult | None]:
     try:
         attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
         response = attempt.response
         is_scored = response is not None and not attempt.timed_out
         response_predictions = None
+        benchmark_result = None
 
         if is_scored:
             score, score_breakdown = score_predictions_with_breakdown(
@@ -265,16 +290,23 @@ async def _challenge_miner(
             )
             pred_count = len(response.predictions)
             response_predictions = [pred.model_dump() for pred in response.predictions]
+            benchmark_result = _safe_compute_benchmark(
+                response.predictions, challenge.ground_truth, miner.hotkey
+            )
         else:
             score = 0.0
             pred_count = 0
             score_breakdown = {}
 
         if is_scored:
+            benchmark_log = ""
+            if benchmark_result is not None:
+                benchmark_log = f" mAP@1s={benchmark_result.map_at_1s:.4f}"
             logger.info(
-                "Miner %s: score=%.3f response_time=%.3fs",
+                "Miner %s: score=%.3f%s response_time=%.3fs",
                 miner.hotkey,
                 score,
+                benchmark_log,
                 attempt.elapsed_s,
             )
         else:
@@ -304,7 +336,7 @@ async def _challenge_miner(
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
             score_breakdown=score_breakdown,
-        )), response_predictions
+        )), response_predictions, benchmark_result
     except Exception as e:
         logger.error("Miner %s challenge processing failed: %s", miner.hotkey, e)
         return asdict(PrivateEvaluationResult(
@@ -325,7 +357,7 @@ async def _challenge_miner(
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
             score_breakdown={},
-        )), None
+        )), None, None
 
 
 async def _emit_private_score_to_public_db(
@@ -494,7 +526,7 @@ async def _run_challenge_for_element(
         ]))
 
         results: list[dict] = []
-        for miner, (result, response_predictions) in zip(miners, outcomes):
+        for miner, (result, response_predictions, benchmark_result) in zip(miners, outcomes):
             private_responses_key = await _upload_private_response_blob(
                 element_id=element_id,
                 miner=miner,
@@ -504,6 +536,15 @@ async def _run_challenge_for_element(
             )
             result["private_responses_key"] = private_responses_key
             results.append(result)
+
+            if benchmark_result is not None:
+                await _upload_benchmark_result(
+                    element_id=element_id,
+                    miner=miner,
+                    challenge=challenge,
+                    block=block,
+                    benchmark_result=benchmark_result,
+                )
             try:
                 await _emit_private_score_to_public_db(
                     element_id=element_id,

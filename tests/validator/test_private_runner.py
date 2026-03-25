@@ -19,6 +19,7 @@ def _miner() -> RegisteredMiner:
         image_repo="org/repo",
         image_tag="v1",
         commit_block=123,
+        image_digest="sha256:abc123",
     )
 
 
@@ -48,25 +49,32 @@ async def test_challenge_miner_scores_when_response_is_on_time():
             new=AsyncMock(return_value=attempt),
         ),
         patch(
-            "scorevision.validator.central.private_track.runner.score_predictions",
-            return_value=0.83,
-        ) as score_mock,
+            "scorevision.validator.central.private_track.runner.score_predictions_with_breakdown",
+            return_value=(0.83, {"private_track_score": 0.83}),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._safe_compute_benchmark",
+            return_value=None,
+        ),
     ):
-        result = await _challenge_miner(
+        result, response_predictions, benchmark_result = await _challenge_miner(
             miner=_miner(),
             challenge=_challenge(),
             keypair=None,
             timeout=30.0,
             block=1234,
+            element_id="test-element",
+            pillar_weights=None,
             image_digest="sha256:abc123",
         )
 
-    score_mock.assert_called_once()
     assert result["score"] == 0.83
     assert result["prediction_count"] == 1
     assert result["timed_out"] is False
     assert result["processing_time"] == 2.5
     assert result["response_time_s"] == 2.5
+    assert response_predictions is not None
+    assert benchmark_result is None
 
 
 @pytest.mark.asyncio
@@ -77,29 +85,26 @@ async def test_challenge_miner_excludes_timeout_from_weights():
         timed_out=True,
     )
 
-    with (
-        patch(
-            "scorevision.validator.central.private_track.runner.send_challenge",
-            new=AsyncMock(return_value=attempt),
-        ),
-        patch(
-            "scorevision.validator.central.private_track.runner.score_predictions",
-            return_value=0.91,
-        ) as score_mock,
+    with patch(
+        "scorevision.validator.central.private_track.runner.send_challenge",
+        new=AsyncMock(return_value=attempt),
     ):
-        result = await _challenge_miner(
+        result, response_predictions, benchmark_result = await _challenge_miner(
             miner=_miner(),
             challenge=_challenge(),
             keypair=None,
             timeout=30.0,
             block=1234,
+            element_id="test-element",
+            pillar_weights=None,
             image_digest="sha256:abc123",
         )
 
-    score_mock.assert_not_called()
     assert result["score"] == 0.0
     assert result["prediction_count"] == 0
     assert result["timed_out"] is True
+    assert response_predictions is None
+    assert benchmark_result is None
 
 
 def test_is_weight_eligible_result_defaults_to_true():

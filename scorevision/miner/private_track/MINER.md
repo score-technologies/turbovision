@@ -278,6 +278,10 @@ Your commitment is stored on-chain and checked by the central validator before s
 }
 ```
 
+## Scoring Mechanism
+
+The scoring mechanism is a custom implementation that is designed to be robust against exploits identified in the classical mAP metric used in literature. The parameters associated to the individual actions are derived from the statistics of the available data from our external partners. As future data is incorporated, it may be necessary to update aspects to more accurately reflect the underlying statistics.
+
 ## Valid Actions
 
 | Action | Weight | Tolerance |
