@@ -45,7 +45,7 @@ async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None 
         data = response.json()
 
     return [
-        FramePrediction(frame=gt["frame"], action=gt["action"])
+        FramePrediction(frame=gt["frame"], action=gt["type"])
         for gt in data.get("ground_truth", [])
     ]
 

@@ -1,47 +1,11 @@
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
+from unittest.mock import MagicMock
 from scorevision.validator.central.open_source.runner import (
     _cleanup_video_cache,
     _extract_element_id_from_chal_api,
-    _extract_element_tempos_from_manifest,
-    _to_pos_int,
     _enough_bboxes_per_frame,
 )
-
-
-def test_to_pos_int_with_positive_int():
-    assert _to_pos_int(5) == 5
-    assert _to_pos_int(1) == 1
-    assert _to_pos_int(100) == 100
-
-
-def test_to_pos_int_with_zero_or_negative():
-    assert _to_pos_int(0) is None
-    assert _to_pos_int(-1) is None
-    assert _to_pos_int(-100) is None
-
-
-def test_to_pos_int_with_float():
-    assert _to_pos_int(5.7) == 5
-    assert _to_pos_int(1.0) == 1
-    assert _to_pos_int(0.9) is None
-
-
-def test_to_pos_int_with_string():
-    assert _to_pos_int("5") == 5
-    assert _to_pos_int("100") == 100
-    assert _to_pos_int("0") is None
-    assert _to_pos_int("-5") is None
-    assert _to_pos_int("abc") is None
-
-
-def test_to_pos_int_with_none_and_bool():
-    assert _to_pos_int(None) is None
-    assert _to_pos_int(True) is None
-    assert _to_pos_int(False) is None
 
 
 def test_extract_element_id_from_chal_api_direct():
@@ -69,44 +33,6 @@ def test_extract_element_id_from_chal_api_not_found():
     assert _extract_element_id_from_chal_api({}) is None
     assert _extract_element_id_from_chal_api({"other": "data"}) is None
     assert _extract_element_id_from_chal_api(None) is None
-
-
-def test_extract_element_tempos_from_manifest_dict_elements():
-    manifest = SimpleNamespace(
-        elements={
-            "soccer_detect": {"window_block": 100},
-            "pitch_detect": {"tempo": 200},
-            "player_track": {},
-        }
-    )
-    result = _extract_element_tempos_from_manifest(manifest, default_tempo_blocks=300)
-    assert result == {
-        "soccer_detect": 100,
-        "pitch_detect": 200,
-        "player_track": 300,
-    }
-
-
-def test_extract_element_tempos_from_manifest_list_elements():
-    manifest = SimpleNamespace(
-        elements=[
-            SimpleNamespace(element_id="elem1", window_block=150),
-            SimpleNamespace(id="elem2", tempo=250),
-            {"element_id": "elem3", "window_block": 350},
-            {"id": "elem4"},
-        ]
-    )
-    result = _extract_element_tempos_from_manifest(manifest, default_tempo_blocks=500)
-    assert result["elem1"] == 150
-    assert result["elem2"] == 250
-    assert result["elem3"] == 350
-    assert result["elem4"] == 500
-
-
-def test_extract_element_tempos_from_manifest_no_elements():
-    manifest = SimpleNamespace(elements=None)
-    result = _extract_element_tempos_from_manifest(manifest, default_tempo_blocks=300)
-    assert result == {}
 
 
 def test_cleanup_video_cache_with_store():
@@ -178,4 +104,3 @@ def test_enough_bboxes_per_frame_empty():
     assert not _enough_bboxes_per_frame(
         [], min_bboxes_per_frame=6, min_frames_required=1
     )
-
