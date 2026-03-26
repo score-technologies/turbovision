@@ -62,6 +62,7 @@ class PillarName(str, Enum):
     PRECISION = "precision"
     RECALL = "recall"
     SOCCER_ACTION = "soccer_action"
+    FALSE_POSITIVE = "false_positive"
 
 
 class ElementPrefix(str, Enum):
