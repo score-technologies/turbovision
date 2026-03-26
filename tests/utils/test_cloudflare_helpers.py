@@ -1,5 +1,6 @@
 from scorevision.utils.cloudflare_helpers import (
     _extract_element_miner_commit_tuple_from_key_or_url,
+    _select_lane_specific_index_url,
     emit_shard,
 )
 from types import SimpleNamespace
@@ -32,6 +33,26 @@ def test_extract_element_miner_commit_tuple_from_absolute_url():
         "PlayerDetect_v1@1.0",
         "5Fminer",
         7471716,
+    )
+
+
+def test_select_lane_specific_index_url_public_unchanged():
+    assert (
+        _select_lane_specific_index_url(
+            "https://pub.r2.dev/manako/index.json",
+            lane="public",
+        )
+        == "https://pub.r2.dev/manako/index.json"
+    )
+
+
+def test_select_lane_specific_index_url_private_uses_private_index():
+    assert (
+        _select_lane_specific_index_url(
+            "https://pub.r2.dev/manako/index.json",
+            lane="private",
+        )
+        == "https://pub.r2.dev/manako/indexprivate.json"
     )
 
 

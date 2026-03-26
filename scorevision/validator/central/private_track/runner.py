@@ -176,7 +176,7 @@ async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> st
     settings = get_settings()
     prefix = settings.PRIVATE_R2_RESULTS_PREFIX
     key = f"{prefix}/{block:09d}-{hotkey_ss58}.json"
-    index_key = f"{prefix}/index.json"
+    index_key = f"{prefix}/indexprivate.json"
 
     cfg = central_r2_config(settings)
     client_factory = lambda: create_s3_client(

@@ -113,7 +113,7 @@ async def collect_recent_challenge_scores_by_validator_miner(
     excluded_uids: set[int] | None = None,
 ) -> dict[tuple[str, int], deque]:
     challenge_scores: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=K))
-    async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
+    async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id, lane=lane):
         try:
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:
@@ -182,7 +182,7 @@ async def get_winner_for_element(
     unknown_miner_hotkeys: set[str] = set()
     source_indexes: set[str] = set()
 
-    async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id):
+    async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id, lane=lane):
         diagnostics["lines_total"] += 1
         src_index = str(line.get("_src_index") or "").strip()
         if src_index:

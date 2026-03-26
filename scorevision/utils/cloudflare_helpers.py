@@ -182,6 +182,21 @@ def normalize_index_url(url: str | None) -> str | None:
     return url.rstrip("/") + "/manako/index.json"
 
 
+def _select_lane_specific_index_url(index_url: str | None, lane: str = "public") -> str | None:
+    normalized = normalize_index_url(index_url)
+    if not normalized:
+        return None
+    if str(lane or "public").strip() != "private":
+        return normalized
+
+    stripped = normalized.strip()
+    if stripped.endswith("/indexprivate.json"):
+        return stripped
+    if stripped.endswith("/index.json"):
+        return stripped[: -len("/index.json")] + "/indexprivate.json"
+    return stripped
+
+
 def get_s3_client():
     settings = get_settings()
     cfg = central_r2_config(settings)
@@ -771,12 +786,19 @@ async def _list_keys_from_remote_index(index_url: str) -> list[str]:
 
 
 async def dataset_sv_multi(
-    tail: int, validator_indexes: dict[str, str], *, prefetch: int = 2, element_id: str | None = None,
+    tail: int,
+    validator_indexes: dict[str, str],
+    *,
+    prefetch: int = 2,
+    element_id: str | None = None,
+    lane: str = "public",
 ):
     if not validator_indexes:
         return
     validator_indexes = {
-        hk: normalize_index_url(iurl) for hk, iurl in validator_indexes.items() if iurl
+        hk: lane_url
+        for hk, iurl in validator_indexes.items()
+        if (lane_url := _select_lane_specific_index_url(iurl, lane=lane))
     }
 
     wanted_elem = _safe_element_id_for_path(element_id)
