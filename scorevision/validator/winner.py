@@ -44,7 +44,7 @@ async def get_local_fallback_winner_for_element(
     cnt: dict[int, int] = {}
     miner_meta_by_hk: dict[str, OpenSourceMinerMeta] = {}
 
-    async for line in dataset_sv(tail):
+    async for line in dataset_sv(tail, lane=lane):
         try:
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:

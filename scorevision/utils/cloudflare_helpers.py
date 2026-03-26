@@ -112,13 +112,17 @@ def _winners_index_key(ns: str | None = None) -> str:
     return f"{_winners_prefix(ns)}index.json"
 
 
-async def _index_list() -> list[str]:
+def _lane_index_key(lane: str = "public") -> str:
+    return "manako/indexprivate.json" if str(lane or "public").strip() == "private" else "manako/index.json"
+
+
+async def _index_list(*, index_key: str | None = None) -> list[str]:
     settings = get_settings()
-    index_key = "manako/index.json"
+    key = index_key or "manako/index.json"
 
     async with get_s3_client() as c:
         try:
-            r = await c.get_object(Bucket=settings.SCOREVISION_BUCKET, Key=index_key)
+            r = await c.get_object(Bucket=settings.SCOREVISION_BUCKET, Key=key)
             body = await r["Body"].read()
             return loads(body)
         except c.exceptions.NoSuchKey:
@@ -210,12 +214,13 @@ def _r2_enabled() -> bool:
     return is_configured(central_r2_config(get_settings()), require_bucket=True)
 
 
-async def _index_add_if_new(key: str) -> None:
+async def _index_add_if_new(key: str, *, index_key: str = "manako/index.json") -> None:
     settings = get_settings()
     await add_index_key_if_new(
         client_factory=get_s3_client,
         bucket=settings.SCOREVISION_BUCKET,
         key=key,
+        index_key=index_key,
     )
 
 
@@ -259,7 +264,12 @@ async def sink_sv(block: int, lines: list[dict]) -> tuple[str, list[dict]]:
     return hk, signed
 
 
-async def sink_sv_at(key: str, lines: list[dict]) -> tuple[str, list[dict]]:
+async def sink_sv_at(
+    key: str,
+    lines: list[dict],
+    *,
+    lane: str = "public",
+) -> tuple[str, list[dict]]:
     if not lines:
         return "", []
     payloads = [
@@ -283,7 +293,7 @@ async def sink_sv_at(key: str, lines: list[dict]) -> tuple[str, list[dict]]:
             Body=dumps(signed, separators=(",", ":")),
             ContentType="application/json",
         )
-        await _index_add_if_new(key)
+        await _index_add_if_new(key, index_key=_lane_index_key(lane))
     return hk, signed
 
 
@@ -537,7 +547,7 @@ async def emit_shard(
     try:
         logger.info(f"[emit:{rid}] writing evaluation shard to {eval_key}")
         hk, signed_lines = await asyncio.wait_for(
-            sink_sv_at(eval_key, [shard_line]), timeout=timeout_s
+            sink_sv_at(eval_key, [shard_line], lane=lane), timeout=timeout_s
         )
     except asyncio.TimeoutError:
         logger.error(f"[emit:{rid}] sink_sv_at timed out after {timeout_s}s")
@@ -562,9 +572,9 @@ async def emit_shard(
     logger.info("")
 
 
-async def dataset_sv(tail: int, *, max_concurrency: int = None):
+async def dataset_sv(tail: int, *, max_concurrency: int = None, lane: str = "public"):
     sem = asyncio.Semaphore(int(os.getenv("SCOREVISION_DATASET_PREFETCH", "8")))
-    index = await _index_list()
+    index = await _index_list(index_key=_lane_index_key(lane))
 
     pairs: list[tuple[int, str, str, str, int]] = []
     for k in index:

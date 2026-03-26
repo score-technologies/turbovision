@@ -1,5 +1,6 @@
 from scorevision.utils.cloudflare_helpers import (
     _extract_element_miner_commit_tuple_from_key_or_url,
+    _lane_index_key,
     _select_lane_specific_index_url,
     emit_shard,
 )
@@ -54,6 +55,14 @@ def test_select_lane_specific_index_url_private_uses_private_index():
         )
         == "https://pub.r2.dev/manako/indexprivate.json"
     )
+
+
+def test_lane_index_key_public():
+    assert _lane_index_key("public") == "manako/index.json"
+
+
+def test_lane_index_key_private():
+    assert _lane_index_key("private") == "manako/indexprivate.json"
 
 
 @pytest.mark.asyncio
