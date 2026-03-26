@@ -3,22 +3,9 @@ import asyncio
 from json import loads
 from pathlib import Path
 from base64 import b64decode
-from datetime import datetime, timezone
 from hashlib import sha256
 
 import click
-from nacl.signing import SigningKey
-
-from scorevision.utils.manifest import Manifest
-from scorevision.utils.settings import get_settings
-from scorevision.utils.manifest import yaml
-from scorevision.utils.r2 import (
-    r2_get_object,
-    r2_put_json,
-    r2_put_bytes,
-    r2_delete_object,
-)
-from scorevision.utils.bittensor_helpers import get_subtensor
 
 # ============================================================
 # TEMPLATES
@@ -32,6 +19,42 @@ TEMPLATES = {
         "elements": [],
     }
 }
+
+
+def get_settings():
+    from scorevision.utils.settings import get_settings as _get_settings
+
+    return _get_settings()
+
+
+def r2_get_object(*args, **kwargs):
+    from scorevision.utils.r2 import r2_get_object as _r2_get_object
+
+    return _r2_get_object(*args, **kwargs)
+
+
+def r2_put_json(*args, **kwargs):
+    from scorevision.utils.r2 import r2_put_json as _r2_put_json
+
+    return _r2_put_json(*args, **kwargs)
+
+
+def r2_put_bytes(*args, **kwargs):
+    from scorevision.utils.r2 import r2_put_bytes as _r2_put_bytes
+
+    return _r2_put_bytes(*args, **kwargs)
+
+
+def r2_delete_object(*args, **kwargs):
+    from scorevision.utils.r2 import r2_delete_object as _r2_delete_object
+
+    return _r2_delete_object(*args, **kwargs)
+
+
+async def get_subtensor():
+    from scorevision.utils.bittensor_helpers import get_subtensor as _get_subtensor
+
+    return await _get_subtensor()
 
 
 # ============================================================
@@ -66,6 +89,9 @@ def create_manifest_cmd(
     template: str, window_id: str, expiry_block: int, output: Path, tee_key: Path | None
 ):
     """Create a new manifest from a template."""
+    from nacl.signing import SigningKey
+    from scorevision.utils.manifest import yaml
+
     if template not in TEMPLATES:
         raise click.ClickException(f"Unknown template: {template}")
 
@@ -103,6 +129,8 @@ def create_manifest_cmd(
 )
 def validate_manifest_cmd(manifest_path: Path, public_key: str | None):
     """Validate manifest schema and optionally its Ed25519 signature."""
+    from scorevision.utils.manifest import Manifest
+
     try:
         # Load the manifest
         manifest = Manifest.load_yaml(manifest_path)
@@ -176,6 +204,9 @@ def publish_manifest_cdn_cmd(
     """
     Sign, upload (with retries), integrity-check, and update index.json.
     """
+    from nacl.signing import SigningKey
+
+    from scorevision.utils.manifest import Manifest
 
     settings = get_settings()
     bucket = settings.R2_BUCKET
