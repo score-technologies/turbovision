@@ -15,7 +15,7 @@ from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.manifest import Manifest
 from scorevision.utils.r2 import R2Config, add_index_key_if_new, central_r2_config, create_s3_client
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
-from scorevision.utils.request_signing import build_signed_headers
+from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.settings import get_settings
 from scorevision.validator.central.private_track.challenges import (
     Challenge,
@@ -231,12 +231,13 @@ async def _push_pending_spotcheck(spotcheck: PendingSpotcheck, keypair=None) -> 
 
     try:
         body = spotcheck.model_dump_json().encode()
-        headers = build_signed_headers(keypair, body) if keypair else {}
-        headers["Content-Type"] = "application/json"
+        headers = {"Content-Type": "application/json"}
+        params = build_validator_query_params(keypair) if keypair else None
 
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 f"{api_url}/api/spotchecks/pending",
+                params=params,
                 content=body,
                 headers=headers,
             )

@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from logging import getLogger
 import httpx
-from scorevision.utils.request_signing import build_signed_headers
+from scorevision.utils.signing import build_validator_query_params
 
 logger = getLogger(__name__)
 
@@ -13,33 +13,42 @@ class BlacklistAPI:
         self.keypair = keypair
 
     async def get_blacklist(self) -> set[str]:
+        params = build_validator_query_params(self.keypair)
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
                 f"{self.base_url}/api/blacklist",
-                headers=build_signed_headers(self.keypair),
+                params=params,
             )
             response.raise_for_status()
             data = response.json()
-            return {entry["hotkey"] for entry in data.get("blacklist", [])}
+            if isinstance(data, list):
+                return {
+                    entry.get("hotkey")
+                    for entry in data
+                    if isinstance(entry, dict) and entry.get("hotkey")
+                }
+            return set()
 
     async def add_to_blacklist(self, hotkey: str, reason: str) -> bool:
         body = json.dumps({"hotkey": hotkey, "reason": reason}).encode()
-        headers = build_signed_headers(self.keypair, body)
-        headers["Content-Type"] = "application/json"
+        params = build_validator_query_params(self.keypair)
+        headers = {"Content-Type": "application/json"}
 
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 f"{self.base_url}/api/blacklist",
+                params=params,
                 content=body,
                 headers=headers,
             )
             return response.status_code == 200
 
     async def remove_from_blacklist(self, hotkey: str) -> bool:
+        params = build_validator_query_params(self.keypair)
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.delete(
                 f"{self.base_url}/api/blacklist/{hotkey}",
-                headers=build_signed_headers(self.keypair),
+                params=params,
             )
             return response.status_code == 200
 

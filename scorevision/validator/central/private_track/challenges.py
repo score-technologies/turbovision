@@ -50,6 +50,29 @@ async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None 
     ]
 
 
+async def complete_task_assignment(
+    challenge_id: str,
+    keypair,
+    element_id: str | None = None,
+) -> None:
+    settings = get_settings()
+    api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
+    if not api_url:
+        raise RuntimeError("Neither PRIVATE_GT_API_URL nor SCOREVISION_API is configured")
+
+    params = build_validator_query_params(keypair)
+    if element_id is not None:
+        params["element_id"] = element_id
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{api_url}/api/tasks/complete",
+            params=params,
+            json={"challenge_id": int(challenge_id)},
+        )
+        response.raise_for_status()
+
+
 async def get_challenge_with_ground_truth(
     manifest_hash: str,
     element_id: str,
@@ -77,6 +100,11 @@ async def get_challenge_with_ground_truth(
             continue
 
         try:
+            await complete_task_assignment(
+                challenge_id=challenge_id,
+                keypair=keypair,
+                element_id=element_id,
+            )
             ground_truth = await fetch_ground_truth(
                 challenge_id=challenge_id,
                 keypair=keypair,
