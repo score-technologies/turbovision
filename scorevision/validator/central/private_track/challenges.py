@@ -44,10 +44,14 @@ async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None 
         response.raise_for_status()
         data = response.json()
 
-    return [
-        FramePrediction(frame=gt["frame"], action=gt["type"])
-        for gt in data.get("ground_truth", [])
-    ]
+    ground_truth: list[FramePrediction] = []
+    for gt in data.get("ground_truth", []):
+        action = gt.get("type") or gt.get("action")
+        if "frame" not in gt or action is None:
+            continue
+        ground_truth.append(FramePrediction(frame=gt["frame"], action=action))
+
+    return ground_truth
 
 
 async def complete_task_assignment(
