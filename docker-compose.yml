@@ -135,7 +135,7 @@ services:
       - ${HOME}/.chutes:/root/.chutes:ro
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
       - ./blacklist:/app/blacklist:ro
-    command: ["sv", "-v", "audit-validator", "spotcheck"]
+    command: ["sv", "-v", "audit-validator", "open-source", "spotcheck"]
 
   prometheus:
     image: prom/prometheus:latest
