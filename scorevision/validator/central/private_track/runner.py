@@ -165,6 +165,7 @@ _PUBLIC_SHARD_FIELDS = {
     "score", "challenge_id", "miner_hotkey", "miner_uid",
     "block", "timestamp", "image_repo", "image_tag",
     "image_digest", "scoring_version", "timed_out",
+    "benchmark_map_at_1s",
 }
 
 
@@ -536,6 +537,8 @@ async def _run_challenge_for_element(
                 response_predictions=response_predictions,
             )
             result["private_responses_key"] = private_responses_key
+            if benchmark_result is not None:
+                result["benchmark_map_at_1s"] = float(benchmark_result.map_at_1s)
             results.append(result)
 
             if benchmark_result is not None:
