@@ -14,6 +14,11 @@ from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
+HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
+    "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
+    "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
+}
+
 REGISTRY_BYPASS_UIDS = {6}
 REGISTRY_BYPASS_HOTKEYS = {"5FsREvyUXSZWYRqVyQLDdpYmZZPnkhZyW6HjooozKP1nQkwu"}
 
@@ -326,7 +331,7 @@ async def get_miners_from_registry(
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
 
-    blacklisted_hotkeys = load_blacklisted_hotkeys()
+    blacklisted_hotkeys = load_blacklisted_hotkeys() | HARDCODED_BLACKLIST_HOTKEYS
     if blacklisted_hotkeys:
         logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
 

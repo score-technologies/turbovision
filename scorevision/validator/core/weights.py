@@ -52,6 +52,11 @@ from scorevision.validator.winner import get_winner_for_element
 logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
 
+HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
+    "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
+    "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
+}
+
 
 @lru_cache(maxsize=1)
 def get_validator_hotkey_ss58() -> str:
@@ -240,7 +245,7 @@ async def weights_loop(
 
     while not shutdown_event.is_set():
         try:
-            blacklisted_hotkeys = load_blacklisted_hotkeys()
+            blacklisted_hotkeys = load_blacklisted_hotkeys() | HARDCODED_BLACKLIST_HOTKEYS
             if blacklisted_hotkeys:
                 logger.info("[weights] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
 
