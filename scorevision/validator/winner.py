@@ -34,8 +34,8 @@ def compute_adaptive_delta_rel(
     *,
     default_delta_rel: float,
     baseline_theta: float | None,
-    min_delta_rel: float = 0.03,
-    max_delta_rel: float = 0.10,
+    min_delta_rel: float = 0.04,
+    max_delta_rel: float = 0.175,
 ) -> float:
     if baseline_theta is None:
         return float(default_delta_rel)
