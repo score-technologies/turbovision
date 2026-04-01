@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict, deque
 from logging import getLogger
+import math
 
 from scorevision.utils.bittensor_helpers import (
     _first_commit_block_by_miner,
@@ -27,6 +28,25 @@ from scorevision.validator.scoring import (
 )
 
 logger = getLogger(__name__)
+
+
+def compute_adaptive_delta_rel(
+    *,
+    default_delta_rel: float,
+    baseline_theta: float | None,
+    min_delta_rel: float = 0.03,
+    max_delta_rel: float = 0.10,
+) -> float:
+    if baseline_theta is None:
+        return float(default_delta_rel)
+    try:
+        base_model_score = float(baseline_theta)
+    except Exception:
+        return float(default_delta_rel)
+    if not math.isfinite(base_model_score):
+        return float(default_delta_rel)
+    adaptive_delta_rel = min_delta_rel + (max_delta_rel - min_delta_rel) * base_model_score
+    return max(min_delta_rel, min(max_delta_rel, adaptive_delta_rel))
 
 
 async def get_local_fallback_winner_for_element(
@@ -140,6 +160,7 @@ async def get_winner_for_element(
     current_window_id: str,
     tail: int,
     m_min: int,
+    baseline_theta: float | None = None,
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
@@ -303,6 +324,17 @@ async def get_winner_for_element(
     winner_from_tiebreak_only_pool = False
     if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         try:
+            adaptive_delta_rel = compute_adaptive_delta_rel(
+                default_delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
+                baseline_theta=baseline_theta,
+            )
+            logger.info(
+                "[window-tiebreak] Element=%s | baseline_theta=%s -> delta_rel=%.6f (default=%.6f)",
+                element_id,
+                baseline_theta,
+                adaptive_delta_rel,
+                settings.SCOREVISION_WINDOW_DELTA_REL,
+            )
             zero_score_eps = 1e-12
             eligible_non_zero_uids = {
                 uid for uid, score in scores_by_miner.items() if abs(float(score or 0.0)) > zero_score_eps
@@ -358,7 +390,7 @@ async def get_winner_for_element(
                 challenge_scores_by_miner=challenge_scores_by_miner,
                 candidate_uids=candidate_uids,
                 delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
-                delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
+                delta_rel=adaptive_delta_rel,
                 first_commit_block_by_hk=first_commit_block_by_hk,
                 min_common_challenges=3,
             )
