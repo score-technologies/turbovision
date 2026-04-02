@@ -333,7 +333,8 @@ async def get_winner_for_element(
     )
 
     winner_from_tiebreak_only_pool = False
-    if settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
+    tiebreak_enabled_for_lane = settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE and lane != "private"
+    if tiebreak_enabled_for_lane:
         try:
             adaptive_delta_rel = compute_adaptive_delta_rel(
                 default_delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
@@ -417,6 +418,8 @@ async def get_winner_for_element(
             winner_from_tiebreak_only_pool = winner_uid in tiebreak_only_uids
         except Exception as e:
             logger.warning("[window-tiebreak] Element=%s disabled due to error: %s", element_id, e)
+    elif lane == "private" and settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
+        logger.info("[window-tiebreak] Element=%s disabled for private lane", element_id)
 
     logger.info(
         "Element=%s Window=%s | Winner uid=%d (after tiebreak) over last %d blocks",
