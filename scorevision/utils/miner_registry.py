@@ -13,6 +13,11 @@ from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
+HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
+    "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
+    "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
+}
+
 REGISTRY_BYPASS_UIDS = {6}
 REGISTRY_BYPASS_HOTKEYS = {"5FsREvyUXSZWYRqVyQLDdpYmZZPnkhZyW6HjooozKP1nQkwu"}
 

@@ -89,7 +89,6 @@ async def test_get_miners_from_registry_skips_when_onnx_only_enabled_and_repo_no
         return {"slug": "slug1", "revision": "rev1"}
 
     monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
-    monkeypatch.setattr(registry, "load_blacklisted_hotkeys", lambda: set())
     monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
     monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
     monkeypatch.setattr(registry, "_hf_repo_has_only_onnx_models", lambda _m, _r: False)
@@ -118,7 +117,6 @@ async def test_get_miners_from_registry_keeps_when_onnx_only_disabled(monkeypatc
         return {"slug": "slug1", "revision": "rev1"}
 
     monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
-    monkeypatch.setattr(registry, "load_blacklisted_hotkeys", lambda: set())
     monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
     monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
     monkeypatch.setattr(registry, "_hf_repo_has_only_onnx_models", lambda _m, _r: False)
