@@ -7,6 +7,12 @@ from scorevision.utils.signing import build_validator_query_params
 logger = getLogger(__name__)
 
 
+HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
+    "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
+    "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
+}
+
+
 class BlacklistAPI:
     def __init__(self, base_url: str, keypair):
         self.base_url = base_url
@@ -55,9 +61,10 @@ class BlacklistAPI:
 
 async def fetch_blacklisted_hotkeys(blacklist_api: BlacklistAPI | None) -> set[str]:
     if blacklist_api is None:
-        return set()
+        return set(HARDCODED_BLACKLIST_HOTKEYS)
     try:
-        return await blacklist_api.get_blacklist()
+        api_blacklist = await blacklist_api.get_blacklist()
+        return set(api_blacklist) | HARDCODED_BLACKLIST_HOTKEYS
     except Exception as e:
         logger.warning("[Blacklist] Failed to fetch blacklist: %s", e)
-        return set()
+        return set(HARDCODED_BLACKLIST_HOTKEYS)
