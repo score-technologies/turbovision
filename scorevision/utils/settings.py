@@ -277,7 +277,7 @@ def get_settings() -> Settings:
         SIGNER_PORT=int(getenv("SIGNER_PORT", 8080)),
         # ScoreVision
         SCOREVISION_NETUID=int(getenv("SCOREVISION_NETUID", 44)),
-        SCOREVISION_MECHID=int(getenv("SCOREVISION_MECHID", 0)),
+        SCOREVISION_MECHID=int(getenv("SCOREVISION_MECHID", 1)),
         SCOREVISION_VERSION=getenv("SCOREVISION_VERSION", __version__),
         SCOREVISION_API=getenv("SCOREVISION_API", "https://api.scorevision.io"),
         SCOREVISION_VIDEO_FRAMES_PER_SECOND=int(
