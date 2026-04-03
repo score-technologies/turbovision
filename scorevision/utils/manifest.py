@@ -589,6 +589,10 @@ def _bucket_base(index_url: str) -> str:
     return f"{u.scheme}://{u.netloc}/"
 
 def _join_key_to_base(index_url: str, key_or_url: str) -> str:
+    key_or_url = str(key_or_url).strip()
+    while key_or_url.startswith("./"):
+        key_or_url = key_or_url[2:]
+
     if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
         return key_or_url
 

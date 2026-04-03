@@ -9,6 +9,7 @@ from scorevision.utils.manifest import (
     Preproc,
     PillarName,
     _pick_manifest_url_for_block,
+    _join_key_to_base,
 )
 
 
@@ -98,6 +99,18 @@ def test_pick_manifest_url_for_block_uses_latest_eligible():
     assert picked == (180, "https://example.com/manifest/180-c.yaml")
 
 
+def test_join_key_to_base_normalizes_dot_slash_manifest_key():
+    index_url = "https://turbo.scoredata.me/manifest/index.json"
+    key = "./manifest/7885821-abc.yaml"
+    assert _join_key_to_base(index_url, key) == "https://turbo.scoredata.me/manifest/7885821-abc.yaml"
+
+
+def test_join_key_to_base_strips_spaces_around_manifest_key():
+    index_url = "https://turbo.scoredata.me/manifest/index.json"
+    key = " manifest/7885821-abc.yaml "
+    assert _join_key_to_base(index_url, key) == "https://turbo.scoredata.me/manifest/7885821-abc.yaml"
+
+
 def test_element_allows_missing_clips_and_pgt_recipe_hash():
     man = Manifest(
         window_id="2025-10-27",
@@ -156,4 +169,3 @@ def test_open_track_element_backward_compatible(dummy_detect_element):
     assert dummy_detect_element.track is None
     assert dummy_detect_element.clips != []
     assert dummy_detect_element.metrics is not None
-
