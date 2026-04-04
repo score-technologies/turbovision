@@ -10,6 +10,7 @@ logger = getLogger(__name__)
 HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
     "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
+    "5CfGbGvZz6YUUPT84ntoGHANy1ddk9xGJiaQZVEb9Qi57Foc",
 }
 
 
