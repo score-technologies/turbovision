@@ -41,7 +41,7 @@ Edit the files inside `scorevision/miner/open_source/chute_template/` to load an
 Deploy with the current CLI command:
 
 ```bash
-sv -v push --model-path <path_to_model_assets> --element-id <element_id>
+sv -v deploy-os-miner --model-path <path_to_model_assets> --element-id <element_id>
 ```
 
 Useful flags:
@@ -49,7 +49,7 @@ Useful flags:
 - `--no-deploy`: upload/update HF only.
 - `--no-commit`: skip chain commit and print payload only.
 
-If `--element-id` is omitted (and commit is enabled), `sv push` reads the active manifest and prompts you to choose an element.
+If `--element-id` is omitted (and commit is enabled), `sv deploy-os-miner` reads the active manifest and prompts you to choose an element.
 
 ## 6. Validate Deployment Health
 Use Chutes dashboard and instance logs:
