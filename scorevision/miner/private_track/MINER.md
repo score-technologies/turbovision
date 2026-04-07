@@ -15,6 +15,12 @@ Make sure your hotkey is registered on subnet **44**:
 btcli subnet register --wallet.name <coldkey_name> --wallet.hotkey <hotkey_name>
 ```
 
+Then publish your miner Axon endpoint on-chain (IP + port):
+
+```bash
+btcli axon set --netuid 44 --ip <public_ip> --port 8000 --wallet-name <coldkey_name> --wallet-hotkey <hotkey_name>
+```
+
 
 ## Quick Start
 
