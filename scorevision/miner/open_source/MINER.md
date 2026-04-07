@@ -32,10 +32,13 @@ Confirm `CHUTES_API_KEY` is a developer key.
 For chute structure and local/live testing flow, use `example_miner/README.md`.
 
 ## 4. Customize the Chute Template
-Edit the files inside `scorevision/miner/open_source/chute_template/` to load and serve your model:
-- `setup.py` – install dependencies and fetch artifacts.
-- `load.py` – initialize model weights and supporting assets.
-- `predict.py` – handle inference requests from the validator runner.
+The open-source deploy flow uses the template files inside `scorevision/miner/open_source/chute_template/`:
+- `turbovision_chute.py.j2` – main Chute template rendered by the CLI for build/deploy.
+- `schemas.py` – shared schema definitions used by the template.
+
+Your model implementation lives in your Hugging Face repo (see `example_miner/README.md`):
+- `miner.py` – required miner entrypoint loaded by the Chute template.
+- `chute_config.yml` – optional Chutes runtime/image configuration.
 
 ## 5. Push, Deploy, Commit
 Deploy with the current CLI command:
