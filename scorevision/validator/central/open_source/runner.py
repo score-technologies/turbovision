@@ -247,6 +247,23 @@ def _extract_element_id_from_chal_api(chal_api: dict) -> Optional[str]:
     return None
 
 
+def _extract_challenge_type_version(element: Element | None) -> str | None:
+    if element is None:
+        return None
+
+    explicit_version = str(getattr(element, "challenge_type_version", "") or "").strip()
+    if explicit_version:
+        return explicit_version
+
+    raw_id = str(getattr(element, "id", "") or "").strip()
+    if "@" not in raw_id:
+        return None
+
+    _, version = raw_id.rsplit("@", 1)
+    version = version.strip()
+    return version or None
+
+
 def _cleanup_video_cache(video_cache: dict[str, Any], frame_store: FrameStore | None) -> None:
     store_obj = video_cache.get("store") or frame_store
     if store_obj:
@@ -391,12 +408,15 @@ async def runner(
             return
 
         manifest_hash = manifest.hash
+        manifest_element = manifest.get_element(id=element_id)
+        challenge_type_version = _extract_challenge_type_version(manifest_element)
 
         try:
             challenge, payload, chal_api, frame_store = await get_challenge_from_scorevision_with_source(
                 video_cache=video_cache,
                 manifest_hash=manifest_hash,
                 element_id=element_id,
+                challenge_type_version=challenge_type_version,
             )
         except ScoreVisionChallengeError as ce:
             msg = str(ce)
@@ -447,7 +467,7 @@ async def runner(
 
         logger.info("[Runner] window_start_block=%s (window_id=%s tempo=%s)", window_start_block, window_id, tempo_blocks)
 
-        element = manifest.get_element(id=element_id)
+        element = manifest_element
         if element is None:
             raise ValueError(f"element id {element_id} not found in manifest")
 

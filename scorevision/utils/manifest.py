@@ -344,6 +344,7 @@ class Element(BaseModel):
     salt: Salt = Field(default_factory=Salt)
     keypoint_template: ChallengeType | None = None
     objects: list[str] | None = None
+    challenge_type_version: str | None = None
 
     def apply_baseline_gate(self, score: float) -> float:
         """Clamp score to positive margin above baseline."""

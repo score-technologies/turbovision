@@ -636,11 +636,13 @@ async def get_challenge_from_scorevision_with_source(
     video_cache: dict[str, Any] | None = None,
     manifest_hash: str | None = None,
     element_id: str | None = None,
+    challenge_type_version: str | None = None,
 ) -> tuple[SVChallenge, TVPredictInput, dict, FrameStore]:
     try:
         chal_api = await get_next_challenge_v3(
             manifest_hash=manifest_hash,
             element_id=element_id,
+            challenge_type_version=challenge_type_version,
         )
     except ClientResponseError as e:
         raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")
@@ -754,6 +756,7 @@ async def get_ground_truth_from_scorevision(
 async def get_next_challenge_v3(
     manifest_hash: str | None = None,
     element_id: str | None = None,
+    challenge_type_version: str | None = None,
 ) -> dict:
     """
     Challenge client aligned to the current ScoreVision API (/api/tasks/next).
@@ -796,6 +799,8 @@ async def get_next_challenge_v3(
     )
     params = build_validator_query_params(keypair)
     params["element_id"] = element_id
+    if challenge_type_version:
+        params["challenge_type_version"] = str(challenge_type_version)
 
     session = await get_async_client()
     try:
