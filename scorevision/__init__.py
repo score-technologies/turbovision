@@ -6,6 +6,7 @@ import click
 from scorevision.cli.audit_validator import audit_validator
 from scorevision.cli.central_validator import central_validator
 from scorevision.cli.elements import elements_cli
+from scorevision.cli.index_maintenance import index_cli
 from scorevision.cli.manifest import manifest_cli
 from scorevision.utils.logging import setup_logging
 from scorevision.utils.settings import get_settings
@@ -122,5 +123,6 @@ def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
 
 app.add_command(audit_validator)
 app.add_command(central_validator)
+app.add_command(index_cli)
 app.add_command(manifest_cli)
 app.add_command(elements_cli)
