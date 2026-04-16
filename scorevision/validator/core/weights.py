@@ -318,12 +318,19 @@ async def weights_loop(
                     weights_by_uid = {fallback_uid: 1.0}
                 else:
                     private_min_samples = settings.PRIVATE_AUDIT_MIN_SAMPLES
+                    public_min_samples = max(1, int(settings.SCOREVISION_PUBLIC_MIN_CHALLENGES or m_min))
+                    public_eval_window_days = settings.SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS
+                    public_tail_blocks = days_to_blocks(public_eval_window_days) or effective_tail
                     elements = [(eid, max(0.0, float(w)), eval_window_days, track) for (eid, w, eval_window_days, track) in elements]
                     max_tail_used = 0
 
                     for element_id, elem_weight, eval_window_days, track in elements:
-                        tail_from_eval = days_to_blocks(eval_window_days)
-                        tail_for_element = tail_from_eval if tail_from_eval is not None else effective_tail
+                        is_private = track == "private"
+                        if is_private:
+                            tail_from_eval = days_to_blocks(eval_window_days)
+                            tail_for_element = tail_from_eval if tail_from_eval is not None else effective_tail
+                        else:
+                            tail_for_element = public_tail_blocks
                         max_tail_used = max(max_tail_used, tail_for_element)
                         baseline_theta = None
                         try:
@@ -343,8 +350,8 @@ async def weights_loop(
                         winner_uid = None
                         winner_meta = None
 
-                        lane = "private" if track == "private" else "public"
-                        min_samples = private_min_samples if track == "private" else m_min
+                        lane = "private" if is_private else "public"
+                        min_samples = private_min_samples if is_private else public_min_samples
                         winner_uid, _, winner_meta = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
