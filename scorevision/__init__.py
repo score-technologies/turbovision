@@ -4,6 +4,7 @@ from logging import getLogger
 from pathlib import Path
 import click
 from scorevision.cli.audit_validator import audit_validator
+from scorevision.cli.benchmark import benchmark_cli
 from scorevision.cli.central_validator import central_validator
 from scorevision.cli.elements import elements_cli
 from scorevision.cli.index_maintenance import index_cli
@@ -122,6 +123,7 @@ def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
 
 
 app.add_command(audit_validator)
+app.add_command(benchmark_cli)
 app.add_command(central_validator)
 app.add_command(index_cli)
 app.add_command(manifest_cli)
