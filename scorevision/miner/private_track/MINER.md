@@ -297,10 +297,18 @@ The scoring mechanism is a custom implementation that is designed to be robust a
 | recovery | 1.5 | 1.5s |
 | tackle | 2.5 | 1.5s |
 | interception | 2.8 | 2.0s |
+| ball_out_of_play | 2.9 | 2.0s |
+| clearance | 3.1 | 2.0s |
+| take_on | 3.2 | 2.0s |
+| substitution | 4.2 | 2.0s |
+| block | 4.2 | 2.0s |
+| aerial_duel | 4.3 | 2.0s |
 | shot | 4.7 | 2.0s |
+| save | 7.3 | 2.0s |
+| foul | 7.7 | 2.5s |
 | goal | 10.9 | 3.0s |
 
-See `src/actions.py` for the full list.
+Source of truth: `scorevision/utils/actions.py`.
 
 ## Security
 
