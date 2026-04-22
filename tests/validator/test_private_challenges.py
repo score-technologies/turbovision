@@ -2,7 +2,6 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from types import SimpleNamespace
 from scorevision.validator.central.private_track.challenges import (
-    Challenge,
     get_challenge_with_ground_truth,
 )
 from scorevision.utils.schemas import FramePrediction
@@ -62,3 +61,33 @@ async def test_get_challenge_retries_on_ground_truth_fetch_error():
         assert challenge is not None
         assert challenge.challenge_id == "c123"
         assert fetch_gt_mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_challenge_accepts_payload_frames_without_video_url():
+    fake_chal = {
+        "task_id": "c123",
+        "payload": {
+            "frames": [
+                {"frame_id": 0, "url": "https://example.com/f0.jpg"},
+                {"frame_id": 1, "url": "https://example.com/f1.jpg"},
+            ]
+        },
+    }
+    fake_gt = [FramePrediction(frame=i * 25, action="pass") for i in range(5)]
+
+    with _patch_settings(), \
+         patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=fake_gt):
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash="abc123",
+            element_id="elem1",
+            keypair=None,
+            max_retries=1,
+        )
+
+    assert challenge is not None
+    assert challenge.challenge_id == "c123"
+    assert challenge.video_url is None
+    assert challenge.payload_frames is not None
+    assert len(challenge.payload_frames) == 2

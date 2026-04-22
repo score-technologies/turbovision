@@ -5,7 +5,9 @@ from scorevision.validator.central.private_track.scoring import (
     calculate_time_decay,
     find_best_match,
     frame_to_seconds,
+    register_pillar_scorer,
     score_predictions,
+    score_predictions_for_pillar,
     score_predictions_with_breakdown,
 )
 from scorevision.utils.schemas import FramePrediction
@@ -110,3 +112,40 @@ def test_score_predictions_with_unsupported_pillar_returns_zero_weighted_score()
         )
         assert score == 0.0
         assert breakdown["role"] == 0.0
+
+
+def test_score_predictions_for_pillar_soccer_action_matches_legacy():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [FramePrediction(frame=25, action="pass")]
+        legacy = score_predictions(preds, gt)
+        pillar_score = score_predictions_for_pillar(
+            pillar="soccer_action",
+            predictions=preds,
+            ground_truth=gt,
+        )
+        assert pillar_score == legacy
+
+
+def test_register_pillar_scorer_dispatches_custom_pillar():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [FramePrediction(frame=25, action="pass")]
+
+        def rugby_scorer(
+            predictions: list[FramePrediction],
+            ground_truth: list[FramePrediction],
+        ) -> float:
+            assert predictions == preds
+            assert ground_truth == gt
+            return 0.42
+
+        register_pillar_scorer("rugby_action", rugby_scorer)
+
+        score, breakdown = score_predictions_with_breakdown(
+            preds,
+            gt,
+            pillar_weights={"rugby_action": 1.0},
+        )
+        assert score == 0.42
+        assert breakdown["rugby_action"] == 0.42

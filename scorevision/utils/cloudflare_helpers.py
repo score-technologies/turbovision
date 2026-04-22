@@ -525,8 +525,6 @@ async def emit_shard(
 
     salt_id_val = int(salt_id or 0)
 
-    scored_frame_numbers = getattr(evaluation, "scored_frame_numbers", None)
-
     shard_payload = {
         "window_id": shard_window_id,
         "element_id": element_id,
@@ -539,8 +537,11 @@ async def emit_shard(
         "latency_pass": bool(latency_pass),
         "p95_latency_ms": float(p95_latency_ms),
         "telemetry": telemetry,
-        "scored_frame_numbers": scored_frame_numbers,
     }
+    if lane != "private":
+        shard_payload["scored_frame_numbers"] = getattr(
+            evaluation, "scored_frame_numbers", None
+        )
 
     shard_line = {"version": get_settings().SCOREVISION_VERSION, "payload": shard_payload}
 

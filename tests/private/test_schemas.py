@@ -1,6 +1,11 @@
 import pytest
 from pydantic import ValidationError
-from scorevision.utils.schemas import ChallengeRequest, ChallengeResponse, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeFrame,
+    ChallengeRequest,
+    ChallengeResponse,
+    FramePrediction,
+)
 
 
 def test_frame_prediction_valid():
@@ -17,6 +22,21 @@ def test_frame_prediction_negative_frame_rejected():
 def test_challenge_request_valid():
     req = ChallengeRequest(challenge_id="abc", video_url="https://example.com/v.mp4")
     assert req.challenge_id == "abc"
+
+
+def test_challenge_request_valid_with_frames_only():
+    req = ChallengeRequest(
+        challenge_id="abc",
+        frames=[ChallengeFrame(frame_id=0, url="https://example.com/f0.jpg")],
+    )
+    assert req.challenge_id == "abc"
+    assert req.video_url is None
+    assert req.frames is not None
+
+
+def test_challenge_request_rejects_empty_payload():
+    with pytest.raises(ValidationError):
+        ChallengeRequest(challenge_id="abc")
 
 
 def test_challenge_response_valid():

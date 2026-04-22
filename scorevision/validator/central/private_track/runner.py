@@ -7,7 +7,7 @@ from json import dumps
 from pathlib import Path
 from typing import Any, Dict, Optional
 import httpx
-from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
+from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
 from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair, reset_subtensor
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
 from scorevision.utils.cloudflare_helpers import emit_shard
@@ -125,6 +125,7 @@ async def _upload_private_response_blob(
         "element_id": element_id,
         "challenge_id": challenge.challenge_id,
         "video_url": challenge.video_url,
+        "frames": [frame.model_dump(mode="json") for frame in (challenge.payload_frames or [])] or None,
         "miner_hotkey": miner.hotkey,
         "miner_uid": miner.uid,
         "predictions": response_predictions,
@@ -330,7 +331,7 @@ async def _challenge_miner(
             processing_time=attempt.elapsed_s,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
-            video_url=challenge.video_url,
+            video_url=challenge.video_url or "",
             response_time_s=attempt.elapsed_s,
             timed_out=attempt.timed_out,
             image_repo=miner.image_repo,
@@ -352,7 +353,7 @@ async def _challenge_miner(
             processing_time=0.0,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
-            video_url=challenge.video_url,
+            video_url=challenge.video_url or "",
             timed_out=True,
             image_repo=miner.image_repo,
             image_tag=miner.image_tag,
@@ -372,9 +373,17 @@ async def _emit_private_score_to_public_db(
     private_responses_key: str | None,
     trigger_block: int,
 ) -> None:
+    payload_frames = None
+    if challenge.payload_frames:
+        payload_frames = [TVFrame(**frame.model_dump(mode="json")) for frame in challenge.payload_frames]
+
     challenge_obj = SVChallenge(
         env="private-track",
-        payload=TVPredictInput(url=challenge.video_url, meta={"track": "private"}),
+        payload=TVPredictInput(
+            url=challenge.video_url,
+            frames=payload_frames,
+            meta={"track": "private"},
+        ),
         meta={
             "source": "private_track",
             "task_id": challenge.challenge_id,
@@ -416,7 +425,6 @@ async def _emit_private_score_to_public_db(
         latency_p95_ms=latency_ms,
         latency_pass=not timed_out,
         rtf=None,
-        scored_frame_numbers=[gt.frame for gt in challenge.ground_truth],
     )
     commitment_meta = {
         "track": "private",

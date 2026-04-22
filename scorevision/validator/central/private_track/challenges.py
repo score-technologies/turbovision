@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from logging import getLogger
 import httpx
-from scorevision.utils.challenges import get_next_challenge_v3
+from scorevision.utils.challenges import get_next_challenge_v3, _coerce_payload_frames
 from scorevision.utils.signing import build_validator_query_params
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import ChallengeFrame, FramePrediction
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -12,8 +12,9 @@ logger = getLogger(__name__)
 @dataclass
 class Challenge:
     challenge_id: str
-    video_url: str
     ground_truth: list[FramePrediction]
+    video_url: str | None = None
+    payload_frames: list[ChallengeFrame] | None = None
 
 
 def has_sufficient_actions(ground_truth: list) -> bool:
@@ -98,9 +99,11 @@ async def get_challenge_with_ground_truth(
             or payload.get("video_url")
             or payload.get("clip_url")
         )
+        payload_frames_raw = _coerce_payload_frames(payload)
+        payload_frames = [ChallengeFrame(**frame) for frame in payload_frames_raw] or None
 
-        if not challenge_id or not video_url:
-            logger.warning("Challenge missing task_id or video_url, retrying")
+        if not challenge_id or (not video_url and not payload_frames):
+            logger.warning("Challenge missing task_id or challenge asset (video_url/frames), retrying")
             continue
 
         try:
@@ -129,6 +132,7 @@ async def get_challenge_with_ground_truth(
         return Challenge(
             challenge_id=str(challenge_id),
             video_url=video_url,
+            payload_frames=payload_frames,
             ground_truth=ground_truth,
         )
 

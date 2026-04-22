@@ -19,7 +19,12 @@ def _build_metagraph(hotkeys: list[str]):
     return SimpleNamespace(hotkeys=hotkeys, axons=axons)
 
 
-def _private_commit(block: int, *, element_id: str, image_tag: str = "v1") -> tuple[int, str]:
+def _private_commit(
+    block: int,
+    *,
+    element_id: str,
+    image_tag: str = "v1",
+) -> tuple[int, str]:
     payload = {
         "role": "miner",
         "track": "private",
