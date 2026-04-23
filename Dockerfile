@@ -49,6 +49,12 @@ WORKDIR /app
 # Install prebuilt wheels (fast, no compilation)
 COPY --from=builder /wheels /wheels
 RUN pip install --no-index --find-links=/wheels scorevision && \
+    pip uninstall -y cyscale || true && \
+    pip install --no-cache-dir --force-reinstall \
+      "async-substrate-interface==1.5.6" \
+      "scalecodec==1.2.11" \
+      "bt-decode==0.6.0" && \
+    pip install --no-cache-dir --force-reinstall --no-deps "bittensor==9.12.0" && \
     rm -rf /wheels
 
 # Copy application code (separate layer for better caching)
