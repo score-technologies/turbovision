@@ -398,6 +398,7 @@ async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
 async def _first_commit_block_by_miner(
     netuid: int,
     *,
+    element_id: str | None = None,
     retries: int = 2,
 ) -> dict[str, int]:
     """"""
@@ -410,6 +411,7 @@ async def _first_commit_block_by_miner(
             meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
             commits = await st.get_all_revealed_commitments(netuid)
 
+            wanted_element_id = str(element_id).strip() if element_id is not None else None
             last_block_by_hk: dict[str, int] = {}
             for hk in meta.hotkeys:
                 arr = commits.get(hk)
@@ -431,6 +433,12 @@ async def _first_commit_block_by_miner(
                     if isinstance(obj, dict):
                         role = obj.get("role")
                         if role and role != "miner":
+                            continue
+                        committed_eid = obj.get("element_id")
+                        committed_eid = (
+                            str(committed_eid).strip() if committed_eid is not None else None
+                        )
+                        if wanted_element_id is not None and committed_eid != wanted_element_id:
                             continue
 
                     try:

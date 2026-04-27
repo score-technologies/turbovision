@@ -396,7 +396,10 @@ async def get_winner_for_element(
                     len(tiebreak_only_uids),
                 )
 
-            first_commit_block_by_hk = await _first_commit_block_by_miner(netuid)
+            first_commit_block_by_hk = await _first_commit_block_by_miner(
+                netuid,
+                element_id=element_id,
+            )
             final_uid = pick_winner_with_tiebreak(
                 winner_uid,
                 uid_to_hk=uid_to_hk,
