@@ -124,6 +124,21 @@ def test_are_similar_by_challenges_insufficient_common():
     assert are_similar_by_challenges(scores1, scores2, delta_abs=0.01, delta_rel=0.01, min_common_challenges=5) is False
 
 
+def test_are_similar_by_challenges_single_failed_challenge_is_still_similar():
+    scores1 = {f"c{i}": 0.04 for i in range(10)}
+    scores2 = {f"c{i}": 0.04 for i in range(10)}
+    scores2["c0"] = 0.08
+    assert are_similar_by_challenges(scores1, scores2, delta_abs=0.003, delta_rel=0.03) is True
+
+
+def test_are_similar_by_challenges_two_failed_challenges_is_not_similar():
+    scores1 = {f"c{i}": 0.04 for i in range(10)}
+    scores2 = {f"c{i}": 0.04 for i in range(10)}
+    scores2["c0"] = 0.11
+    scores2["c1"] = 0.11
+    assert are_similar_by_challenges(scores1, scores2, delta_abs=0.003, delta_rel=0.03) is False
+
+
 def test_weights_result_dataclass():
     result = WeightsResult(
         element_id="soccer_detect",

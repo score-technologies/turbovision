@@ -47,6 +47,8 @@ def are_similar_by_challenges(
     delta_abs: float,
     delta_rel: float,
     min_common_challenges: int = 5,
+    min_threshold_abs: float = 0.05,
+    min_failed_challenges_to_reject: int = 2,
 ) -> bool:
     common = []
     all_ids = set(challenge_scores1.keys()) | set(challenge_scores2.keys())
@@ -57,11 +59,14 @@ def are_similar_by_challenges(
             common.append((cid, s1, s2))
     if len(common) < min_common_challenges:
         return False
+    failed_count = 0
     for _cid, s1, s2 in common:
         max_score = max(abs(s1), abs(s2))
-        thr = max(delta_abs, delta_rel * max_score)
+        thr = max(min_threshold_abs, delta_abs, delta_rel * max_score)
         if abs(s1 - s2) > thr:
-            return False
+            failed_count += 1
+            if failed_count >= min_failed_challenges_to_reject:
+                return False
     return True
 
 
@@ -72,6 +77,8 @@ def _are_similar_by_challenges_debug(
     delta_abs: float,
     delta_rel: float,
     min_common_challenges: int = 5,
+    min_threshold_abs: float = 0.05,
+    min_failed_challenges_to_reject: int = 2,
 ) -> tuple[bool, dict[str, object]]:
     common_challenges = set()
     all_challenges = set(challenge_scores1.keys()) | set(challenge_scores2.keys())
@@ -90,6 +97,8 @@ def _are_similar_by_challenges_debug(
         "max_abs_diff_challenge_id": None,
         "max_abs_diff_threshold": 0.0,
         "failed_examples": [],
+        "min_threshold_abs": min_threshold_abs,
+        "min_failed_challenges_to_reject": min_failed_challenges_to_reject,
     }
 
     if len(common_challenges) < min_common_challenges:
@@ -106,7 +115,7 @@ def _are_similar_by_challenges_debug(
         score1 = float(challenge_scores1.get(challenge_id, 0.0) or 0.0)
         score2 = float(challenge_scores2.get(challenge_id, 0.0) or 0.0)
         max_score = max(abs(score1), abs(score2))
-        threshold = max(delta_abs, delta_rel * max_score)
+        threshold = max(min_threshold_abs, delta_abs, delta_rel * max_score)
         abs_diff = abs(score1 - score2)
 
         if abs_diff > max_abs_diff:
@@ -133,7 +142,7 @@ def _are_similar_by_challenges_debug(
     debug_stats["max_abs_diff_threshold"] = round(max_abs_diff_threshold, 6)
     debug_stats["failed_examples"] = failed_examples
 
-    if failed_count > 0:
+    if failed_count >= min_failed_challenges_to_reject:
         debug_stats["reason"] = "score_delta_exceeded"
         return False, debug_stats
 
