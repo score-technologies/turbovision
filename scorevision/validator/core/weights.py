@@ -63,6 +63,25 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
 }
 
 
+def _top_rows(
+    rows: list[dict[str, float | int | str]],
+    *,
+    min_samples: int,
+    max_samples: int | None = None,
+    top_k: int = 3,
+) -> list[dict[str, float | int | str]]:
+    selected: list[dict[str, float | int | str]] = []
+    for row in rows:
+        n = int(row.get("n_challenges", 0))
+        if n < min_samples:
+            continue
+        if max_samples is not None and n > max_samples:
+            continue
+        selected.append(row)
+    selected.sort(key=lambda r: (float(r["avg_score"]), int(r["n_challenges"])), reverse=True)
+    return selected[: max(0, int(top_k))]
+
+
 @lru_cache(maxsize=1)
 def get_validator_hotkey_ss58() -> str:
     settings = get_settings()
@@ -354,7 +373,7 @@ async def weights_loop(
 
                         lane = "private" if is_private else "public"
                         min_samples = private_min_samples if is_private else public_min_samples
-                        winner_uid, _, winner_meta = await get_winner_for_element(
+                        winner_uid, _, winner_meta, sample_rows_all = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
@@ -379,10 +398,23 @@ async def weights_loop(
                             elem_weight,
                         )
                         if winner_meta and winner_meta.get("hotkey"):
+                            top_3_official = _top_rows(
+                                sample_rows_all,
+                                min_samples=min_samples,
+                                top_k=3,
+                            )
+                            top_3_watchlist = _top_rows(
+                                sample_rows_all,
+                                min_samples=20,
+                                max_samples=29,
+                                top_k=3,
+                            )
                             winners_by_element[element_id] = {
                                 "winner_hotkey": winner_meta.get("hotkey"),
                                 "chute_id": winner_meta.get("chute_id"),
                                 "slug": winner_meta.get("slug"),
+                                "top_3_official": top_3_official,
+                                "top_3_watchlist": top_3_watchlist,
                             }
 
                 if blacklisted_hotkeys:

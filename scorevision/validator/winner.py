@@ -169,7 +169,12 @@ async def get_winner_for_element(
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
     lane: str = "public",
-) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
+) -> tuple[
+    int | None,
+    dict[int, float],
+    dict[str, str | None] | None,
+    list[dict[str, float | int | str]],
+]:
     settings = get_settings()
     subtensor = await get_subtensor()
     netuid = settings.SCOREVISION_NETUID
@@ -188,7 +193,7 @@ async def get_winner_for_element(
             "[winner] No central validator registry found on-chain for element_id=%s",
             element_id,
         )
-        return await get_local_fallback_winner_for_element(
+        winner_uid, scores_by_uid, winner_meta = await get_local_fallback_winner_for_element(
             element_id=element_id,
             current_window_id=current_window_id,
             tail=tail,
@@ -196,6 +201,7 @@ async def get_winner_for_element(
             hk_to_uid=hk_to_uid,
             lane=lane,
         )
+        return winner_uid, scores_by_uid, winner_meta, []
 
     sums_by_miner: dict[int, float] = {}
     cnt_by_miner: dict[int, int] = {}
@@ -266,6 +272,29 @@ async def get_winner_for_element(
             fallback_uid,
             {fallback_uid: 0.0},
             build_winner_meta(fallback_uid, uid_to_hk, miner_meta_by_hk),
+            [],
+        )
+
+    validator_uid = None
+    if validator_hotkey_ss58:
+        validator_uid = hk_to_uid.get(validator_hotkey_ss58)
+
+    sample_rows_all: list[dict[str, float | int | str]] = []
+    for uid, n in cnt_by_miner.items():
+        if uid not in sums_by_miner:
+            continue
+        if validator_uid is not None and uid == validator_uid:
+            continue
+        hk = uid_to_hk.get(uid)
+        if not hk:
+            continue
+        sample_rows_all.append(
+            {
+                "hotkey": hk,
+                "uid": int(uid),
+                "avg_score": float(sums_by_miner[uid] / n),
+                "n_challenges": int(n),
+            }
         )
 
     elig = [uid for uid, n in cnt_by_miner.items() if n >= m_min and uid in sums_by_miner]
@@ -282,15 +311,12 @@ async def get_winner_for_element(
             fallback_uid,
             {fallback_uid: 0.0},
             build_winner_meta(fallback_uid, uid_to_hk, miner_meta_by_hk),
+            sample_rows_all,
         )
 
     scores_by_miner: dict[int, float] = {
         uid: (sums_by_miner[uid] / cnt_by_miner[uid]) for uid in elig
     }
-
-    validator_uid = None
-    if validator_hotkey_ss58:
-        validator_uid = hk_to_uid.get(validator_hotkey_ss58)
 
     if validator_uid is not None and validator_uid in scores_by_miner:
         logger.info(
@@ -311,6 +337,7 @@ async def get_winner_for_element(
             fallback_uid,
             {fallback_uid: 0.0},
             build_winner_meta(fallback_uid, uid_to_hk, miner_meta_by_hk),
+            sample_rows_all,
         )
 
     VALIDATOR_MINERS_CONSIDERED.set(len(scores_by_miner))
@@ -459,4 +486,4 @@ async def get_winner_for_element(
     CURRENT_WINNER.set(winner_uid)
     VALIDATOR_WINNER_SCORE.set(final_score)
 
-    return winner_uid, scores_by_miner, build_winner_meta(winner_uid, uid_to_hk, miner_meta_by_hk)
+    return winner_uid, scores_by_miner, build_winner_meta(winner_uid, uid_to_hk, miner_meta_by_hk), sample_rows_all
