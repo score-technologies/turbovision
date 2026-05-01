@@ -84,6 +84,12 @@ def run_signer_process():
     asyncio.run(run_signer())
 
 
+def run_public_compliance_process():
+    from scorevision.validator.audit.open_source.compliance import compliance_loop
+    setup_logging()
+    asyncio.run(compliance_loop())
+
+
 @click.group("audit-validator")
 def audit_validator():
     pass
@@ -261,6 +267,26 @@ def spotcheck_cmd(
         ))
 
 
+@open_source.command("compliance")
+@click.option("--once", is_flag=True, help="Run one compliance iteration and exit")
+def compliance_cmd(once: bool):
+    from scorevision.validator.audit.open_source.compliance import (
+        compliance_loop,
+        run_public_compliance_once,
+    )
+    setup_logging()
+    if once:
+        out = asyncio.run(run_public_compliance_once())
+        logger.info(
+            "Compliance run done: winners_block=%s targets=%s",
+            out.get("winners_block"),
+            out.get("targets"),
+        )
+        return
+    logger.info("Starting public compliance loop (block-based interval)")
+    asyncio.run(compliance_loop())
+
+
 @open_source.command("signer")
 def signer_cmd():
     from scorevision.validator.core import run_signer
@@ -433,5 +459,4 @@ def start_all_cmd(
             proc.join(timeout=5)
 
     logger.info("Audit validator shutdown complete")
-
 

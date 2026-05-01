@@ -137,6 +137,30 @@ services:
       - ./blacklist:/app/blacklist:ro
     command: ["sv", "-v", "audit-validator", "open-source", "spotcheck"]
 
+  latency-conformity:
+    image: docker.io/mikhaelscore/turbovision-latency-conformity:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.latency_conformity
+    container_name: scorevision-latency-conformity
+    profiles: ["latency_conformity"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+      CHECKER_SECURITY_FILE: ${CHECKER_SECURITY_FILE:-}
+      CHECKER_SECURITY_MODULE: ${CHECKER_SECURITY_MODULE:-}
+    mem_reservation: "6g"
+    mem_limit: "8g"
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    volumes:
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+    command: ["sv", "-v", "audit-validator", "open-source", "compliance"]
+
   prometheus:
     image: prom/prometheus:latest
     container_name: scorevision-prometheus

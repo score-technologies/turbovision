@@ -1,0 +1,485 @@
+from __future__ import annotations
+
+import asyncio
+import importlib
+import importlib.util
+import random
+from json import dumps
+from logging import getLogger
+from time import time
+from typing import Any
+import os
+
+from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.miner_registry import get_miners_from_registry
+from scorevision.utils.r2 import (
+    add_index_key_if_new,
+    create_s3_client,
+    ensure_index_exists,
+    fetch_index_keys,
+    fetch_json_from_url,
+    fetch_responses_data,
+    fetch_shard_lines,
+    is_configured,
+    R2Config,
+)
+from scorevision.utils.r2_public import extract_base_url
+from scorevision.utils.settings import get_settings
+
+logger = getLogger(__name__)
+
+
+def _load_security_runner():
+    module_name = (os.getenv("CHECKER_SECURITY_MODULE") or "").strip()
+    file_path = (os.getenv("CHECKER_SECURITY_FILE") or "").strip()
+    if module_name:
+        mod = importlib.import_module(module_name)
+        fn = getattr(mod, "run_local_inference_from_hf", None)
+        if callable(fn):
+            return fn
+        raise RuntimeError(f"module '{module_name}' has no run_local_inference_from_hf")
+    if file_path:
+        spec = importlib.util.spec_from_file_location("checker_security_local", file_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"unable to load security file: {file_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fn = getattr(mod, "run_local_inference_from_hf", None)
+        if callable(fn):
+            return fn
+        raise RuntimeError(f"security file '{file_path}' missing run_local_inference_from_hf")
+    mod = importlib.import_module("scorevision.validator.audit.open_source.security")
+    fn = getattr(mod, "run_local_inference_from_hf", None)
+    if callable(fn):
+        return fn
+    raise RuntimeError("default security runner unavailable")
+
+
+def checker_r2_config() -> R2Config:
+    s = get_settings()
+    return R2Config(
+        bucket=(s.CHECKER_R2_BUCKET or "").strip(),
+        account_id=s.CHECKER_R2_ACCOUNT_ID.get_secret_value(),
+        access_key_id=s.CHECKER_R2_WRITE_ACCESS_KEY_ID.get_secret_value(),
+        secret_access_key=s.CHECKER_R2_WRITE_SECRET_ACCESS_KEY.get_secret_value(),
+        concurrency=s.CHECKER_R2_CONCURRENCY,
+    )
+
+
+def _checker_prefix() -> str:
+    return f"{get_settings().CHECKER_R2_RESULTS_PREFIX.strip().strip('/')}/"
+
+
+def _checker_runs_index_key() -> str:
+    return f"{_checker_prefix()}runs/index.json"
+
+
+def _checker_runs_key(block: int) -> str:
+    return f"{_checker_prefix()}runs/{max(0, int(block)):09d}.json"
+
+
+def _checker_fails_key() -> str:
+    custom = (get_settings().CHECKER_R2_FAILS_KEY or "").strip()
+    if custom:
+        return custom
+    return f"{_checker_prefix()}failing_tuples.json"
+
+
+def _get_checker_client():
+    cfg = checker_r2_config()
+    return create_s3_client(cfg, error_message="Checker R2 credentials not set")
+
+
+async def _put_json(key: str, payload: dict | list) -> None:
+    cfg = checker_r2_config()
+    async with _get_checker_client() as c:
+        await c.put_object(
+            Bucket=cfg.bucket,
+            Key=key,
+            Body=dumps(payload, separators=(",", ":")),
+            ContentType="application/json",
+        )
+
+
+async def _get_json(key: str) -> dict | list | None:
+    cfg = checker_r2_config()
+    async with _get_checker_client() as c:
+        try:
+            obj = await c.get_object(Bucket=cfg.bucket, Key=key)
+            body = await obj["Body"].read()
+            return __import__("json").loads(body.decode())
+        except Exception:
+            return None
+
+
+def _iou(a: dict[str, Any], b: dict[str, Any]) -> float:
+    ax1, ay1, ax2, ay2 = float(a["x1"]), float(a["y1"]), float(a["x2"]), float(a["y2"])
+    bx1, by1, bx2, by2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    iw = max(0.0, inter_x2 - inter_x1)
+    ih = max(0.0, inter_y2 - inter_y1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    denom = area_a + area_b - inter
+    return inter / denom if denom > 0 else 0.0
+
+
+def _compare_predictions_iou(
+    expected: dict[str, Any],
+    actual: dict[str, Any],
+    threshold: float,
+) -> tuple[bool, dict[str, Any]]:
+    exp_frames = {int(f.get("frame_id", -1)): f for f in (expected.get("frames") or [])}
+    act_frames = {int(f.get("frame_id", -1)): f for f in (actual.get("frames") or [])}
+    common_ids = sorted(set(exp_frames.keys()).intersection(act_frames.keys()))
+    if not common_ids:
+        return False, {"reason": "no_common_frames"}
+
+    per_frame_scores: list[float] = []
+    extra_total = 0
+    missing_total = 0
+    for fid in common_ids:
+        exp_boxes = exp_frames[fid].get("boxes") or []
+        act_boxes = act_frames[fid].get("boxes") or []
+        if not exp_boxes and not act_boxes:
+            per_frame_scores.append(1.0)
+            continue
+        used_act: set[int] = set()
+        ious: list[float] = []
+        for ebox in exp_boxes:
+            best = 0.0
+            best_idx = None
+            for i, abox in enumerate(act_boxes):
+                if i in used_act:
+                    continue
+                if int(abox.get("cls_id", -1)) != int(ebox.get("cls_id", -1)):
+                    continue
+                v = _iou(ebox, abox)
+                if v > best:
+                    best = v
+                    best_idx = i
+            if best_idx is not None:
+                used_act.add(best_idx)
+            ious.append(best)
+        matched = len(used_act)
+        missing = max(0, len(exp_boxes) - matched)
+        extra = max(0, len(act_boxes) - matched)
+        missing_total += missing
+        extra_total += extra
+        frame_score = (sum(ious) / len(exp_boxes)) if exp_boxes else 0.0
+        per_frame_scores.append(frame_score)
+
+    mean_iou = sum(per_frame_scores) / len(per_frame_scores)
+    ok = mean_iou >= threshold
+    return ok, {
+        "mean_iou": mean_iou,
+        "threshold": threshold,
+        "extra_boxes": extra_total,
+        "missing_boxes": missing_total,
+        "frames_compared": len(common_ids),
+    }
+
+
+async def _load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
+    idx_url = get_settings().SCOREVISION_WINNERS_INDEX_URL
+    keys = await fetch_json_from_url(idx_url)
+    if not isinstance(keys, list) or not keys:
+        raise RuntimeError("winners index is empty or invalid")
+    latest_key = str(keys[-1])
+    base = extract_base_url(idx_url)
+    snapshot = await fetch_json_from_url(f"{base}/{latest_key}")
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("latest winners snapshot invalid")
+    return int(snapshot.get("block", 0) or 0), snapshot
+
+
+def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
+    winners = snapshot.get("winners") or {}
+    pairs: set[tuple[str, str]] = set()
+    for element_id, entry in winners.items():
+        if not isinstance(entry, dict):
+            continue
+        for key in ("top_3_official", "top_3_watchlist"):
+            for row in (entry.get(key) or []):
+                hk = str((row or {}).get("hotkey") or "").strip()
+                if hk:
+                    pairs.add((str(element_id), hk))
+    return sorted(pairs)
+
+
+async def _resolve_target_commit(
+    element_id: str,
+    hotkey: str,
+) -> dict[str, Any] | None:
+    settings = get_settings()
+    miners, _ = await get_miners_from_registry(settings.SCOREVISION_NETUID, element_id=element_id)
+    for miner in miners.values():
+        if (miner.hotkey or "").strip() == hotkey:
+            if not miner.model or not miner.revision:
+                return None
+            return {
+                "element_id": element_id,
+                "hotkey": hotkey,
+                "commit_block": int(miner.block),
+                "model": str(miner.model),
+                "revision": str(miner.revision),
+            }
+    return None
+
+
+async def _sample_challenges_for_tuple(
+    *,
+    public_url: str,
+    element_id: str,
+    hotkey: str,
+    commit_block: int,
+    k: int,
+) -> list[dict[str, Any]]:
+    keys = await fetch_index_keys(public_url)
+    random.shuffle(keys)
+    prefix = f"manako/{element_id}/{hotkey}/{max(0, int(commit_block)):09d}/evaluation/"
+    candidates = [k for k in keys if isinstance(k, str) and k.startswith(prefix)]
+    random.shuffle(candidates)
+    sampled = []
+    for key in candidates:
+        lines = await fetch_shard_lines(public_url, key)
+        for line in lines:
+            payload = line.get("payload") or {}
+            telemetry = payload.get("telemetry") or {}
+            run_info = telemetry.get("run") or {}
+            responses_key = run_info.get("responses_key")
+            if not responses_key:
+                continue
+            sampled.append(
+                {
+                    "challenge_id": str(
+                        telemetry.get("challenge_id")
+                        or telemetry.get("task_id")
+                        or payload.get("challenge_id")
+                        or payload.get("task_id")
+                        or ""
+                    ),
+                    "responses_key": responses_key,
+                }
+            )
+            if len(sampled) >= k:
+                return sampled
+    return sampled
+
+
+def _p95(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, int(0.95 * (len(ordered) - 1))))
+    return float(ordered[idx])
+
+
+async def run_public_compliance_once() -> dict[str, Any]:
+    settings = get_settings()
+    cfg = checker_r2_config()
+    if not is_configured(cfg, require_bucket=True):
+        raise RuntimeError("Checker R2 not configured")
+
+    winners_block, snapshot = await _load_latest_winners_snapshot()
+    targets = _targets_from_winners(snapshot)
+
+    run_results: list[dict[str, Any]] = []
+    failed_tuples: list[dict[str, Any]] = []
+
+    for element_id, hotkey in targets:
+        target = await _resolve_target_commit(element_id, hotkey)
+        if not target:
+            run_results.append(
+                {
+                    "element_id": element_id,
+                    "hotkey": hotkey,
+                    "status": "FAIL_RUNTIME",
+                    "reason": "target_commitment_missing",
+                }
+            )
+            failed_tuples.append({"element_id": element_id, "hotkey": hotkey, "commit_block": None})
+            continue
+
+        sampled = await _sample_challenges_for_tuple(
+            public_url=settings.SCOREVISION_PUBLIC_RESULTS_URL,
+            element_id=element_id,
+            hotkey=hotkey,
+            commit_block=int(target["commit_block"]),
+            k=settings.CHECKER_CHALLENGES_PER_TARGET,
+        )
+        if not sampled:
+            run_results.append(
+                {
+                    "element_id": element_id,
+                    "hotkey": hotkey,
+                    "commit_block": target["commit_block"],
+                    "status": "FAIL_RUNTIME",
+                    "reason": "no_challenges_found",
+                }
+            )
+            failed_tuples.append(
+                {"element_id": element_id, "hotkey": hotkey, "commit_block": target["commit_block"]}
+            )
+            continue
+
+        latencies: list[float] = []
+        all_ok = True
+        details: list[dict[str, Any]] = []
+        did_warmup = False
+        for record in sampled:
+            exp_preds, _video_url, payload_frames = await fetch_responses_data(
+                record["responses_key"], settings.SCOREVISION_PUBLIC_RESULTS_URL
+            )
+            if not exp_preds or not payload_frames:
+                all_ok = False
+                details.append({"challenge_id": record["challenge_id"], "ok": False, "reason": "missing_response_blob"})
+                continue
+            if not did_warmup:
+                _ = run_local_inference_from_hf(
+                    model_repo=str(target["model"]),
+                    revision=str(target["revision"]),
+                    payload_frames=payload_frames,
+                    n_keypoints=32,
+                    max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
+                    memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
+                    cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
+                    wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
+                )
+                did_warmup = True
+            local = run_local_inference_from_hf(
+                model_repo=str(target["model"]),
+                revision=str(target["revision"]),
+                payload_frames=payload_frames,
+                n_keypoints=32,
+                max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
+                memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
+                cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
+                wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
+            )
+            if not local.success or not local.predictions:
+                all_ok = False
+                details.append({"challenge_id": record["challenge_id"], "ok": False, "reason": local.error})
+                continue
+            latencies.append(float(local.latency_ms))
+            ok_iou, info = _compare_predictions_iou(
+                expected=exp_preds,
+                actual=local.predictions,
+                threshold=settings.CHECKER_IOU_MATCH_THRESHOLD,
+            )
+            if not ok_iou:
+                all_ok = False
+            details.append(
+                {
+                    "challenge_id": record["challenge_id"],
+                    "ok": ok_iou,
+                    "latency_ms": local.latency_ms,
+                    "compare": info,
+                }
+            )
+
+        p95_ms = _p95(latencies)
+        latency_ok = p95_ms <= settings.CHECKER_LATENCY_P95_MS
+        status = "PASS" if all_ok and latency_ok else ("FAIL_OUTPUT" if not all_ok else "FAIL_LATENCY")
+        result_row = {
+            "element_id": element_id,
+            "hotkey": hotkey,
+            "commit_block": target["commit_block"],
+            "model": target["model"],
+            "revision": target["revision"],
+            "status": status,
+            "p95_latency_ms": p95_ms,
+            "latency_threshold_ms": settings.CHECKER_LATENCY_P95_MS,
+            "details": details,
+        }
+        run_results.append(result_row)
+        if status != "PASS":
+            failed_tuples.append(
+                {
+                    "element_id": element_id,
+                    "hotkey": hotkey,
+                    "commit_block": target["commit_block"],
+                    "status": status,
+                }
+            )
+
+    payload = {
+        "type": "public_compliance_run",
+        "ts": time(),
+        "winners_block": winners_block,
+        "targets": len(targets),
+        "results": run_results,
+    }
+
+    await ensure_index_exists(
+        client_factory=_get_checker_client,
+        bucket=cfg.bucket,
+        index_key=_checker_runs_index_key(),
+    )
+    run_key = _checker_runs_key(winners_block)
+    await _put_json(run_key, payload)
+    await add_index_key_if_new(
+        client_factory=_get_checker_client,
+        bucket=cfg.bucket,
+        key=run_key,
+        index_key=_checker_runs_index_key(),
+    )
+
+    existing = await _get_json(_checker_fails_key())
+    merged: dict[tuple[str, str, int], dict[str, Any]] = {}
+    if isinstance(existing, list):
+        for row in existing:
+            try:
+                key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
+                merged[key] = row
+            except Exception:
+                continue
+    now = time()
+    for row in failed_tuples:
+        cb = row.get("commit_block")
+        if cb is None:
+            continue
+        key = (str(row["hotkey"]), str(row["element_id"]), int(cb))
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = {
+                "hotkey": key[0],
+                "element_id": key[1],
+                "commit_block": key[2],
+                "first_seen": now,
+                "last_seen": now,
+                "latest_status": row.get("status"),
+            }
+        else:
+            prev["last_seen"] = now
+            prev["latest_status"] = row.get("status")
+
+    await _put_json(_checker_fails_key(), list(merged.values()))
+    return payload
+
+
+async def compliance_loop() -> None:
+    settings = get_settings()
+    last_trigger_block = 0
+    while True:
+        try:
+            st = await get_subtensor()
+            block = int(await st.get_current_block())
+            if (block - last_trigger_block) >= settings.CHECKER_INTERVAL_BLOCKS:
+                out = await run_public_compliance_once()
+                last_trigger_block = block
+                logger.info(
+                    "[compliance] run done winners_block=%s targets=%s",
+                    out.get("winners_block"),
+                    out.get("targets"),
+                )
+        except Exception as e:
+            logger.warning("[compliance] loop error: %s", e)
+        await asyncio.sleep(max(20, settings.CHECKER_POLL_INTERVAL_S))
+    run_local_inference_from_hf = _load_security_runner()

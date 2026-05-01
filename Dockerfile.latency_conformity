@@ -1,0 +1,52 @@
+FROM python:3.12-slim-bookworm AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
+    libffi-dev \
+    libssl-dev \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /wheels
+COPY pyproject.toml uv.lock README.md ./
+COPY scorevision ./scorevision
+RUN pip install --upgrade pip wheel setuptools hatchling && \
+    pip wheel --wheel-dir /wheels .
+
+FROM python:3.12-slim-bookworm
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PATH="/root/.local/bin:$PATH"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /wheels /wheels
+RUN pip install --no-index --find-links=/wheels scorevision && \
+    pip uninstall -y cyscale || true && \
+    pip install --no-cache-dir --force-reinstall \
+      "async-substrate-interface==1.5.6" \
+      "scalecodec==1.2.11" \
+      "bt-decode==0.6.0" && \
+    pip install --no-cache-dir --force-reinstall --no-deps "bittensor==9.12.0" && \
+    rm -rf /wheels
+
+COPY . /app
+
+CMD ["sv", "-v", "audit-validator", "open-source", "compliance"]
