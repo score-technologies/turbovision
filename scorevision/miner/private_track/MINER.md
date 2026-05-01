@@ -1,6 +1,6 @@
 # Miner Guide
 
-## Overview
+## Overview   
 
 Miners receive video challenges from Score's central validator and return action predictions.
 
