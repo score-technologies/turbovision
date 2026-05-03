@@ -10,29 +10,33 @@ PRIVATE_SCORING_VERSION = 3
 PillarScorer = Callable[[list[FramePrediction], list[FramePrediction]], float]
 
 _CRICKET_FIELD_WEIGHTS: dict[str, float] = {
-    "match": 0.01,
-    "matchid": 0.01,
-    "inningsid": 0.03,
-    "overid": 0.03,
-    "ball_in_over": 0.03,
-    "ballid": 0.02,
-    "xlsx_overs": 0.02,
-    "scorecard_overs": 0.02,
-    "kph": 0.06,
-    "release_y": 0.05,
-    "release_z": 0.05,
-    "bounce_x": 0.08,
-    "bounce_y": 0.06,
-    "impact_x": 0.08,
-    "impact_y": 0.06,
-    "impact_z": 0.06,
-    "interception_distance": 0.05,
-    "stump_y": 0.05,
-    "stump_z": 0.05,
-    "swing_angle": 0.04,
-    "deviation": 0.04,
-    "runs": 0.05,
-    "wickets": 0.05,
+    # Low-weight metadata / easy OCR-ish identifiers.
+    "match": 0.005,
+    "matchid": 0.005,
+    "inningsid": 0.02,
+    "overid": 0.02,
+    "ball_in_over": 0.02,
+    "ballid": 0.01,
+    "xlsx_overs": 0.01,
+    "scorecard_overs": 0.01,
+    # Priority miner asks for cricket v1.
+    "kph": 0.16,
+    "bounce_x": 0.18,
+    "stump_y": 0.14,
+    "deviation": 0.1,
+    "swing_angle": 0.08,
+    "stump_z": 0.08,
+    # Useful secondary geometry.
+    "release_y": 0.02,
+    "release_z": 0.02,
+    "bounce_y": 0.02,
+    "impact_x": 0.02,
+    "impact_y": 0.02,
+    "impact_z": 0.02,
+    "interception_distance": 0.02,
+    # Outcome fields still matter, but not as much as the ball-flight metrics.
+    "runs": 0.01,
+    "wickets": 0.01,
 }
 
 _CRICKET_FIELD_TOLERANCES: dict[str, float] = {

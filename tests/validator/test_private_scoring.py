@@ -1,6 +1,8 @@
 from unittest.mock import patch
 from types import SimpleNamespace
 
+import pytest
+
 from scorevision.validator.central.private_track.scoring import (
     calculate_time_decay,
     find_best_match,
@@ -234,3 +236,32 @@ def test_score_cricket_prediction_numeric_tolerance_decays():
     assert 0.0 < score < 1.0
     assert 0.0 < breakdown["kph"] < 1.0
     assert 0.0 < breakdown["release_y"] < 1.0
+
+
+def test_score_cricket_priority_metrics_outweigh_metadata_fields():
+    gt = _cricket_gt()
+    priority_pred = CricketDeliveryPrediction(
+        kph=gt.kph,
+        bounce_x=gt.bounce_x,
+        stump_y=gt.stump_y,
+        deviation=gt.deviation,
+        swing_angle=gt.swing_angle,
+        stump_z=gt.stump_z,
+    )
+    metadata_pred = CricketDeliveryPrediction(
+        match=gt.match,
+        matchid=gt.matchid,
+        inningsid=gt.inningsid,
+        overid=gt.overid,
+        ball_in_over=gt.ball_in_over,
+        ballid=gt.ballid,
+        xlsx_overs=gt.xlsx_overs,
+        scorecard_overs=gt.scorecard_overs,
+    )
+
+    priority_score, _ = score_cricket_prediction_with_breakdown(priority_pred, gt)
+    metadata_score, _ = score_cricket_prediction_with_breakdown(metadata_pred, gt)
+
+    assert priority_score == pytest.approx(0.74)
+    assert metadata_score == pytest.approx(0.1)
+    assert priority_score > metadata_score
