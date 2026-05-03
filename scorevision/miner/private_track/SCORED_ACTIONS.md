@@ -1,5 +1,7 @@
 # Private Track Scored Actions
-This file is miner-facing and covers the actions currently scored on private track.
+This file is miner-facing and covers the football actions currently scored on private track.
+
+For cricket private-track output shape and priorities, see `CRICKET_MINER_SPEC.md`.
 
 Source of truth for action names and scored set: `scorevision/utils/actions.py`.
 

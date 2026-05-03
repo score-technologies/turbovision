@@ -8,6 +8,12 @@ class FramePrediction(BaseModel):
 
 
 class CricketDeliveryPrediction(BaseModel):
+    """Canonical cricket delivery payload.
+
+    The validator accepts the full GT-aligned row, but miners should focus first on:
+    kph, bounce_x, stump_y, deviation, swing_angle, and stump_z.
+    """
+
     model_config = ConfigDict(populate_by_name=True)
 
     match: str | None = None
