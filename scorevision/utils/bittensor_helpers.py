@@ -16,6 +16,19 @@ from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
 logger = getLogger(__name__)
 
 _SUBTENSOR = None
+_TIEBREAK_COMMIT_BACKFILL_ENABLE = str(
+    os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_ENABLE", "true")
+).strip().lower() in ("1", "true", "yes", "on")
+_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT = os.getenv(
+    "SV_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT",
+    "wss://archive.chain.opentensor.ai:443",
+).strip()
+_TIEBREAK_COMMIT_BACKFILL_MAX_HOPS = max(
+    1, int(os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_MAX_HOPS", "20"))
+)
+_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY = max(
+    1, int(os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY", "10"))
+)
 
 
 def _coerce_last_update_value(value) -> Optional[int]:
@@ -399,6 +412,8 @@ async def _first_commit_block_by_miner(
     netuid: int,
     *,
     element_id: str | None = None,
+    candidate_hotkeys: set[str] | None = None,
+    first_block: int | None = None,
     retries: int = 2,
 ) -> dict[str, int]:
     """"""
@@ -412,8 +427,13 @@ async def _first_commit_block_by_miner(
             commits = await st.get_all_revealed_commitments(netuid)
 
             wanted_element_id = str(element_id).strip() if element_id is not None else None
+            wanted_hotkeys = set(candidate_hotkeys or [])
+            resolved_first_block = max(0, int(first_block or 0))
             last_block_by_hk: dict[str, int] = {}
+            unresolved_for_backfill: list[tuple[str, list]] = []
             for hk in meta.hotkeys:
+                if wanted_hotkeys and hk not in wanted_hotkeys:
+                    continue
                 arr = commits.get(hk)
                 if not arr:
                     continue
@@ -432,7 +452,7 @@ async def _first_commit_block_by_miner(
 
                     if isinstance(obj, dict):
                         role = obj.get("role")
-                        if role and role != "miner":
+                        if role != "miner":
                             continue
                         committed_eid = obj.get("element_id")
                         committed_eid = (
@@ -451,6 +471,117 @@ async def _first_commit_block_by_miner(
 
                 if last_block is not None:
                     last_block_by_hk[hk] = last_block
+                elif wanted_element_id is not None:
+                    unresolved_for_backfill.append((hk, list(arr)))
+
+            if (
+                wanted_element_id is not None
+                and _TIEBREAK_COMMIT_BACKFILL_ENABLE
+                and unresolved_for_backfill
+                and _TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
+            ):
+                st_archive = None
+                try:
+                    st_archive = async_subtensor(_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
+                    await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
+                    sem = asyncio.Semaphore(_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY)
+
+                    async def _resolve_one(item: tuple[str, list]) -> tuple[str, int | None]:
+                        hk_i, arr_i = item
+                        if len(arr_i or []) < 10:
+                            return hk_i, None
+                        try:
+                            oldest_visible = min(int(x[0]) for x in arr_i)
+                        except Exception:
+                            return hk_i, None
+                        if oldest_visible < resolved_first_block:
+                            return hk_i, None
+
+                        cursor = oldest_visible - 1
+                        prev_oldest = oldest_visible
+                        hops = 0
+                        async with sem:
+                            while cursor >= resolved_first_block and hops < _TIEBREAK_COMMIT_BACKFILL_MAX_HOPS:
+                                hist = await st_archive.get_revealed_commitment_by_hotkey(
+                                    netuid=netuid,
+                                    hotkey_ss58_address=hk_i,
+                                    block=cursor,
+                                )
+                                hist = list(hist or [])
+                                if not hist:
+                                    return hk_i, None
+                                best_blk_i = None
+                                for tup in hist:
+                                    try:
+                                        blk_i, data_i = tup
+                                        obj_i = loads(data_i)
+                                    except Exception:
+                                        continue
+                                    if not isinstance(obj_i, dict):
+                                        continue
+                                    if obj_i.get("role") != "miner":
+                                        continue
+                                    committed_eid_i = obj_i.get("element_id")
+                                    committed_eid_i = (
+                                        str(committed_eid_i).strip()
+                                        if committed_eid_i is not None
+                                        else None
+                                    )
+                                    if committed_eid_i != wanted_element_id:
+                                        continue
+                                    try:
+                                        blk_int_i = int(blk_i)
+                                    except Exception:
+                                        continue
+                                    if best_blk_i is None or blk_int_i > best_blk_i:
+                                        best_blk_i = blk_int_i
+                                if best_blk_i is not None:
+                                    return hk_i, int(best_blk_i)
+                                if len(hist) < 10:
+                                    return hk_i, None
+                                try:
+                                    oldest_hist = min(int(x[0]) for x in hist)
+                                except Exception:
+                                    return hk_i, None
+                                if oldest_hist < resolved_first_block:
+                                    return hk_i, None
+                                if oldest_hist >= prev_oldest:
+                                    return hk_i, None
+                                prev_oldest = oldest_hist
+                                cursor = oldest_hist - 1
+                                hops += 1
+                        return hk_i, None
+
+                    results = await asyncio.gather(
+                        *[_resolve_one(item) for item in unresolved_for_backfill],
+                        return_exceptions=True,
+                    )
+                    added = 0
+                    for item in results:
+                        if isinstance(item, Exception):
+                            continue
+                        hk_i, blk_i = item
+                        if blk_i is None:
+                            continue
+                        last_block_by_hk[hk_i] = int(blk_i)
+                        added += 1
+                    if added:
+                        logger.info(
+                            "[first_commit_block_by_miner] archive backfill added %d hotkey(s) for element=%s",
+                            added,
+                            wanted_element_id,
+                        )
+                except Exception as e:
+                    logger.debug(
+                        "[first_commit_block_by_miner] archive backfill error: %s",
+                        e,
+                    )
+                finally:
+                    if st_archive is not None and hasattr(st_archive, "close"):
+                        try:
+                            await st_archive.close()
+                        except Exception:
+                            pass
 
             return last_block_by_hk
 

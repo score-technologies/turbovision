@@ -354,11 +354,14 @@ async def weights_loop(
                             tail_for_element = public_tail_blocks
                         max_tail_used = max(max_tail_used, tail_for_element)
                         baseline_theta = None
+                        first_block = None
                         try:
                             elem = manifest.get_element(id=element_id)
                             baseline_theta = getattr(elem, "baseline_theta", None) if elem is not None else None
+                            first_block = getattr(elem, "first_block", None) if elem is not None else None
                         except Exception:
                             baseline_theta = None
+                            first_block = None
 
                         logger.info(
                             "[weights] element=%s track=%s eval_window_days=%s -> tail_blocks=%d",
@@ -379,6 +382,7 @@ async def weights_loop(
                             tail=tail_for_element,
                             m_min=min_samples,
                             baseline_theta=baseline_theta,
+                            first_block=first_block,
                             blacklisted_hotkeys=blacklisted_hotkeys,
                             validator_hotkey_ss58=validator_hotkey_ss58,
                             lane=lane,

@@ -7,6 +7,7 @@ from logging import getLogger
 
 import aiohttp
 from huggingface_hub import HfApi
+from bittensor import async_subtensor
 
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.settings import get_settings
@@ -56,6 +57,22 @@ _HF_ONNX_ONLY_CACHE: Dict[Tuple[str, str], Tuple[Optional[bool], float]] = {}
 _HF_ONNX_ONLY_TTL = 300  # seconds
 _CHUTES_FETCH_RETRIES = max(1, int(os.getenv("SV_REGISTRY_CHUTES_RETRIES", "2")))
 _CHUTES_FETCH_BACKOFF_S = float(os.getenv("SV_REGISTRY_CHUTES_RETRY_BACKOFF_S", "0.5"))
+_REGISTRY_COMMIT_BACKFILL_ENABLE = str(
+    os.getenv("SV_REGISTRY_COMMIT_BACKFILL_ENABLE", "false")
+).strip().lower() in ("1", "true", "yes", "on")
+_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT = os.getenv(
+    "SV_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT",
+    "wss://archive.chain.opentensor.ai:443",
+).strip()
+_REGISTRY_COMMIT_BACKFILL_MAX_HOPS = max(
+    1, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_MAX_HOPS", "20"))
+)
+_REGISTRY_COMMIT_BACKFILL_CONCURRENCY = max(
+    1, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_CONCURRENCY", "10"))
+)
+_REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK = max(
+    0, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK", "0"))
+)
 
 
 async def _hf_is_gated(model_id: str) -> Optional[bool]:
@@ -303,7 +320,7 @@ def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
             continue
 
         role = obj.get("role")
-        if role and role != "miner":
+        if role != "miner":
             continue
 
         committed_eid = obj.get("element_id")
@@ -319,11 +336,101 @@ def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
 
     return best_blk, best_data, best_obj
 
+
+async def _find_miner_commit_via_archive_backfill(
+    st_archive,
+    *,
+    netuid: int,
+    hotkey: str,
+    initial_arr,
+    wanted_element_id: str,
+    max_hops: int,
+    first_block: int,
+) -> tuple[int | None, dict | None]:
+    if len(initial_arr or []) < 10:
+        return None, None
+
+    try:
+        oldest_visible = min(int(x[0]) for x in initial_arr)
+    except Exception:
+        return None, None
+
+    if oldest_visible < first_block:
+        return None, None
+
+    cursor = oldest_visible - 1
+    prev_oldest = oldest_visible
+    hops = 0
+
+    while cursor >= first_block and hops < max_hops:
+        try:
+            hist = await st_archive.get_revealed_commitment_by_hotkey(
+                netuid=netuid,
+                hotkey_ss58_address=hotkey,
+                block=cursor,
+            )
+        except Exception as e:
+            logger.debug(
+                "[Registry] archive backfill error hk=%s block=%s: %s",
+                hotkey,
+                cursor,
+                e,
+            )
+            return None, None
+
+        hist = list(hist or [])
+        if not hist:
+            return None, None
+
+        blk, _data, obj = _pick_latest_miner_commit_for_element(hist, wanted_element_id)
+        if obj is not None:
+            return int(blk or 0), obj
+
+        if len(hist) < 10:
+            return None, None
+
+        try:
+            oldest_hist = min(int(x[0]) for x in hist)
+        except Exception:
+            return None, None
+        if oldest_hist < first_block:
+            return None, None
+        if oldest_hist >= prev_oldest:
+            return None, None
+
+        prev_oldest = oldest_hist
+        cursor = oldest_hist - 1
+        hops += 1
+
+    return None, None
+
+
+def _build_miner_candidate(uid: int, hotkey: str, obj: dict, block: int) -> Miner | None:
+    model = obj.get("model")
+    revision = obj.get("revision")
+    slug = obj.get("slug")
+    chute_id = obj.get("chute_id")
+    committed_eid = obj.get("element_id")
+    committed_eid = str(committed_eid).strip() if committed_eid is not None else None
+    if not slug:
+        return None
+    return Miner(
+        uid=uid,
+        hotkey=hotkey,
+        model=model,
+        revision=revision,
+        slug=slug,
+        chute_id=chute_id,
+        block=int(block or 0),
+        element_id=committed_eid,
+    )
+
 # ---------------------------- Miner registry main ----------------------------- #
 async def get_miners_from_registry(
     netuid: int,
     *,
     element_id: str | None = None,
+    first_block: int | None = None,
     max_model_size_mb: float | None = None,
     onnx_only: bool | None = None,
     blacklisted_hotkeys: set[str] | None = None,
@@ -370,6 +477,13 @@ async def get_miners_from_registry(
 
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
+    wanted = str(element_id).strip() if element_id is not None else None
+    resolved_first_block = (
+        int(first_block)
+        if first_block is not None
+        else _REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK
+    )
+    unresolved_for_backfill: list[tuple[int, str, list]] = []
     for uid, hk in enumerate(meta.hotkeys):
         bypass_registry_checks = is_registry_bypass(uid, hk)
         if hk in blacklisted_hotkeys and not bypass_registry_checks:
@@ -380,31 +494,76 @@ async def get_miners_from_registry(
         arr = commits.get(hk)
         if not arr:
             continue
-        wanted = str(element_id).strip() if element_id is not None else None
         best_blk, _best_data, obj = _pick_latest_miner_commit_for_element(arr, wanted)
+        if obj is None and wanted is not None:
+            unresolved_for_backfill.append((uid, hk, list(arr)))
+            continue
         if obj is None:
             continue
 
-        model = obj.get("model")
-        revision = obj.get("revision")
-        slug = obj.get("slug")
-        chute_id = obj.get("chute_id")
-        committed_eid = obj.get("element_id")
-        committed_eid = str(committed_eid).strip() if committed_eid is not None else None
+        cand = _build_miner_candidate(uid, hk, obj, int(best_blk or 0))
+        if cand is not None:
+            candidates[uid] = cand
 
-        if not slug:
-            continue
-
-        candidates[uid] = Miner(
-            uid=uid,
-            hotkey=hk,
-            model=model,
-            revision=revision,
-            slug=slug,
-            chute_id=chute_id,
-            block=int(best_blk or 0),
-            element_id=committed_eid,
+    if (
+        wanted is not None
+        and _REGISTRY_COMMIT_BACKFILL_ENABLE
+        and unresolved_for_backfill
+        and _REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
+    ):
+        logger.info(
+            "[Registry] archive backfill enabled for element=%s unresolved_hotkeys=%d endpoint=%s",
+            wanted,
+            len(unresolved_for_backfill),
+            _REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT,
         )
+        st_archive = None
+        try:
+            st_archive = async_subtensor(_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
+            await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
+            sem = asyncio.Semaphore(_REGISTRY_COMMIT_BACKFILL_CONCURRENCY)
+
+            async def _resolve_one(uid_hk_arr: tuple[int, str, list]):
+                uid_i, hk_i, arr_i = uid_hk_arr
+                async with sem:
+                    blk_i, obj_i = await _find_miner_commit_via_archive_backfill(
+                        st_archive,
+                        netuid=netuid,
+                        hotkey=hk_i,
+                        initial_arr=arr_i,
+                        wanted_element_id=wanted,
+                        max_hops=_REGISTRY_COMMIT_BACKFILL_MAX_HOPS,
+                        first_block=resolved_first_block,
+                    )
+                return uid_i, hk_i, blk_i, obj_i
+
+            results = await asyncio.gather(
+                *[_resolve_one(item) for item in unresolved_for_backfill],
+                return_exceptions=True,
+            )
+
+            added = 0
+            for item in results:
+                if isinstance(item, Exception):
+                    logger.debug("[Registry] archive backfill worker failed: %s", item)
+                    continue
+                uid_i, hk_i, blk_i, obj_i = item
+                if obj_i is None or blk_i is None:
+                    continue
+
+                cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
+                if cand is not None:
+                    candidates[uid_i] = cand
+                    added += 1
+            logger.info("[Registry] archive backfill added %d candidate(s)", added)
+        except Exception as e:
+            logger.warning("[Registry] archive backfill disabled due to error: %s", e)
+        finally:
+            if st_archive is not None and hasattr(st_archive, "close"):
+                try:
+                    await st_archive.close()
+                except Exception:
+                    pass
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))
     if not candidates:

@@ -296,6 +296,7 @@ class Element(BaseModel):
 
     id: str
     track: str | None = None
+    first_block: int | None = None
     window_block: int | None = None
     eval_window: int | float | None = None
     weight: float | None = None
@@ -521,6 +522,7 @@ class Manifest(BaseModel):
                 Element(
                     id=e["id"],
                     track=e.get("track"),
+                    first_block=e.get("first_block"),
                     window_block=e.get("window_block"),
                     eval_window=e.get("eval_window"),
                     weight=e.get("weight"),
