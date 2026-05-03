@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock, patch
 import pytest
-from scorevision.utils.schemas import ChallengeResponse, FramePrediction
+from scorevision.utils.schemas import ChallengeResponse, CricketDeliveryPrediction, FramePrediction
 from scorevision.validator.central.private_track.challenges import Challenge
 from scorevision.validator.central.private_track.miners import ChallengeAttempt
 from scorevision.validator.central.private_track.registry import RegisteredMiner
@@ -28,6 +28,20 @@ def _challenge() -> Challenge:
         challenge_id="challenge-1",
         video_url="https://example.com/video.mp4",
         ground_truth=[FramePrediction(frame=25, action="pass")],
+    )
+
+
+def _cricket_challenge() -> Challenge:
+    return Challenge(
+        challenge_id="challenge-2",
+        video_url="https://example.com/cricket.mp4",
+        ground_truth=CricketDeliveryPrediction(
+            inningsid=1,
+            overid=1,
+            ball_in_over=1,
+            kph=126.86,
+            release_y=-0.492,
+        ),
     )
 
 
@@ -74,6 +88,56 @@ async def test_challenge_miner_scores_when_response_is_on_time():
     assert result["processing_time"] == 2.5
     assert result["response_time_s"] == 2.5
     assert response_predictions is not None
+    assert benchmark_result is None
+
+
+@pytest.mark.asyncio
+async def test_challenge_miner_skips_benchmark_for_cricket():
+    attempt = ChallengeAttempt(
+        response=ChallengeResponse(
+            challenge_id="challenge-2",
+            prediction=CricketDeliveryPrediction(
+                inningsid=1,
+                overid=1,
+                ball_in_over=1,
+                kph=126.86,
+                release_y=-0.492,
+            ),
+            processing_time=1.0,
+        ),
+        elapsed_s=1.8,
+        timed_out=False,
+    )
+
+    with (
+        patch(
+            "scorevision.validator.central.private_track.runner.send_challenge",
+            new=AsyncMock(return_value=attempt),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner.score_cricket_prediction_with_breakdown",
+            return_value=(0.64, {"inningsid": 1.0, "kph": 1.0}),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._safe_compute_benchmark",
+            side_effect=AssertionError("benchmark should not be called"),
+        ),
+    ):
+        result, response_predictions, benchmark_result = await _challenge_miner(
+            miner=_miner(),
+            challenge=_cricket_challenge(),
+            keypair=None,
+            timeout=30.0,
+            block=1234,
+            element_id="manak0/Element-CricketBallTrack",
+            pillar_weights=None,
+            image_digest="sha256:abc123",
+        )
+
+    assert result["score"] == 0.64
+    assert result["prediction_count"] == 1
+    assert result["ground_truth_count"] == 1
+    assert response_predictions == [attempt.response.prediction.model_dump(mode="json")]
     assert benchmark_result is None
 
 

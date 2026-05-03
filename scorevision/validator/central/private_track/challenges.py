@@ -1,40 +1,156 @@
 from dataclasses import dataclass
 from logging import getLogger
+from urllib.parse import parse_qs, urlparse
 import httpx
-from scorevision.utils.challenges import get_next_challenge_v3, _coerce_payload_frames
 from scorevision.utils.signing import build_validator_query_params
-from scorevision.utils.schemas import ChallengeFrame, FramePrediction
+from scorevision.utils.schemas import ChallengeFrame, CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
+
+_CRICKET_GT_FIELDS = {
+    "match",
+    "matchid",
+    "inningsid",
+    "innings",
+    "overid",
+    "over",
+    "ball_in_over",
+    "ball",
+    "ballid",
+    "xlsx_overs",
+    "scorecard_overs",
+    "overs",
+    "kph",
+    "release_y",
+    "rel_y",
+    "release_z",
+    "rel_z",
+    "bounce_x",
+    "bounce_y",
+    "impact_x",
+    "impact_y",
+    "impact_z",
+    "interception_distance",
+    "inter_d",
+    "stump_y",
+    "stump_z",
+    "swing_angle",
+    "swing_deg",
+    "deviation",
+    "deviation_deg",
+    "runs",
+    "wickets",
+    "wkts",
+}
 
 
 @dataclass
 class Challenge:
     challenge_id: str
-    ground_truth: list[FramePrediction]
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction
     video_url: str | None = None
     payload_frames: list[ChallengeFrame] | None = None
 
 
-def has_sufficient_actions(ground_truth: list) -> bool:
+def _is_cricket_ground_truth_dict(payload: dict) -> bool:
+    return bool(_CRICKET_GT_FIELDS.intersection(payload.keys()))
+
+
+def _normalize_challenge_asset_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        marker = "/challenge-objects/"
+        if marker not in parsed.path:
+            return url
+
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        is_presigned = "X-Amz-Algorithm" in query or "X-Amz-Signature" in query
+        is_r2_storage_host = parsed.netloc.endswith(".r2.cloudflarestorage.com")
+        if not (is_presigned or is_r2_storage_host):
+            return url
+
+        suffix = parsed.path[parsed.path.index(marker) :]
+        return f"https://manako.scoredata.me{suffix}"
+    except Exception:
+        return url
+
+
+def _coerce_payload_frames(payload: dict) -> list[dict[str, object]]:
+    frames = payload.get("frames")
+    if not isinstance(frames, list):
+        return []
+
+    result: list[dict[str, object]] = []
+    for item in frames:
+        if not isinstance(item, dict):
+            continue
+        frame_id = item.get("frame_id")
+        if frame_id is None:
+            frame_id = item.get("frameid")
+        if frame_id is None:
+            frame_id = item.get("id")
+        url = item.get("url")
+        if isinstance(url, str) and url:
+            url = _normalize_challenge_asset_url(url)
+        data = item.get("data")
+        if isinstance(frame_id, str) and frame_id.isdigit():
+            frame_id = int(frame_id)
+        if isinstance(frame_id, int) and (isinstance(url, str) or isinstance(data, str)):
+            result.append({"frame_id": frame_id, "url": url, "data": data})
+    return result
+
+
+def parse_ground_truth_payload(payload: object) -> list[FramePrediction] | CricketDeliveryPrediction:
+    if isinstance(payload, dict):
+        if _is_cricket_ground_truth_dict(payload):
+            return CricketDeliveryPrediction(**payload)
+        return []
+
+    if not isinstance(payload, list) or not payload:
+        return []
+
+    first_item = payload[0]
+    if len(payload) == 1 and isinstance(first_item, dict) and _is_cricket_ground_truth_dict(first_item):
+        return CricketDeliveryPrediction(**first_item)
+
+    ground_truth: list[FramePrediction] = []
+    for gt in payload:
+        if not isinstance(gt, dict):
+            continue
+        action = gt.get("type") or gt.get("action")
+        if "frame" not in gt or action is None:
+            continue
+        ground_truth.append(FramePrediction(frame=gt["frame"], action=action))
+    return ground_truth
+
+
+def has_sufficient_actions(ground_truth: list[FramePrediction] | CricketDeliveryPrediction) -> bool:
+    if isinstance(ground_truth, CricketDeliveryPrediction):
+        return True
     return len(ground_truth) >= get_settings().PRIVATE_MIN_ACTIONS_FOR_CHALLENGE
 
 
 async def fetch_next_challenge(manifest_hash: str, element_id: str) -> dict:
+    from scorevision.utils.challenges import get_next_challenge_v3
+
     return await get_next_challenge_v3(
         manifest_hash=manifest_hash,
         element_id=element_id,
     )
 
 
-async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None = None) -> list[FramePrediction]:
+async def fetch_ground_truth(
+    challenge_id: str,
+    keypair,
+    element_id: str | None = None,
+) -> list[FramePrediction] | CricketDeliveryPrediction:
     settings = get_settings()
     api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
     if not api_url:
         raise RuntimeError("Neither PRIVATE_GT_API_URL nor SCOREVISION_API is configured")
 
-    params = build_validator_query_params(keypair)
+    params = build_validator_query_params(keypair) if keypair is not None else {}
     if element_id is not None:
         params["element_id"] = element_id
     async with httpx.AsyncClient(timeout=30) as client:
@@ -45,14 +161,7 @@ async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None 
         response.raise_for_status()
         data = response.json()
 
-    ground_truth: list[FramePrediction] = []
-    for gt in data.get("ground_truth", []):
-        action = gt.get("type") or gt.get("action")
-        if "frame" not in gt or action is None:
-            continue
-        ground_truth.append(FramePrediction(frame=gt["frame"], action=action))
-
-    return ground_truth
+    return parse_ground_truth_payload(data.get("ground_truth", []))
 
 
 async def complete_task_assignment(
@@ -65,7 +174,7 @@ async def complete_task_assignment(
     if not api_url:
         raise RuntimeError("Neither PRIVATE_GT_API_URL nor SCOREVISION_API is configured")
 
-    params = build_validator_query_params(keypair)
+    params = build_validator_query_params(keypair) if keypair is not None else {}
     if element_id is not None:
         params["element_id"] = element_id
 
@@ -107,11 +216,12 @@ async def get_challenge_with_ground_truth(
             continue
 
         try:
-            await complete_task_assignment(
-                challenge_id=challenge_id,
-                keypair=keypair,
-                element_id=element_id,
-            )
+            if keypair is not None:
+                await complete_task_assignment(
+                    challenge_id=challenge_id,
+                    keypair=keypair,
+                    element_id=element_id,
+                )
             ground_truth = await fetch_ground_truth(
                 challenge_id=challenge_id,
                 keypair=keypair,

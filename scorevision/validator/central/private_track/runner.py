@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
@@ -8,12 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import httpx
 from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
-from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair, reset_subtensor
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
-from scorevision.utils.cloudflare_helpers import emit_shard
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.manifest import Manifest
-from scorevision.utils.r2 import R2Config, add_index_key_if_new, central_r2_config, create_s3_client
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.settings import get_settings
@@ -29,6 +28,8 @@ from scorevision.validator.central.private_track.benchmark import (
 )
 from scorevision.validator.central.private_track.scoring import (
     PRIVATE_SCORING_VERSION,
+    is_cricket_ground_truth,
+    score_cricket_prediction_with_breakdown,
     score_predictions_with_breakdown,
 )
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
@@ -53,6 +54,8 @@ def _is_weight_eligible_result(result: dict) -> bool:
 
 
 def _private_responses_r2_config() -> R2Config:
+    from scorevision.utils.r2 import R2Config
+
     settings = get_settings()
     bucket = (settings.PRIVATE_RESPONSES_R2_BUCKET or settings.SCOREVISION_BUCKET or "").strip()
     account_id = (
@@ -77,6 +80,8 @@ def _private_responses_r2_config() -> R2Config:
 
 
 async def _upload_to_private_r2(key: str, index_key: str, payload: dict, label: str) -> str | None:
+    from scorevision.utils.r2 import add_index_key_if_new, create_s3_client
+
     cfg = _private_responses_r2_config()
     if not (cfg.bucket and cfg.account_id and cfg.access_key_id and cfg.secret_access_key):
         logger.warning("%sPrivate R2 not configured, skipping upload of %s", LOG_PREFIX, label)
@@ -175,6 +180,8 @@ def _strip_for_public_shard(result: dict) -> dict:
 
 
 async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> str | None:
+    from scorevision.utils.r2 import add_index_key_if_new, central_r2_config, create_s3_client
+
     settings = get_settings()
     prefix = settings.PRIVATE_R2_RESULTS_PREFIX
     key = f"{prefix}/{block:09d}-{hotkey_ss58}.json"
@@ -268,6 +275,10 @@ def _safe_compute_benchmark(
         return None
 
 
+def _ground_truth_count(ground_truth: list | object) -> int:
+    return 1 if is_cricket_ground_truth(ground_truth) else len(ground_truth)
+
+
 async def _challenge_miner(
     miner: RegisteredMiner,
     challenge: Challenge,
@@ -286,16 +297,32 @@ async def _challenge_miner(
         benchmark_result = None
 
         if is_scored:
-            score, score_breakdown = score_predictions_with_breakdown(
-                response.predictions,
-                challenge.ground_truth,
-                pillar_weights=pillar_weights,
-            )
-            pred_count = len(response.predictions)
-            response_predictions = [pred.model_dump() for pred in response.predictions]
-            benchmark_result = _safe_compute_benchmark(
-                response.predictions, challenge.ground_truth, miner.hotkey
-            )
+            if response.is_cricket and is_cricket_ground_truth(challenge.ground_truth):
+                score, score_breakdown = score_cricket_prediction_with_breakdown(
+                    response.prediction,
+                    challenge.ground_truth,
+                )
+                pred_count = response.prediction_count
+                response_predictions = [response.prediction.model_dump(mode="json")]
+                logger.info(
+                    "%sSkipping mAP@1s benchmark for cricket miner %s",
+                    LOG_PREFIX,
+                    miner.hotkey,
+                )
+            else:
+                legacy_predictions = response.predictions or []
+                score, score_breakdown = score_predictions_with_breakdown(
+                    legacy_predictions,
+                    challenge.ground_truth,
+                    pillar_weights=pillar_weights,
+                )
+                pred_count = len(legacy_predictions)
+                response_predictions = [pred.model_dump(mode="json") for pred in legacy_predictions]
+                benchmark_result = _safe_compute_benchmark(
+                    legacy_predictions,
+                    challenge.ground_truth,
+                    miner.hotkey,
+                )
         else:
             score = 0.0
             pred_count = 0
@@ -327,7 +354,7 @@ async def _challenge_miner(
             miner_uid=miner.uid,
             score=score,
             prediction_count=pred_count,
-            ground_truth_count=len(challenge.ground_truth),
+            ground_truth_count=_ground_truth_count(challenge.ground_truth),
             processing_time=attempt.elapsed_s,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
@@ -349,7 +376,7 @@ async def _challenge_miner(
             miner_uid=miner.uid,
             score=0.0,
             prediction_count=0,
-            ground_truth_count=len(challenge.ground_truth),
+            ground_truth_count=_ground_truth_count(challenge.ground_truth),
             processing_time=0.0,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
@@ -434,6 +461,8 @@ async def _emit_private_score_to_public_db(
         "image_tag": miner.image_tag,
         "image_digest": result.get("image_digest"),
     }
+
+    from scorevision.utils.cloudflare_helpers import emit_shard
 
     await emit_shard(
         slug=f"private-{miner.uid}",
@@ -615,6 +644,8 @@ def _trigger_scheduled_runners(
 
 
 async def challenge_loop(path_manifest: Path | None = None) -> None:
+    from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair, reset_subtensor
+
     settings = get_settings()
     keypair = load_hotkey_keypair(
         settings.BITTENSOR_WALLET_COLD,
@@ -720,6 +751,8 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
 
 
 async def spotcheck_loop() -> None:
+    from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair
+
     settings = get_settings()
     keypair = load_hotkey_keypair(
         settings.BITTENSOR_WALLET_COLD,

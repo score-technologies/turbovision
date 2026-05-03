@@ -12,6 +12,7 @@ from scorevision.validator.scoring import (
     stake_of,
     are_similar_by_challenges,
 )
+from scorevision.validator.core.weights import _allocate_element_weight
 from scorevision.validator.models import WeightsResult, OpenSourceMinerMeta
 
 
@@ -150,3 +151,35 @@ def test_weights_result_dataclass():
     assert result.element_id == "soccer_detect"
     assert result.winner_uid == 7
     assert result.scores_by_uid[7] == 0.9
+
+
+def test_allocate_element_weight_keeps_legacy_winner_take_all():
+    weights_by_uid = {}
+    winner_share, fallback_share = _allocate_element_weight(
+        weights_by_uid=weights_by_uid,
+        winner_uid=7,
+        winner_score=0.31,
+        fallback_uid=999,
+        elem_weight=0.2,
+        element_id="manak0/Element-FootballAction",
+        track="private",
+    )
+    assert winner_share == pytest.approx(0.2)
+    assert fallback_share == pytest.approx(0.0)
+    assert weights_by_uid == {7: pytest.approx(0.2)}
+
+
+def test_allocate_element_weight_partially_allocates_cricket_emissions():
+    weights_by_uid = {}
+    winner_share, fallback_share = _allocate_element_weight(
+        weights_by_uid=weights_by_uid,
+        winner_uid=7,
+        winner_score=0.3,
+        fallback_uid=999,
+        elem_weight=0.2,
+        element_id="manak0/Element-CricketBallTrack",
+        track="private",
+    )
+    assert winner_share == pytest.approx(0.06)
+    assert fallback_share == pytest.approx(0.14)
+    assert weights_by_uid == {7: pytest.approx(0.06), 999: pytest.approx(0.14)}

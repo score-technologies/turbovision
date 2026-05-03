@@ -1,12 +1,68 @@
+from decimal import Decimal, InvalidOperation
 from typing import Callable
 
 from scorevision.utils.actions import ACTION_CONFIGS, Action
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 
-PRIVATE_SCORING_VERSION = 2
+PRIVATE_SCORING_VERSION = 3
 
 PillarScorer = Callable[[list[FramePrediction], list[FramePrediction]], float]
+
+_CRICKET_FIELD_WEIGHTS: dict[str, float] = {
+    "match": 0.01,
+    "matchid": 0.01,
+    "inningsid": 0.03,
+    "overid": 0.03,
+    "ball_in_over": 0.03,
+    "ballid": 0.02,
+    "xlsx_overs": 0.02,
+    "scorecard_overs": 0.02,
+    "kph": 0.06,
+    "release_y": 0.05,
+    "release_z": 0.05,
+    "bounce_x": 0.08,
+    "bounce_y": 0.06,
+    "impact_x": 0.08,
+    "impact_y": 0.06,
+    "impact_z": 0.06,
+    "interception_distance": 0.05,
+    "stump_y": 0.05,
+    "stump_z": 0.05,
+    "swing_angle": 0.04,
+    "deviation": 0.04,
+    "runs": 0.05,
+    "wickets": 0.05,
+}
+
+_CRICKET_FIELD_TOLERANCES: dict[str, float] = {
+    "kph": 10.0,
+    "release_y": 0.4,
+    "release_z": 0.4,
+    "bounce_x": 0.75,
+    "bounce_y": 0.45,
+    "impact_x": 0.75,
+    "impact_y": 0.45,
+    "impact_z": 0.45,
+    "interception_distance": 0.75,
+    "stump_y": 0.45,
+    "stump_z": 0.45,
+    "swing_angle": 6.0,
+    "deviation": 6.0,
+}
+
+_EXACT_MATCH_FIELDS = {
+    "match",
+    "matchid",
+    "inningsid",
+    "overid",
+    "ball_in_over",
+    "ballid",
+    "xlsx_overs",
+    "scorecard_overs",
+    "runs",
+    "wickets",
+}
 
 
 def frame_to_seconds(frame: int) -> float:
@@ -124,6 +180,68 @@ _PILLAR_SCORERS: dict[str, PillarScorer] = {
     "soccer_action": _soccer_action_scorer,
     "private_legacy_score": _soccer_action_scorer,
 }
+
+
+def _normalize_exact_value(value: object) -> str:
+    normalized = " ".join(str(value).strip().lower().split())
+    try:
+        numeric = Decimal(normalized)
+    except (InvalidOperation, ValueError):
+        return normalized
+    if not numeric.is_finite():
+        return normalized
+    numeric_text = format(numeric.normalize(), "f")
+    if "." in numeric_text:
+        numeric_text = numeric_text.rstrip("0").rstrip(".")
+    return numeric_text or "0"
+
+
+def _score_exact_match(predicted: object, actual: object) -> float:
+    if predicted is None or actual is None:
+        return 0.0
+    return 1.0 if _normalize_exact_value(predicted) == _normalize_exact_value(actual) else 0.0
+
+
+def _score_numeric_match(predicted: object, actual: object, tolerance: float) -> float:
+    if predicted is None or actual is None:
+        return 0.0
+    try:
+        distance = abs(float(predicted) - float(actual))
+    except (TypeError, ValueError):
+        return 0.0
+    if tolerance <= 0:
+        return 1.0 if distance == 0 else 0.0
+    if distance >= tolerance:
+        return 0.0
+    return max(0.0, 1.0 - (distance / tolerance))
+
+
+def score_cricket_prediction_with_breakdown(
+    prediction: CricketDeliveryPrediction | None,
+    ground_truth: CricketDeliveryPrediction,
+) -> tuple[float, dict[str, float]]:
+    weighted_score = 0.0
+    breakdown: dict[str, float] = {}
+
+    for field_name, weight in _CRICKET_FIELD_WEIGHTS.items():
+        predicted_value = getattr(prediction, field_name) if prediction is not None else None
+        actual_value = getattr(ground_truth, field_name)
+        if field_name in _EXACT_MATCH_FIELDS:
+            field_score = _score_exact_match(predicted_value, actual_value)
+        else:
+            field_score = _score_numeric_match(
+                predicted_value,
+                actual_value,
+                _CRICKET_FIELD_TOLERANCES[field_name],
+            )
+        breakdown[field_name] = field_score
+        weighted_score += weight * field_score
+
+    return max(0.0, min(1.0, weighted_score)), breakdown
+
+
+def is_cricket_ground_truth(ground_truth: object) -> bool:
+    return isinstance(ground_truth, CricketDeliveryPrediction)
 
 
 def register_pillar_scorer(pillar: str, scorer: PillarScorer) -> None:

@@ -9,37 +9,49 @@ from functools import lru_cache
 from logging import getLogger
 from pathlib import Path
 import aiohttp
-import bittensor as bt
 from scorevision.utils.settings import get_settings
 from scorevision.utils.windows import get_current_window_id
-from scorevision.utils.prometheus import (
-    LASTSET_GAUGE,
-    CACHE_DIR,
-    CACHE_FILES,
-    CURRENT_WINNER,
-    VALIDATOR_BLOCK_HEIGHT,
-    VALIDATOR_LOOP_TOTAL,
-    VALIDATOR_LAST_BLOCK_SUCCESS,
-    VALIDATOR_WEIGHT_FAIL_TOTAL,
-    VALIDATOR_CACHE_BYTES,
-    VALIDATOR_WINNER_SCORE,
-    VALIDATOR_COMMIT_TOTAL,
-    VALIDATOR_LAST_LOOP_DURATION_SECONDS,
-    VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS,
-)
-from scorevision.utils.bittensor_helpers import (
-    reset_subtensor,
-    get_subtensor,
-    on_chain_commit_validator_retry,
-    _already_committed_same_index,
-)
+try:
+    from scorevision.utils.prometheus import (
+        LASTSET_GAUGE,
+        CACHE_DIR,
+        CACHE_FILES,
+        CURRENT_WINNER,
+        VALIDATOR_BLOCK_HEIGHT,
+        VALIDATOR_LOOP_TOTAL,
+        VALIDATOR_LAST_BLOCK_SUCCESS,
+        VALIDATOR_WEIGHT_FAIL_TOTAL,
+        VALIDATOR_CACHE_BYTES,
+        VALIDATOR_WINNER_SCORE,
+        VALIDATOR_COMMIT_TOTAL,
+        VALIDATOR_LAST_LOOP_DURATION_SECONDS,
+        VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS,
+    )
+except ModuleNotFoundError:
+    class _NoopMetric:
+        def labels(self, *args, **kwargs):
+            return self
+
+        def inc(self, *args, **kwargs):
+            return None
+
+        def set(self, *args, **kwargs):
+            return None
+
+    LASTSET_GAUGE = _NoopMetric()
+    CACHE_DIR = get_settings().SCOREVISION_CACHE_DIR
+    CACHE_FILES = _NoopMetric()
+    CURRENT_WINNER = _NoopMetric()
+    VALIDATOR_BLOCK_HEIGHT = _NoopMetric()
+    VALIDATOR_LOOP_TOTAL = _NoopMetric()
+    VALIDATOR_LAST_BLOCK_SUCCESS = _NoopMetric()
+    VALIDATOR_WEIGHT_FAIL_TOTAL = _NoopMetric()
+    VALIDATOR_CACHE_BYTES = _NoopMetric()
+    VALIDATOR_WINNER_SCORE = _NoopMetric()
+    VALIDATOR_COMMIT_TOTAL = _NoopMetric()
+    VALIDATOR_LAST_LOOP_DURATION_SECONDS = _NoopMetric()
+    VALIDATOR_SIGNER_REQUEST_DURATION_SECONDS = _NoopMetric()
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
-from scorevision.utils.cloudflare_helpers import (
-    ensure_index_exists,
-    build_public_index_url_from_public_base,
-    prune_sv,
-    put_winners_snapshot,
-)
 from scorevision.utils.manifest import (
     get_current_manifest,
     Manifest,
@@ -47,7 +59,6 @@ from scorevision.utils.manifest import (
 )
 from scorevision.validator.payload import extract_elements_from_manifest
 from scorevision.validator.scoring import days_to_blocks
-from scorevision.validator.winner import get_winner_for_element
 
 logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
@@ -82,8 +93,39 @@ def _top_rows(
     return selected[: max(0, int(top_k))]
 
 
+def _is_partial_private_emission_element(element_id: str, track: str | None) -> bool:
+    return track == "private" and "cricket" in str(element_id or "").lower()
+
+
+def _allocate_element_weight(
+    *,
+    weights_by_uid: dict[int, float],
+    winner_uid: int,
+    winner_score: float,
+    fallback_uid: int,
+    elem_weight: float,
+    element_id: str,
+    track: str | None,
+) -> tuple[float, float]:
+    share = float(elem_weight)
+    if not _is_partial_private_emission_element(element_id, track):
+        weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
+        return share, 0.0
+
+    winner_fraction = max(0.0, min(1.0, float(winner_score or 0.0)))
+    winner_share = share * winner_fraction
+    fallback_share = share - winner_share
+    if winner_share > 0:
+        weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + winner_share
+    if fallback_share > 0:
+        weights_by_uid[fallback_uid] = weights_by_uid.get(fallback_uid, 0.0) + fallback_share
+    return winner_share, fallback_share
+
+
 @lru_cache(maxsize=1)
 def get_validator_hotkey_ss58() -> str:
+    import bittensor as bt
+
     settings = get_settings()
     wallet = bt.wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -181,6 +223,15 @@ def setup_signal_handler():
 
 
 async def commit_validator_on_start(netuid: int):
+    from scorevision.utils.bittensor_helpers import (
+        _already_committed_same_index,
+        on_chain_commit_validator_retry,
+    )
+    from scorevision.utils.cloudflare_helpers import (
+        build_public_index_url_from_public_base,
+        ensure_index_exists,
+    )
+
     settings = get_settings()
     r2_bucket_public_url = settings.SCOREVISION_PUBLIC_RESULTS_URL
 
@@ -240,6 +291,14 @@ async def weights_loop(
     path_manifest: Path | None = None,
     commit_on_start: bool = False,
 ) -> None:
+    import bittensor as bt
+    from scorevision.utils.bittensor_helpers import (
+        get_subtensor,
+        reset_subtensor,
+    )
+    from scorevision.utils.cloudflare_helpers import prune_sv, put_winners_snapshot
+    from scorevision.validator.winner import get_winner_for_element
+
     settings = get_settings()
     netuid = settings.SCOREVISION_NETUID
     fallback_uid = settings.VALIDATOR_FALLBACK_UID
@@ -373,10 +432,11 @@ async def weights_loop(
 
                         winner_uid = None
                         winner_meta = None
+                        scores_by_uid: dict[int, float] = {}
 
                         lane = "private" if is_private else "public"
                         min_samples = private_min_samples if is_private else public_min_samples
-                        winner_uid, _, winner_meta, sample_rows_all = await get_winner_for_element(
+                        winner_uid, scores_by_uid, winner_meta, sample_rows_all = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
@@ -392,13 +452,24 @@ async def weights_loop(
                             logger.warning("[weights] No winner for element_id=%s", element_id)
                             continue
 
-                        share = float(elem_weight)
-                        weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
+                        winner_score = float(scores_by_uid.get(winner_uid, 0.0)) if scores_by_uid else 0.0
+                        winner_share, fallback_share = _allocate_element_weight(
+                            weights_by_uid=weights_by_uid,
+                            winner_uid=winner_uid,
+                            winner_score=winner_score,
+                            fallback_uid=fallback_uid,
+                            elem_weight=elem_weight,
+                            element_id=element_id,
+                            track=track,
+                        )
 
                         logger.info(
-                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f",
+                            "[weights] Element=%s winner_uid=%d winner_score=%.6f winner_share=%.6f fallback_share=%.6f elem_weight=%.6f",
                             element_id,
                             winner_uid,
+                            winner_score,
+                            winner_share,
+                            fallback_share,
                             elem_weight,
                         )
                         if winner_meta and winner_meta.get("hotkey"):
