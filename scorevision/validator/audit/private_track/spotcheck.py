@@ -5,21 +5,31 @@ from json import dumps
 from logging import getLogger
 from time import time
 import httpx
-from scorevision.utils.bittensor_helpers import load_hotkey_keypair
-from scorevision.utils.r2 import audit_r2_config, create_s3_client, ensure_index_exists, add_index_key_if_new, is_configured
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.request_signing import build_signed_headers
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
-from scorevision.validator.audit.open_source.spotcheck import calculate_match_percentage
 from scorevision.validator.central.private_track.challenges import fetch_ground_truth
-from scorevision.validator.central.private_track.scoring import score_predictions
+from scorevision.validator.central.private_track.scoring import (
+    score_cricket_prediction_with_breakdown,
+    score_predictions,
+)
 from scorevision.validator.models import SpotcheckResult
 
 logger = getLogger(__name__)
 
 LOG_PREFIX = "[PTSpotcheck] "
+
+
+def calculate_match_percentage(central_score: float, audit_score: float) -> float:
+    if central_score == 0.0 and audit_score == 0.0:
+        return 1.0
+    if central_score == 0.0 or audit_score == 0.0:
+        return 0.0
+    diff = abs(central_score - audit_score)
+    max_score = max(abs(central_score), abs(audit_score))
+    return max(0.0, 1.0 - (diff / max_score))
 
 
 async def fetch_random_challenge(tail_blocks: int = 28800) -> tuple[str, list[dict]] | None:
@@ -61,7 +71,11 @@ async def fetch_random_challenge(tail_blocks: int = 28800) -> tuple[str, list[di
     return challenge_id, by_challenge[challenge_id]
 
 
-async def fetch_miner_responses(challenge_id: str, keypair) -> dict[str, list[dict]]:
+PredictionPayload = list[dict] | dict | None
+GroundTruth = list[FramePrediction] | CricketDeliveryPrediction
+
+
+async def fetch_miner_responses(challenge_id: str, keypair) -> dict[str, PredictionPayload]:
     settings = get_settings()
     api_url = settings.PRIVATE_MINER_RESPONSES_API_URL
     if not api_url:
@@ -76,21 +90,59 @@ async def fetch_miner_responses(challenge_id: str, keypair) -> dict[str, list[di
         response.raise_for_status()
         data = response.json()
 
-    result: dict[str, list[dict]] = {}
+    result: dict[str, PredictionPayload] = {}
     for entry in data.get("responses", []):
         hotkey = entry.get("miner_hotkey")
-        predictions = entry.get("predictions", [])
         if hotkey:
-            result[hotkey] = predictions
+            if "prediction" in entry:
+                result[hotkey] = entry.get("prediction")
+            else:
+                result[hotkey] = entry.get("predictions", [])
     return result
 
 
-def rescore_miner(predictions_raw: list[dict], ground_truth: list[FramePrediction]) -> float:
+def _extract_prediction_payload(payload: PredictionPayload) -> PredictionPayload:
+    if isinstance(payload, dict):
+        if "prediction" in payload:
+            return payload.get("prediction")
+        if "predictions" in payload:
+            return payload.get("predictions")
+    return payload
+
+
+def _parse_cricket_prediction(payload: PredictionPayload) -> CricketDeliveryPrediction | None:
+    payload = _extract_prediction_payload(payload)
+    if isinstance(payload, list):
+        if len(payload) != 1 or not isinstance(payload[0], dict):
+            return None
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        return None
+    return CricketDeliveryPrediction(**payload)
+
+
+def _parse_frame_predictions(payload: PredictionPayload) -> list[FramePrediction]:
+    payload = _extract_prediction_payload(payload)
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return []
+
     predictions = [
         FramePrediction(frame=p["frame"], action=p["action"], confidence=p.get("confidence", 1.0))
-        for p in predictions_raw
-        if "frame" in p and "action" in p
+        for p in payload
+        if isinstance(p, dict) and "frame" in p and "action" in p
     ]
+    return predictions
+
+
+def rescore_miner(predictions_raw: PredictionPayload, ground_truth: GroundTruth) -> float:
+    if isinstance(ground_truth, CricketDeliveryPrediction):
+        prediction = _parse_cricket_prediction(predictions_raw)
+        score, _ = score_cricket_prediction_with_breakdown(prediction, ground_truth)
+        return score
+
+    predictions = _parse_frame_predictions(predictions_raw)
     return score_predictions(predictions, ground_truth)
 
 
@@ -100,12 +152,13 @@ async def run_private_spotcheck(
     keypair,
     threshold: float,
 ) -> list[SpotcheckResult]:
-    ground_truth = await fetch_ground_truth(challenge_id, keypair)
     miner_responses = await fetch_miner_responses(challenge_id, keypair)
+    ground_truth_by_element: dict[str | None, GroundTruth] = {}
 
     results: list[SpotcheckResult] = []
     for entry in challenge_results:
         miner_hotkey = entry.get("miner_hotkey", "")
+        element_id = entry.get("element_id") or ""
         central_score = float(entry.get("score", 0.0))
 
         predictions_raw = miner_responses.get(miner_hotkey)
@@ -113,6 +166,14 @@ async def run_private_spotcheck(
             logger.warning("%sNo response data for miner %s", LOG_PREFIX, miner_hotkey)
             continue
 
+        fetch_element_id = element_id or None
+        if fetch_element_id not in ground_truth_by_element:
+            ground_truth_by_element[fetch_element_id] = await fetch_ground_truth(
+                challenge_id,
+                keypair,
+                element_id=fetch_element_id,
+            )
+        ground_truth = ground_truth_by_element[fetch_element_id]
         audit_score = rescore_miner(predictions_raw, ground_truth)
         match_pct = calculate_match_percentage(central_score, audit_score)
         passed = match_pct >= threshold
@@ -124,7 +185,7 @@ async def run_private_spotcheck(
 
         results.append(SpotcheckResult(
             challenge_id=challenge_id,
-            element_id="",
+            element_id=element_id,
             miner_hotkey=miner_hotkey,
             central_score=central_score,
             audit_score=audit_score,
@@ -143,6 +204,8 @@ async def run_private_spotcheck(
 
 
 def _audit_r2_enabled() -> bool:
+    from scorevision.utils.r2 import audit_r2_config, is_configured
+
     return is_configured(audit_r2_config(get_settings()), require_bucket=True)
 
 
@@ -156,6 +219,8 @@ def _audit_prefix() -> str:
 
 
 def _get_audit_s3_client():
+    from scorevision.utils.r2 import audit_r2_config, create_s3_client
+
     cfg = audit_r2_config(get_settings())
     return create_s3_client(cfg, error_message="Audit R2 credentials not set")
 
@@ -165,6 +230,8 @@ async def emit_private_spotcheck_results(
     challenge_id: str,
     threshold: float,
 ) -> None:
+    from scorevision.utils.r2 import add_index_key_if_new, ensure_index_exists
+
     if not _audit_r2_enabled():
         logger.warning("%sAudit R2 not configured; skipping upload", LOG_PREFIX)
         return
@@ -233,6 +300,8 @@ async def private_spotcheck_loop(
     threshold: float | None = None,
     commit_on_start: bool = True,
 ) -> None:
+    from scorevision.utils.bittensor_helpers import load_hotkey_keypair
+
     settings = get_settings()
     keypair = load_hotkey_keypair(
         settings.BITTENSOR_WALLET_COLD,
@@ -296,6 +365,8 @@ async def run_single_private_spotcheck(
     tail_blocks: int = 28800,
     threshold: float | None = None,
 ) -> list[SpotcheckResult] | None:
+    from scorevision.utils.bittensor_helpers import load_hotkey_keypair
+
     settings = get_settings()
     keypair = load_hotkey_keypair(
         settings.BITTENSOR_WALLET_COLD,
