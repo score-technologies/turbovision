@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from scorevision.validator.central.private_track.scoring import (
+    PRIVATE_SCORING_VERSION,
     calculate_time_decay,
     find_best_match,
     frame_to_seconds,
@@ -228,14 +229,70 @@ def test_score_cricket_prediction_exact_fields_normalize_strings_and_ids():
 def test_score_cricket_prediction_numeric_tolerance_decays():
     gt = _cricket_gt()
     pred = CricketDeliveryPrediction(
-        kph=131.86,
-        release_y=-0.292,
-        release_z=2.146,
+        kph=gt.kph + 1.5,
+        release_y=gt.release_y + 0.075,
+        release_z=gt.release_z + 0.075,
     )
     score, breakdown = score_cricket_prediction_with_breakdown(pred, gt)
     assert 0.0 < score < 1.0
-    assert 0.0 < breakdown["kph"] < 1.0
-    assert 0.0 < breakdown["release_y"] < 1.0
+    assert breakdown["kph"] == pytest.approx(0.5)
+    assert breakdown["release_y"] == pytest.approx(0.5)
+    assert breakdown["release_z"] == pytest.approx(0.5)
+
+
+def test_score_cricket_prediction_strict_numeric_tolerance_boundaries():
+    gt = _cricket_gt()
+    pred = CricketDeliveryPrediction(
+        kph=gt.kph + 3.0,
+        bounce_x=gt.bounce_x + 0.25,
+        stump_y=gt.stump_y + 0.12,
+        deviation=gt.deviation + 2.0,
+        swing_angle=gt.swing_angle + 2.0,
+        stump_z=gt.stump_z + 0.12,
+    )
+    score, breakdown = score_cricket_prediction_with_breakdown(pred, gt)
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["kph"] == 0.0
+    assert breakdown["bounce_x"] == 0.0
+    assert breakdown["stump_y"] == 0.0
+    assert breakdown["deviation"] == 0.0
+    assert breakdown["swing_angle"] == 0.0
+    assert breakdown["stump_z"] == 0.0
+
+
+def test_score_cricket_prediction_rough_educated_guess_scores_low():
+    gt = _cricket_gt()
+    pred = CricketDeliveryPrediction(
+        match=gt.match,
+        matchid=gt.matchid,
+        inningsid=gt.inningsid,
+        overid=gt.overid,
+        ball_in_over=gt.ball_in_over,
+        ballid=gt.ballid,
+        xlsx_overs=gt.xlsx_overs,
+        scorecard_overs=gt.scorecard_overs,
+        kph=130.0,
+        bounce_x=8.5,
+        stump_y=0.16,
+        deviation=-2.0,
+        swing_angle=0.0,
+        stump_z=0.8,
+        runs=gt.runs,
+        wickets=gt.wickets,
+    )
+
+    score, breakdown = score_cricket_prediction_with_breakdown(pred, gt)
+
+    assert score < 0.2
+    assert breakdown["kph"] == 0.0
+    assert breakdown["bounce_x"] == 0.0
+    assert breakdown["swing_angle"] == 0.0
+    assert breakdown["stump_z"] == 0.0
+
+
+def test_private_scoring_version_tracks_cricket_tolerance_change():
+    assert PRIVATE_SCORING_VERSION == 4
 
 
 def test_score_cricket_priority_metrics_outweigh_metadata_fields():

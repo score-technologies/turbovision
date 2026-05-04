@@ -130,7 +130,7 @@ These are accepted but should not be the main focus for miners:
 - Returning the six primary ball-tracking fields is much more valuable than returning ids alone.
 - Missing fields are allowed; they simply score `0`.
 - Exact/id-like fields are scored by exact match after light normalization.
-- Numeric physical fields are scored with tolerance-based decay.
+- Numeric physical fields are scored with strict tolerance-based decay; prioritize precise ball-tracking estimates over rough approximations.
 
 ## Current Scoring Intent
 

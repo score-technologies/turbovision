@@ -5,7 +5,7 @@ from scorevision.utils.actions import ACTION_CONFIGS, Action
 from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 
-PRIVATE_SCORING_VERSION = 3
+PRIVATE_SCORING_VERSION = 4
 
 PillarScorer = Callable[[list[FramePrediction], list[FramePrediction]], float]
 
@@ -40,19 +40,19 @@ _CRICKET_FIELD_WEIGHTS: dict[str, float] = {
 }
 
 _CRICKET_FIELD_TOLERANCES: dict[str, float] = {
-    "kph": 10.0,
-    "release_y": 0.4,
-    "release_z": 0.4,
-    "bounce_x": 0.75,
-    "bounce_y": 0.45,
-    "impact_x": 0.75,
-    "impact_y": 0.45,
-    "impact_z": 0.45,
-    "interception_distance": 0.75,
-    "stump_y": 0.45,
-    "stump_z": 0.45,
-    "swing_angle": 6.0,
-    "deviation": 6.0,
+    "kph": 3.0,
+    "release_y": 0.15,
+    "release_z": 0.15,
+    "bounce_x": 0.25,
+    "bounce_y": 0.15,
+    "impact_x": 0.25,
+    "impact_y": 0.15,
+    "impact_z": 0.15,
+    "interception_distance": 0.25,
+    "stump_y": 0.12,
+    "stump_z": 0.12,
+    "swing_angle": 2.0,
+    "deviation": 2.0,
 }
 
 _EXACT_MATCH_FIELDS = {
@@ -215,7 +215,7 @@ def _score_numeric_match(predicted: object, actual: object, tolerance: float) ->
         return 0.0
     if tolerance <= 0:
         return 1.0 if distance == 0 else 0.0
-    if distance >= tolerance:
+    if distance >= tolerance or abs(distance - tolerance) <= 1e-12:
         return 0.0
     return max(0.0, 1.0 - (distance / tolerance))
 
