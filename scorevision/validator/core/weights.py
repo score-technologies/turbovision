@@ -272,6 +272,7 @@ async def weights_loop(
         if settings.BLACKLIST_API_URL
         else None
     )
+    get_block_timeout = float(os.getenv("SV_GET_CURRENT_BLOCK_TIMEOUT_S", "12"))
 
     while not shutdown_event.is_set():
         try:
@@ -282,7 +283,28 @@ async def weights_loop(
             if subtensor is None:
                 subtensor = await get_subtensor()
 
-            block = await subtensor.get_current_block()
+            try:
+                block = await asyncio.wait_for(
+                    subtensor.get_current_block(),
+                    timeout=get_block_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[weights] get_current_block() timed out after %.1fs; resetting subtensor",
+                    get_block_timeout,
+                )
+                VALIDATOR_LOOP_TOTAL.labels(outcome="subtensor_error").inc()
+                reset_subtensor()
+                subtensor = None
+                await asyncio.sleep(2.0)
+                continue
+            except (KeyError, ConnectionError, RuntimeError) as err:
+                logger.warning("[weights] get_current_block error (%s); resetting subtensor", err)
+                VALIDATOR_LOOP_TOTAL.labels(outcome="subtensor_error").inc()
+                reset_subtensor()
+                subtensor = None
+                await asyncio.sleep(2.0)
+                continue
             VALIDATOR_BLOCK_HEIGHT.set(block)
 
             current_window_id = get_current_window_id(block, tempo=tempo)
