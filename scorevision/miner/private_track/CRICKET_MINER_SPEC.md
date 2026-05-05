@@ -66,6 +66,30 @@ Accepted aliases:
 - `deviation_deg` -> `deviation`
 - `wkts` -> `wickets`
 
+## Field Definitions (Current Coverage)
+
+The definitions below come from the ball-tracking glossary and are limited to fields already documented there.
+
+### Coordinate Axes (for positional fields)
+
+All positional measurements are in meters and use a shared coordinate system:
+
+- origin `(0, 0, 0)`: base of the middle stump at the batter's end
+- positive `x`: along the pitch centerline from batter's end toward bowler's end
+- positive `y`: horizontal, perpendicular to `x`, to the right from the main camera view
+- positive `z`: vertical upward
+
+### Core Ball-Tracking Fields
+
+- `kph`: release speed of the ball as it leaves the bowler's hand.
+- `release_y`, `release_z`: release-point width (`y`) and height (`z`) where the ball leaves the bowler's hand.
+- `bounce_x`, `bounce_y`: bounce-point coordinates; if intercepted before bouncing, this is the projected bounce point.
+- `impact_x`, `impact_y`, `impact_z`: coordinates where the ball trajectory is intercepted by the batter (bat or body).
+- `interception_distance`: distance from bounce to impact along `x` (glossary shorthand: `bounce_x - impact_x`).
+- `stump_y`, `stump_z`: coordinates where the ball crosses the stumps plane (`x = 0`), or projected crossing if intercepted earlier.
+- `swing_angle`: horizontal in-air deviation angle (degrees) from release to bounce.
+- `deviation`: horizontal deviation angle (degrees) caused by/after bounce.
+
 ## What Miners Should Prioritize
 
 The validator currently supports the full canonical row, but miners should focus first on these six fields:
