@@ -2,6 +2,10 @@
 
 This file is miner-facing and describes the current cricket private-track response contract.
 
+## Release Timeline
+
+- Release date: mid May
+
 ## Response Envelope
 
 For cricket challenges, miners should return exactly one delivery prediction in this envelope:
