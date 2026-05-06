@@ -16,7 +16,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir --force-reinstall \
       "async-substrate-interface==1.6.4" \
       "scalecodec==1.2.11" \
-      "bt-decode==0.6.0" && \
+      "bt-decode==0.8.0" && \
     pip install --no-cache-dir --force-reinstall --no-deps "bittensor==9.12.0"
 
 COPY scorevision ./scorevision
