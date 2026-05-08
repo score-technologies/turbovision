@@ -428,6 +428,11 @@ async def get_winner_for_element(
                 netuid,
                 element_id=element_id,
                 candidate_hotkeys={uid_to_hk[uid] for uid in candidate_uids if uid in uid_to_hk},
+                backfill_allowed_hotkeys={
+                    uid_to_hk[uid]
+                    for uid in challenge_scores_by_miner.keys()
+                    if uid in uid_to_hk
+                },
                 first_block=first_block,
             )
             final_uid = pick_winner_with_tiebreak(

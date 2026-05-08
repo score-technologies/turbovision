@@ -4,12 +4,17 @@ import os, json, time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from logging import getLogger
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from huggingface_hub import HfApi
 from bittensor import async_subtensor
 
-from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
+from scorevision.utils.bittensor_helpers import (
+    get_subtensor,
+    reset_subtensor,
+    get_validator_indexes_from_chain,
+)
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -68,10 +73,13 @@ _REGISTRY_COMMIT_BACKFILL_MAX_HOPS = max(
     1, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_MAX_HOPS", "20"))
 )
 _REGISTRY_COMMIT_BACKFILL_CONCURRENCY = max(
-    1, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_CONCURRENCY", "10"))
+    1, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_CONCURRENCY", "1"))
 )
 _REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK = max(
     0, int(os.getenv("SV_REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK", "0"))
+)
+_REGISTRY_BACKFILL_INDEX_TIMEOUT_S = float(
+    os.getenv("SV_REGISTRY_BACKFILL_INDEX_TIMEOUT_S", "12")
 )
 
 
@@ -425,6 +433,84 @@ def _build_miner_candidate(uid: int, hotkey: str, obj: dict, block: int) -> Mine
         element_id=committed_eid,
     )
 
+
+def _join_key_to_base(index_url: str, key_or_url: str) -> str:
+    key_or_url = str(key_or_url or "").strip()
+    if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
+        return key_or_url
+    base = index_url.rsplit("/", 1)[0] + "/"
+    if key_or_url.startswith("/"):
+        u = urlparse(index_url)
+        return f"{u.scheme}://{u.netloc}{key_or_url}"
+    return urljoin(base, key_or_url)
+
+
+async def _hotkeys_with_prior_scores_for_element(
+    *,
+    netuid: int,
+    element_id: str,
+) -> set[str] | None:
+    """
+    Return hotkeys that already appear in validator index entries for this element.
+    Returns None on lookup failure (caller should fail-open).
+    """
+    try:
+        validator_indexes = await get_validator_indexes_from_chain(netuid)
+    except Exception as e:
+        logger.debug("[Registry] unable to read validator indexes from chain: %s", e)
+        return None
+    if not validator_indexes:
+        return None
+
+    safe_elem = str(element_id or "").strip().replace("/", "_")
+    if not safe_elem:
+        return None
+    elem_seg = f"/manako/{safe_elem}/"
+    found: set[str] = set()
+    timeout = aiohttp.ClientTimeout(total=_REGISTRY_BACKFILL_INDEX_TIMEOUT_S)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for _validator_hk, index_url in validator_indexes.items():
+                try:
+                    async with session.get(index_url) as resp:
+                        if resp.status != 200:
+                            continue
+                        idx = await resp.json()
+                except Exception:
+                    continue
+
+                keys: list[str] = []
+                if isinstance(idx, list):
+                    keys = [_join_key_to_base(index_url, k) for k in idx if isinstance(k, str)]
+                elif isinstance(idx, dict) and isinstance(idx.get("entries"), list):
+                    for entry in idx.get("entries", []):
+                        p = entry.get("path")
+                        if isinstance(p, str):
+                            keys.append(_join_key_to_base(index_url, p))
+
+                for u in keys:
+                    try:
+                        path = urlparse(u).path
+                    except Exception:
+                        continue
+                    if elem_seg not in path:
+                        continue
+                    parts = [p for p in path.split("/") if p]
+                    try:
+                        root_i = parts.index("manako")
+                    except ValueError:
+                        continue
+                    if len(parts) <= root_i + 3:
+                        continue
+                    hk = parts[root_i + 3]
+                    if hk:
+                        found.add(hk)
+    except Exception as e:
+        logger.debug("[Registry] element score index lookup failed: %s", e)
+        return None
+    return found
+
 # ---------------------------- Miner registry main ----------------------------- #
 async def get_miners_from_registry(
     netuid: int,
@@ -511,59 +597,79 @@ async def get_miners_from_registry(
         and unresolved_for_backfill
         and _REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
     ):
-        logger.info(
-            "[Registry] archive backfill enabled for element=%s unresolved_hotkeys=%d endpoint=%s",
-            wanted,
-            len(unresolved_for_backfill),
-            _REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT,
+        scored_hotkeys = await _hotkeys_with_prior_scores_for_element(
+            netuid=netuid,
+            element_id=wanted,
         )
-        st_archive = None
-        try:
-            st_archive = async_subtensor(_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
-            await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
-            sem = asyncio.Semaphore(_REGISTRY_COMMIT_BACKFILL_CONCURRENCY)
-
-            async def _resolve_one(uid_hk_arr: tuple[int, str, list]):
-                uid_i, hk_i, arr_i = uid_hk_arr
-                async with sem:
-                    blk_i, obj_i = await _find_miner_commit_via_archive_backfill(
-                        st_archive,
-                        netuid=netuid,
-                        hotkey=hk_i,
-                        initial_arr=arr_i,
-                        wanted_element_id=wanted,
-                        max_hops=_REGISTRY_COMMIT_BACKFILL_MAX_HOPS,
-                        first_block=resolved_first_block,
-                    )
-                return uid_i, hk_i, blk_i, obj_i
-
-            results = await asyncio.gather(
-                *[_resolve_one(item) for item in unresolved_for_backfill],
-                return_exceptions=True,
+        if scored_hotkeys is not None:
+            before = len(unresolved_for_backfill)
+            unresolved_for_backfill = [
+                (uid_i, hk_i, arr_i)
+                for (uid_i, hk_i, arr_i) in unresolved_for_backfill
+                if hk_i in scored_hotkeys
+            ]
+            logger.info(
+                "[Registry] backfill prefilter by score index element=%s kept=%d/%d unresolved hotkeys",
+                wanted,
+                len(unresolved_for_backfill),
+                before,
             )
+        if not unresolved_for_backfill:
+            logger.info("[Registry] no unresolved hotkeys left after score-index prefilter")
+        else:
+            logger.info(
+                "[Registry] archive backfill enabled for element=%s unresolved_hotkeys=%d endpoint=%s",
+                wanted,
+                len(unresolved_for_backfill),
+                _REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT,
+            )
+            st_archive = None
+            try:
+                st_archive = async_subtensor(_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
+                await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
+                sem = asyncio.Semaphore(_REGISTRY_COMMIT_BACKFILL_CONCURRENCY)
 
-            added = 0
-            for item in results:
-                if isinstance(item, Exception):
-                    logger.debug("[Registry] archive backfill worker failed: %s", item)
-                    continue
-                uid_i, hk_i, blk_i, obj_i = item
-                if obj_i is None or blk_i is None:
-                    continue
+                async def _resolve_one(uid_hk_arr: tuple[int, str, list]):
+                    uid_i, hk_i, arr_i = uid_hk_arr
+                    async with sem:
+                        blk_i, obj_i = await _find_miner_commit_via_archive_backfill(
+                            st_archive,
+                            netuid=netuid,
+                            hotkey=hk_i,
+                            initial_arr=arr_i,
+                            wanted_element_id=wanted,
+                            max_hops=_REGISTRY_COMMIT_BACKFILL_MAX_HOPS,
+                            first_block=resolved_first_block,
+                        )
+                    return uid_i, hk_i, blk_i, obj_i
 
-                cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
-                if cand is not None:
-                    candidates[uid_i] = cand
-                    added += 1
-            logger.info("[Registry] archive backfill added %d candidate(s)", added)
-        except Exception as e:
-            logger.warning("[Registry] archive backfill disabled due to error: %s", e)
-        finally:
-            if st_archive is not None and hasattr(st_archive, "close"):
-                try:
-                    await st_archive.close()
-                except Exception:
-                    pass
+                results = await asyncio.gather(
+                    *[_resolve_one(item) for item in unresolved_for_backfill],
+                    return_exceptions=True,
+                )
+
+                added = 0
+                for item in results:
+                    if isinstance(item, Exception):
+                        logger.debug("[Registry] archive backfill worker failed: %s", item)
+                        continue
+                    uid_i, hk_i, blk_i, obj_i = item
+                    if obj_i is None or blk_i is None:
+                        continue
+
+                    cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
+                    if cand is not None:
+                        candidates[uid_i] = cand
+                        added += 1
+                logger.info("[Registry] archive backfill added %d candidate(s)", added)
+            except Exception as e:
+                logger.warning("[Registry] archive backfill disabled due to error: %s", e)
+            finally:
+                if st_archive is not None and hasattr(st_archive, "close"):
+                    try:
+                        await st_archive.close()
+                    except Exception:
+                        pass
 
     logger.info("[Registry] %d on-chain candidates", len(candidates))
     if not candidates:

@@ -27,7 +27,7 @@ _TIEBREAK_COMMIT_BACKFILL_MAX_HOPS = max(
     1, int(os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_MAX_HOPS", "20"))
 )
 _TIEBREAK_COMMIT_BACKFILL_CONCURRENCY = max(
-    1, int(os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY", "10"))
+    1, int(os.getenv("SV_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY", "1"))
 )
 
 
@@ -413,6 +413,7 @@ async def _first_commit_block_by_miner(
     *,
     element_id: str | None = None,
     candidate_hotkeys: set[str] | None = None,
+    backfill_allowed_hotkeys: set[str] | None = None,
     first_block: int | None = None,
     retries: int = 2,
 ) -> dict[str, int]:
@@ -428,6 +429,7 @@ async def _first_commit_block_by_miner(
 
             wanted_element_id = str(element_id).strip() if element_id is not None else None
             wanted_hotkeys = set(candidate_hotkeys or [])
+            backfill_hotkeys = set(backfill_allowed_hotkeys or [])
             resolved_first_block = max(0, int(first_block or 0))
             last_block_by_hk: dict[str, int] = {}
             unresolved_for_backfill: list[tuple[str, list]] = []
@@ -472,6 +474,8 @@ async def _first_commit_block_by_miner(
                 if last_block is not None:
                     last_block_by_hk[hk] = last_block
                 elif wanted_element_id is not None:
+                    if backfill_hotkeys and hk not in backfill_hotkeys:
+                        continue
                     unresolved_for_backfill.append((hk, list(arr)))
 
             if (
