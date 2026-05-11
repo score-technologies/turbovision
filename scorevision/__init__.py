@@ -53,7 +53,11 @@ def pt_deploy_miner_cmd(
 @click.option("--revision", default=None, help="Explicit revision SHA to commit (otherwise auto-detected).")
 @click.option("--no-deploy", is_flag=True, help="Skip Chutes deployment (HF only).")
 @click.option("--no-commit", is_flag=True, help="Skip on-chain commitment (print payload only).")
-@click.option("--element-id", required=True, help="Element ID this miner is committing to (e.g. 'bbox', 'keypoints', '0', '1', etc.).")
+@click.option(
+    "--element-id",
+    default=None,
+    help="Element ID this miner commits to. If omitted, the CLI prompts from manifest element IDs.",
+)
 def os_deploy_miner_cmd(model_path: Path | None, revision: str | None, no_deploy: bool, no_commit: bool, element_id: str | None):
     from scorevision.cli.open_source_miner import deploy_miner
     setup_logging()
