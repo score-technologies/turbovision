@@ -29,6 +29,7 @@ from scorevision.validator.central.private_track.benchmark import (
 )
 from scorevision.validator.central.private_track.scoring import (
     PRIVATE_SCORING_VERSION,
+    score_cricket_prediction_with_breakdown,
     score_predictions_with_breakdown,
 )
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
@@ -286,16 +287,31 @@ async def _challenge_miner(
         benchmark_result = None
 
         if is_scored:
-            score, score_breakdown = score_predictions_with_breakdown(
-                response.predictions,
-                challenge.ground_truth,
-                pillar_weights=pillar_weights,
-            )
-            pred_count = len(response.predictions)
-            response_predictions = [pred.model_dump() for pred in response.predictions]
-            benchmark_result = _safe_compute_benchmark(
-                response.predictions, challenge.ground_truth, miner.hotkey
-            )
+            if challenge.groundtruth_type == "cricket_delivery":
+                score, field_breakdown = score_cricket_prediction_with_breakdown(
+                    response.prediction,
+                    challenge.ground_truth,
+                )
+                if pillar_weights and "cricket_scoring" in pillar_weights:
+                    score_breakdown = {"cricket_scoring": score}
+                else:
+                    score_breakdown = field_breakdown
+                pred_count = response.prediction_count
+                response_predictions = (
+                    [response.prediction.model_dump(mode="json")] if response.prediction else []
+                )
+                benchmark_result = None
+            else:
+                score, score_breakdown = score_predictions_with_breakdown(
+                    response.predictions or [],
+                    challenge.ground_truth,
+                    pillar_weights=pillar_weights,
+                )
+                pred_count = len(response.predictions or [])
+                response_predictions = [pred.model_dump() for pred in (response.predictions or [])]
+                benchmark_result = _safe_compute_benchmark(
+                    response.predictions or [], challenge.ground_truth, miner.hotkey
+                )
         else:
             score = 0.0
             pred_count = 0
@@ -480,6 +496,12 @@ async def _run_challenge_for_element(
     try:
         settings = get_settings()
         element = manifest.get_element(element_id)
+        raw_groundtruth_type = getattr(element, "groundtruth_type", "soccer_action")
+        groundtruth_type = (
+            str(raw_groundtruth_type.value)
+            if hasattr(raw_groundtruth_type, "value")
+            else str(raw_groundtruth_type or "soccer_action")
+        )
         pillar_weights: dict[str, float] | None = None
         if element and element.metrics and element.metrics.pillars:
             pillar_weights = {
@@ -508,6 +530,7 @@ async def _run_challenge_for_element(
             manifest_hash=manifest.hash,
             element_id=element_id,
             keypair=keypair,
+            groundtruth_type=groundtruth_type,
         )
         if not challenge:
             logger.warning("%sNo valid challenge for element=%s", LOG_PREFIX, element_id)

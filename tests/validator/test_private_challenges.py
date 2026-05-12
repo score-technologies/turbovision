@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from scorevision.validator.central.private_track.challenges import (
     get_challenge_with_ground_truth,
 )
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 
 
 _FAKE_SETTINGS = SimpleNamespace(
@@ -91,3 +91,23 @@ async def test_get_challenge_accepts_payload_frames_without_video_url():
     assert challenge.video_url is None
     assert challenge.payload_frames is not None
     assert len(challenge.payload_frames) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_challenge_accepts_single_cricket_ground_truth():
+    fake_chal = {"task_id": "c123", "video_url": "https://example.com/v1.mp4"}
+    cricket_gt = CricketDeliveryPrediction(kph=126.8, bounce_x=8.0, stump_y=0.01, deviation=1.1)
+
+    with _patch_settings(), \
+         patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=cricket_gt):
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash="abc123",
+            element_id="elem1",
+            keypair=None,
+            groundtruth_type="cricket_delivery",
+            max_retries=1,
+        )
+
+    assert challenge is not None
+    assert challenge.groundtruth_type == "cricket_delivery"

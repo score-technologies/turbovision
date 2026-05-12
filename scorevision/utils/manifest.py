@@ -62,6 +62,7 @@ class PillarName(str, Enum):
     PRECISION = "precision"
     RECALL = "recall"
     SOCCER_ACTION = "soccer_action"
+    CRICKET_SCORING = "cricket_scoring"
     FALSE_POSITIVE = "false_positive"
 
 
@@ -86,6 +87,11 @@ class ChallengeType(str, Enum):
     FOOTBALL = "football"
     CRICKET = "cricket"
     BASKETBALL = "basketball"
+
+
+class GroundTruthType(str, Enum):
+    SOCCER_ACTION = "soccer_action"
+    CRICKET_DELIVERY = "cricket_delivery"
 
 
 # ------------------------------------------------------------
@@ -346,6 +352,7 @@ class Element(BaseModel):
     keypoint_template: ChallengeType | None = None
     objects: list[str] | None = None
     challenge_type_version: str | None = None
+    groundtruth_type: GroundTruthType | None = None
 
     def apply_baseline_gate(self, score: float) -> float:
         """Clamp score to positive margin above baseline."""
@@ -537,6 +544,7 @@ class Manifest(BaseModel):
                     baseline_theta=e.get("baseline_theta"),
                     delta_floor=e.get("delta_floor"),
                     beta=e.get("beta"),
+                    groundtruth_type=e.get("groundtruth_type"),
                 )
             )
 

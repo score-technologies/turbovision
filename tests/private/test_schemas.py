@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 from scorevision.utils.schemas import (
     ChallengeFrame,
+    CricketDeliveryPrediction,
     ChallengeRequest,
     ChallengeResponse,
     FramePrediction,
@@ -45,12 +46,22 @@ def test_challenge_response_valid():
         predictions=[FramePrediction(frame=10, action="pass")],
         processing_time=1.5,
     )
-    assert len(resp.predictions) == 1
+    assert len(resp.predictions or []) == 1
 
 
-def test_challenge_response_empty_predictions():
+def test_challenge_response_cricket_valid():
     resp = ChallengeResponse(
         challenge_id="abc",
+        prediction=CricketDeliveryPrediction(kph=132.0, bounce_x=6.5),
         processing_time=0.0,
     )
-    assert resp.predictions == []
+    assert resp.prediction is not None
+    assert resp.prediction_count == 1
+
+
+def test_challenge_response_requires_exactly_one_payload():
+    with pytest.raises(ValidationError):
+        ChallengeResponse(
+            challenge_id="abc",
+            processing_time=0.0,
+        )

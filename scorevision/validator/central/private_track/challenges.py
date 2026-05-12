@@ -3,7 +3,7 @@ from logging import getLogger
 import httpx
 from scorevision.utils.challenges import get_next_challenge_v3, _coerce_payload_frames
 from scorevision.utils.signing import build_validator_query_params
-from scorevision.utils.schemas import ChallengeFrame, FramePrediction
+from scorevision.utils.schemas import ChallengeFrame, CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -12,12 +12,15 @@ logger = getLogger(__name__)
 @dataclass
 class Challenge:
     challenge_id: str
-    ground_truth: list[FramePrediction]
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction
+    groundtruth_type: str = "soccer_action"
     video_url: str | None = None
     payload_frames: list[ChallengeFrame] | None = None
 
 
-def has_sufficient_actions(ground_truth: list) -> bool:
+def has_sufficient_actions(ground_truth: list[FramePrediction] | CricketDeliveryPrediction, groundtruth_type: str) -> bool:
+    if groundtruth_type == "cricket_delivery":
+        return isinstance(ground_truth, CricketDeliveryPrediction)
     return len(ground_truth) >= get_settings().PRIVATE_MIN_ACTIONS_FOR_CHALLENGE
 
 
@@ -28,7 +31,12 @@ async def fetch_next_challenge(manifest_hash: str, element_id: str) -> dict:
     )
 
 
-async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None = None) -> list[FramePrediction]:
+async def fetch_ground_truth(
+    challenge_id: str,
+    keypair,
+    element_id: str | None = None,
+    groundtruth_type: str = "soccer_action",
+) -> list[FramePrediction] | CricketDeliveryPrediction:
     settings = get_settings()
     api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
     if not api_url:
@@ -44,6 +52,16 @@ async def fetch_ground_truth(challenge_id: str, keypair, element_id: str | None 
         )
         response.raise_for_status()
         data = response.json()
+
+    if groundtruth_type == "cricket_delivery":
+        raw = data.get("ground_truth", [])
+        if not raw:
+            raise ValueError("Empty cricket ground truth")
+        first = raw[0] or {}
+        meta = first.get("meta") if isinstance(first, dict) else None
+        if not isinstance(meta, dict):
+            raise ValueError("Cricket ground truth missing meta payload")
+        return CricketDeliveryPrediction(**meta)
 
     ground_truth: list[FramePrediction] = []
     for gt in data.get("ground_truth", []):
@@ -82,6 +100,7 @@ async def get_challenge_with_ground_truth(
     manifest_hash: str,
     element_id: str,
     keypair,
+    groundtruth_type: str = "soccer_action",
     max_retries: int = 3,
 ) -> Challenge | None:
     for attempt in range(max_retries):
@@ -116,16 +135,17 @@ async def get_challenge_with_ground_truth(
                 challenge_id=challenge_id,
                 keypair=keypair,
                 element_id=element_id,
+                groundtruth_type=groundtruth_type,
             )
         except Exception as e:
             logger.error("Failed to fetch ground truth for %s: %s", challenge_id, e)
             continue
 
-        if not has_sufficient_actions(ground_truth):
+        if not has_sufficient_actions(ground_truth, groundtruth_type=groundtruth_type):
             logger.info(
                 "Challenge %s has insufficient actions (%d), retrying",
                 challenge_id,
-                len(ground_truth),
+                len(ground_truth) if isinstance(ground_truth, list) else 1,
             )
             continue
 
@@ -134,6 +154,7 @@ async def get_challenge_with_ground_truth(
             video_url=video_url,
             payload_frames=payload_frames,
             ground_truth=ground_truth,
+            groundtruth_type=groundtruth_type,
         )
 
     logger.warning("No valid challenge found after %d attempts", max_retries)
