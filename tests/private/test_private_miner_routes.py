@@ -24,7 +24,8 @@ async def test_handle_challenge_soccer_mode_returns_predictions():
         response = await handle_challenge(request)
 
     assert response.predictions is not None
-    assert response.prediction is None
+    assert response.prediction is not None
+    assert response.prediction.type == "soccer_action"
     assert len(response.predictions) == 1
 
 
@@ -43,4 +44,6 @@ async def test_handle_challenge_cricket_mode_returns_prediction():
 
     assert response.predictions is None
     assert response.prediction is not None
-    assert response.prediction.kph == 130.0
+    assert response.prediction.type == "cricket_delivery"
+    assert response.prediction.item is not None
+    assert response.prediction.item.kph == 130.0

@@ -49,7 +49,7 @@ def test_get_element_scores(
         pseudo_gt_annotations=dummy_pseudo_gt_annotations,
         miner_run=fake_miner_predictions,
         frame_store=fake_frame_store,
-        challenge_type=ChallengeType.FOOTBALL,
+        challenge_type_id=ChallengeType.FOOTBALL.value,
     )
     assert isinstance(breakdown, dict)
     assert "mean_weighted" in breakdown
@@ -67,7 +67,7 @@ def test_get_element_scores_one_pillar_with_zero_weight(
         pseudo_gt_annotations=dummy_pseudo_gt_annotations,
         miner_run=fake_miner_predictions,
         frame_store=fake_frame_store,
-        challenge_type=ChallengeType.FOOTBALL,
+        challenge_type_id=ChallengeType.FOOTBALL.value,
     )
     assert (
         breakdown[ElementPrefix.PLAYER_DETECTION.value][PillarName.COUNT.value][
@@ -96,7 +96,7 @@ def test_get_element_scores_on_pillar_without_metric_raises_error(
             pseudo_gt_annotations=dummy_pseudo_gt_annotations,
             miner_run=fake_miner_predictions,
             frame_store=fake_frame_store,
-            challenge_type=ChallengeType.FOOTBALL,
+            challenge_type_id=ChallengeType.FOOTBALL.value,
         )
 
 
@@ -111,7 +111,7 @@ def test_get_element_scores_economics(
         pseudo_gt_annotations=dummy_pseudo_gt_annotations,
         miner_run=fake_miner_predictions,
         frame_store=fake_frame_store,
-        challenge_type=ChallengeType.FOOTBALL,
+        challenge_type_id=ChallengeType.FOOTBALL.value,
     )
     for element in dummy_manifest.elements:
         gated_score = scores[element.category]["total_weighted_and_gated"]

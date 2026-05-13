@@ -158,5 +158,5 @@ async def test_commit_audit_index_on_start_commits(monkeypatch):
     assert commit_mock.await_count == 1
     assert (
         commit_mock.await_args.kwargs["index_url"]
-        == "https://pub-audit.r2.dev/scorevision/audit_spotcheck/index.json"
+        == "https://pub-audit.r2.dev/manako/audit_spotcheck/index.json"
     )

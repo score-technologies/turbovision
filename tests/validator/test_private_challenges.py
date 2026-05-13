@@ -26,6 +26,7 @@ async def test_get_challenge_returns_none_when_actions_insufficient():
 
     with _patch_settings(), \
          patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
          patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=fake_gt):
 
         challenge = await get_challenge_with_ground_truth(
@@ -49,6 +50,7 @@ async def test_get_challenge_retries_on_ground_truth_fetch_error():
 
     with _patch_settings(), \
          patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
          patch(f"{_MODULE}.fetch_ground_truth", fetch_gt_mock):
 
         challenge = await get_challenge_with_ground_truth(
@@ -78,6 +80,7 @@ async def test_get_challenge_accepts_payload_frames_without_video_url():
 
     with _patch_settings(), \
          patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
          patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=fake_gt):
         challenge = await get_challenge_with_ground_truth(
             manifest_hash="abc123",
@@ -90,7 +93,8 @@ async def test_get_challenge_accepts_payload_frames_without_video_url():
     assert challenge.challenge_id == "c123"
     assert challenge.video_url is None
     assert challenge.payload_frames is not None
-    assert len(challenge.payload_frames) == 2
+    assert len(challenge.payload_frames) == 1
+    assert challenge.payload_frames[0].frame_id == 1
 
 
 @pytest.mark.asyncio
@@ -100,6 +104,7 @@ async def test_get_challenge_accepts_single_cricket_ground_truth():
 
     with _patch_settings(), \
          patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
          patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=cricket_gt):
         challenge = await get_challenge_with_ground_truth(
             manifest_hash="abc123",
