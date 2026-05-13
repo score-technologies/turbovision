@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import random
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -49,6 +50,23 @@ shutdown_event = asyncio.Event()
 LOG_PREFIX = "[PTRunner] "
 
 
+def _emit_shard_concurrency() -> int:
+    raw = (os.getenv("SCOREVISION_EMIT_SHARD_CONCURRENCY", "1") or "1").strip()
+    try:
+        val = int(raw)
+    except Exception:
+        val = 1
+    return max(1, val)
+
+
+_EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
+
+
+async def _run_guarded(coro):
+    async with _EMIT_SHARD_SEM:
+        return await coro
+
+
 def _ground_truth_count(challenge: Challenge) -> int:
     ground_truth = challenge.ground_truth
     if isinstance(ground_truth, list):
@@ -92,20 +110,23 @@ async def _upload_to_private_r2(key: str, index_key: str, payload: dict, label: 
 
     client_factory = lambda: create_s3_client(cfg, error_message="Private R2 is not configured")
     try:
-        async with client_factory() as client:
-            await client.put_object(
-                Bucket=cfg.bucket,
-                Key=key,
-                Body=dumps(payload, separators=(",", ":")),
-                ContentType="application/json",
+        async def _upload():
+            async with client_factory() as client:
+                await client.put_object(
+                    Bucket=cfg.bucket,
+                    Key=key,
+                    Body=dumps(payload, separators=(",", ":")),
+                    ContentType="application/json",
+                )
+            await add_index_key_if_new(
+                client_factory=client_factory,
+                bucket=cfg.bucket,
+                key=key,
+                index_key=index_key,
             )
-        await add_index_key_if_new(
-            client_factory=client_factory,
-            bucket=cfg.bucket,
-            key=key,
-            index_key=index_key,
-        )
-        return key
+            return key
+
+        return await _run_guarded(_upload())
     except Exception as e:
         logger.error("%sFailed to upload %s: %s", LOG_PREFIX, label, e)
         return None
@@ -194,21 +215,24 @@ async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> st
     )
 
     try:
-        async with client_factory() as client:
-            await client.put_object(
-                Bucket=cfg.bucket,
-                Key=key,
-                Body=dumps([_strip_for_public_shard(r) for r in results], separators=(",", ":")),
-                ContentType="application/json",
+        async def _upload():
+            async with client_factory() as client:
+                await client.put_object(
+                    Bucket=cfg.bucket,
+                    Key=key,
+                    Body=dumps([_strip_for_public_shard(r) for r in results], separators=(",", ":")),
+                    ContentType="application/json",
+                )
+            await add_index_key_if_new(
+                client_factory=client_factory,
+                bucket=cfg.bucket,
+                key=key,
+                index_key=index_key,
             )
-        await add_index_key_if_new(
-            client_factory=client_factory,
-            bucket=cfg.bucket,
-            key=key,
-            index_key=index_key,
-        )
-        logger.info("Uploaded shard: %s", key)
-        return key
+            logger.info("Uploaded shard: %s", key)
+            return key
+
+        return await _run_guarded(_upload())
     except Exception as e:
         logger.error("Failed to upload shard: %s", e)
         return None
@@ -461,7 +485,7 @@ async def _emit_private_score_to_public_db(
         "image_digest": result.get("image_digest"),
     }
 
-    await emit_shard(
+    await _run_guarded(emit_shard(
         slug=f"private-{miner.uid}",
         challenge=challenge_obj,
         miner_run=miner_run,
@@ -478,7 +502,7 @@ async def _emit_private_score_to_public_db(
         commit_block=miner.commit_block,
         store_response_blob=False,
         responses_key_override=private_responses_key,
-    )
+    ))
 
 
 def _log_runner_task_failure(task: asyncio.Task, element_id: str, block: int) -> None:
