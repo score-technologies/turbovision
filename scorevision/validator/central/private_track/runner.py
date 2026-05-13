@@ -49,6 +49,13 @@ shutdown_event = asyncio.Event()
 LOG_PREFIX = "[PTRunner] "
 
 
+def _ground_truth_count(challenge: Challenge) -> int:
+    ground_truth = challenge.ground_truth
+    if isinstance(ground_truth, list):
+        return len(ground_truth)
+    return 1 if ground_truth is not None else 0
+
+
 def _is_weight_eligible_result(result: dict) -> bool:
     return result.get("timed_out") is not True
 
@@ -346,7 +353,7 @@ async def _challenge_miner(
             miner_uid=miner.uid,
             score=score,
             prediction_count=pred_count,
-            ground_truth_count=len(challenge.ground_truth),
+            ground_truth_count=_ground_truth_count(challenge),
             processing_time=attempt.elapsed_s,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
@@ -368,7 +375,7 @@ async def _challenge_miner(
             miner_uid=miner.uid,
             score=0.0,
             prediction_count=0,
-            ground_truth_count=len(challenge.ground_truth),
+            ground_truth_count=_ground_truth_count(challenge),
             processing_time=0.0,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,

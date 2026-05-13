@@ -20,7 +20,7 @@ class Challenge:
 
 def has_sufficient_actions(ground_truth: list[FramePrediction] | CricketDeliveryPrediction, groundtruth_type: str) -> bool:
     if groundtruth_type == "cricket_delivery":
-        return isinstance(ground_truth, CricketDeliveryPrediction)
+        return True
     return len(ground_truth) >= get_settings().PRIVATE_MIN_ACTIONS_FOR_CHALLENGE
 
 
