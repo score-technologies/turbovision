@@ -288,8 +288,11 @@ async def _challenge_miner(
 
         if is_scored:
             if challenge.groundtruth_type == "cricket_delivery":
+                cricket_prediction = None
+                if response.prediction is not None and hasattr(response.prediction, "item"):
+                    cricket_prediction = response.prediction.item
                 score, field_breakdown = score_cricket_prediction_with_breakdown(
-                    response.prediction,
+                    cricket_prediction,
                     challenge.ground_truth,
                 )
                 if pillar_weights and "cricket_scoring" in pillar_weights:
@@ -298,7 +301,7 @@ async def _challenge_miner(
                     score_breakdown = field_breakdown
                 pred_count = response.prediction_count
                 response_predictions = (
-                    [response.prediction.model_dump(mode="json")] if response.prediction else []
+                    [cricket_prediction.model_dump(mode="json")] if cricket_prediction else []
                 )
                 benchmark_result = None
             else:

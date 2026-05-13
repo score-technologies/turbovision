@@ -52,6 +52,28 @@ class CricketDeliveryPrediction(BaseModel):
     wickets: int | None = Field(default=None, validation_alias=AliasChoices("wickets", "wkts"))
 
 
+class PredictionPayload(BaseModel):
+    type: str
+    items: list[FramePrediction] | None = None
+    item: CricketDeliveryPrediction | None = None
+
+    @model_validator(mode="after")
+    def validate_payload(self):
+        if self.type == "soccer_action":
+            if self.items is None:
+                raise ValueError("soccer_action prediction requires items")
+            if self.item is not None:
+                raise ValueError("soccer_action prediction must not include item")
+            return self
+        if self.type == "cricket_delivery":
+            if self.item is None:
+                raise ValueError("cricket_delivery prediction requires item")
+            if self.items is not None:
+                raise ValueError("cricket_delivery prediction must not include items")
+            return self
+        raise ValueError(f"Unsupported prediction type: {self.type}")
+
+
 class ChallengeFrame(BaseModel):
     frame_id: int = Field(ge=0)
     url: str | None = None
@@ -81,31 +103,43 @@ class ChallengeRequest(BaseModel):
 class ChallengeResponse(BaseModel):
     challenge_id: str
     predictions: list[FramePrediction] | None = None
-    prediction: CricketDeliveryPrediction | None = None
+    prediction: PredictionPayload | CricketDeliveryPrediction | None = None
     processing_time: float
 
     @model_validator(mode="after")
     def validate_payload(self):
+        if isinstance(self.prediction, CricketDeliveryPrediction):
+            self.prediction = PredictionPayload(type="cricket_delivery", item=self.prediction)
+
         has_legacy_predictions = self.predictions is not None
-        has_cricket_prediction = self.prediction is not None
-        if has_legacy_predictions == has_cricket_prediction:
-            raise ValueError("ChallengeResponse requires exactly one of predictions or prediction")
+        has_prediction = self.prediction is not None
+
+        if not has_legacy_predictions and not has_prediction:
+            raise ValueError("ChallengeResponse requires prediction payload")
+
+        if self.prediction is None and self.predictions is not None:
+            self.prediction = PredictionPayload(type="soccer_action", items=self.predictions)
+        elif self.predictions is None and isinstance(self.prediction, PredictionPayload):
+            if self.prediction.type == "soccer_action":
+                self.predictions = self.prediction.items
         return self
 
     @property
     def prediction_count(self) -> int:
-        if self.prediction is not None:
+        if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery":
             return 1
+        if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "soccer_action":
+            return len(self.prediction.items or [])
         return len(self.predictions or [])
 
     @property
     def is_cricket(self) -> bool:
-        return self.prediction is not None
+        return isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery"
 
     @model_serializer(mode="wrap")
     def serialize_model(self, handler):
         data = handler(self)
-        if self.is_cricket:
+        if isinstance(self.prediction, PredictionPayload):
             return {
                 "challenge_id": data["challenge_id"],
                 "prediction": data["prediction"],
