@@ -398,7 +398,7 @@ async def weights_loop(
 
                         lane = "private" if is_private else "public"
                         min_samples = private_min_samples if is_private else public_min_samples
-                        winner_uid, _, winner_meta, sample_rows_all = await get_winner_for_element(
+                        winner_uid, winner_scores_by_uid, winner_meta, sample_rows_all = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
@@ -415,13 +415,32 @@ async def weights_loop(
                             continue
 
                         share = float(elem_weight)
+                        groundtruth_type = (
+                            str(getattr(elem, "groundtruth_type", "") or "").strip().lower()
+                            if elem is not None
+                            else ""
+                        )
+                        if is_private and groundtruth_type == "cricket_delivery":
+                            winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
+                            winner_score = max(0.0, min(1.0, winner_score_raw))
+                            share = share * winner_score
+                            logger.info(
+                                "[weights] Cricket private weighting enabled element=%s winner_uid=%d elem_weight=%.6f winner_score=%.6f share=%.6f",
+                                element_id,
+                                winner_uid,
+                                elem_weight,
+                                winner_score,
+                                share,
+                            )
+
                         weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
 
                         logger.info(
-                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f",
+                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f share=%.6f",
                             element_id,
                             winner_uid,
                             elem_weight,
+                            share,
                         )
                         if winner_meta and winner_meta.get("hotkey"):
                             top_3_official = _top_rows(
