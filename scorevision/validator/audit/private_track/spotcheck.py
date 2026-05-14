@@ -9,17 +9,32 @@ from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.r2 import audit_r2_config, create_s3_client, ensure_index_exists, add_index_key_if_new, is_configured
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.request_signing import build_signed_headers
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
 from scorevision.validator.audit.open_source.spotcheck import calculate_match_percentage
 from scorevision.validator.central.private_track.challenges import fetch_ground_truth
-from scorevision.validator.central.private_track.scoring import score_predictions
+from scorevision.validator.central.private_track.scoring import (
+    score_cricket_prediction_with_breakdown,
+    score_predictions,
+)
 from scorevision.validator.models import SpotcheckResult
 
 logger = getLogger(__name__)
 
 LOG_PREFIX = "[PTSpotcheck] "
+
+_CRICKET_HINT_FIELDS = {
+    "kph",
+    "bounce_x",
+    "stump_y",
+    "stump_z",
+    "impact_x",
+    "impact_y",
+    "impact_z",
+    "swing_angle",
+    "deviation",
+}
 
 
 async def fetch_random_challenge(tail_blocks: int = 28800) -> tuple[str, list[dict]] | None:
@@ -85,7 +100,41 @@ async def fetch_miner_responses(challenge_id: str, keypair) -> dict[str, list[di
     return result
 
 
-def rescore_miner(predictions_raw: list[dict], ground_truth: list[FramePrediction]) -> float:
+def _prediction_looks_cricket(prediction: dict) -> bool:
+    keys = set(prediction.keys())
+    if "frame" in keys and "action" in keys:
+        return False
+    return bool(keys & _CRICKET_HINT_FIELDS)
+
+
+def _infer_groundtruth_type(
+    challenge_results: list[dict],
+    miner_responses: dict[str, list[dict]],
+) -> str:
+    for entry in challenge_results:
+        gt = str(entry.get("groundtruth_type") or "").strip()
+        if gt in {"soccer_action", "cricket_delivery"}:
+            return gt
+
+    for predictions_raw in miner_responses.values():
+        if not predictions_raw:
+            continue
+        first = predictions_raw[0]
+        if isinstance(first, dict) and _prediction_looks_cricket(first):
+            return "cricket_delivery"
+
+    return "soccer_action"
+
+
+def _extract_element_id(challenge_results: list[dict]) -> str | None:
+    for entry in challenge_results:
+        element_id = str(entry.get("element_id") or "").strip()
+        if element_id:
+            return element_id
+    return None
+
+
+def rescore_miner_soccer(predictions_raw: list[dict], ground_truth: list[FramePrediction]) -> float:
     predictions = [
         FramePrediction(frame=p["frame"], action=p["action"], confidence=p.get("confidence", 1.0))
         for p in predictions_raw
@@ -94,14 +143,34 @@ def rescore_miner(predictions_raw: list[dict], ground_truth: list[FramePredictio
     return score_predictions(predictions, ground_truth)
 
 
+def rescore_miner_cricket(
+    predictions_raw: list[dict],
+    ground_truth: CricketDeliveryPrediction,
+) -> float:
+    prediction_obj = None
+    if predictions_raw:
+        first = predictions_raw[0]
+        if isinstance(first, dict):
+            prediction_obj = CricketDeliveryPrediction(**first)
+    score, _ = score_cricket_prediction_with_breakdown(prediction_obj, ground_truth)
+    return score
+
+
 async def run_private_spotcheck(
     challenge_id: str,
     challenge_results: list[dict],
     keypair,
     threshold: float,
 ) -> list[SpotcheckResult]:
-    ground_truth = await fetch_ground_truth(challenge_id, keypair)
     miner_responses = await fetch_miner_responses(challenge_id, keypair)
+    groundtruth_type = _infer_groundtruth_type(challenge_results, miner_responses)
+    element_id = _extract_element_id(challenge_results)
+    ground_truth = await fetch_ground_truth(
+        challenge_id,
+        keypair,
+        element_id=element_id,
+        groundtruth_type=groundtruth_type,
+    )
 
     results: list[SpotcheckResult] = []
     for entry in challenge_results:
@@ -113,18 +182,21 @@ async def run_private_spotcheck(
             logger.warning("%sNo response data for miner %s", LOG_PREFIX, miner_hotkey)
             continue
 
-        audit_score = rescore_miner(predictions_raw, ground_truth)
+        if groundtruth_type == "cricket_delivery":
+            audit_score = rescore_miner_cricket(predictions_raw, ground_truth)
+        else:
+            audit_score = rescore_miner_soccer(predictions_raw, ground_truth)
         match_pct = calculate_match_percentage(central_score, audit_score)
         passed = match_pct >= threshold
 
         logger.info(
-            "%sMiner %s: central=%.4f audit=%.4f match=%.2f%% passed=%s",
-            LOG_PREFIX, miner_hotkey, central_score, audit_score, match_pct * 100, passed,
+            "%sMiner %s (%s): central=%.4f audit=%.4f match=%.2f%% passed=%s",
+            LOG_PREFIX, miner_hotkey, groundtruth_type, central_score, audit_score, match_pct * 100, passed,
         )
 
         results.append(SpotcheckResult(
             challenge_id=challenge_id,
-            element_id="",
+            element_id=str(entry.get("element_id") or element_id or ""),
             miner_hotkey=miner_hotkey,
             central_score=central_score,
             audit_score=audit_score,
