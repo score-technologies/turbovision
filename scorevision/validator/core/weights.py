@@ -419,11 +419,11 @@ async def weights_loop(
                             continue
 
                         share = float(elem_weight)
-                        groundtruth_type = (
-                            str(getattr(elem, "groundtruth_type", "") or "").strip().lower()
-                            if elem is not None
-                            else ""
-                        )
+                        raw_groundtruth_type = getattr(elem, "groundtruth_type", None) if elem is not None else None
+                        if hasattr(raw_groundtruth_type, "value"):
+                            groundtruth_type = str(raw_groundtruth_type.value or "").strip().lower()
+                        else:
+                            groundtruth_type = str(raw_groundtruth_type or "").strip().lower()
                         if is_private and groundtruth_type == "cricket_delivery":
                             winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
                             winner_score = max(0.0, min(1.0, winner_score_raw))
@@ -435,6 +435,12 @@ async def weights_loop(
                                 elem_weight,
                                 winner_score,
                                 share,
+                            )
+                        elif is_private:
+                            logger.info(
+                                "[weights] Private element=%s not in cricket weighting mode (groundtruth_type=%s)",
+                                element_id,
+                                groundtruth_type or "<empty>",
                             )
 
                         weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
