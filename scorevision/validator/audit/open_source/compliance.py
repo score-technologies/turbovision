@@ -55,6 +55,9 @@ def _load_security_runner():
     raise RuntimeError("default security runner unavailable")
 
 
+run_local_inference_from_hf = _load_security_runner()
+
+
 def checker_r2_config() -> R2Config:
     s = get_settings()
     return R2Config(
@@ -482,4 +485,3 @@ async def compliance_loop() -> None:
         except Exception as e:
             logger.warning("[compliance] loop error: %s", e)
         await asyncio.sleep(max(20, settings.CHECKER_POLL_INTERVAL_S))
-    run_local_inference_from_hf = _load_security_runner()
