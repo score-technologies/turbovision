@@ -166,6 +166,7 @@ async def get_winner_for_element(
     tail: int,
     m_min: int,
     baseline_theta: float | None = None,
+    first_block: int | None = None,
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
     lane: str = "public",
@@ -426,6 +427,13 @@ async def get_winner_for_element(
             first_commit_block_by_hk = await _first_commit_block_by_miner(
                 netuid,
                 element_id=element_id,
+                candidate_hotkeys={uid_to_hk[uid] for uid in candidate_uids if uid in uid_to_hk},
+                backfill_allowed_hotkeys={
+                    uid_to_hk[uid]
+                    for uid in challenge_scores_by_miner.keys()
+                    if uid in uid_to_hk
+                },
+                first_block=first_block,
             )
             final_uid = pick_winner_with_tiebreak(
                 winner_uid,

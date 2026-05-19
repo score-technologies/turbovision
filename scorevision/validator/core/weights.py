@@ -60,6 +60,10 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5CqKodaU2F5atWnLBivA2TeQWoJ9jxfPwADQ2HAWfAQHNsZV",
     "5CmCgAKAW1B3YmBDeVJxxd2MbhMeC6n1esJsVFdb2qUvD55r",
     "5Fnx48i6A6KtN9a8pAxQDZDQo3Z49JeviaLkcJUbLB9yCM4Q",
+    "5HBK3g2PURYZ99ufLRCfoqEga6ScT8KzVerxk54BELF7hZvu",
+    "5FZiTikQum61QyzWaaGmsiKmH1eX2jLcZ61V2E2WBg1QAAYV",
+    "5C81gi3bXLbAWccH6VFY5T7BNhv9usEMdtwxHUVqeFPJ3zy9",
+    "5Gj9pWjksQXkuaoVxHRaKN1pmgQYiUddrNweY3SFBWMGo2QD",
 }
 
 
@@ -272,6 +276,7 @@ async def weights_loop(
         if settings.BLACKLIST_API_URL
         else None
     )
+    get_block_timeout = float(os.getenv("SV_GET_CURRENT_BLOCK_TIMEOUT_S", "12"))
 
     while not shutdown_event.is_set():
         try:
@@ -282,7 +287,28 @@ async def weights_loop(
             if subtensor is None:
                 subtensor = await get_subtensor()
 
-            block = await subtensor.get_current_block()
+            try:
+                block = await asyncio.wait_for(
+                    subtensor.get_current_block(),
+                    timeout=get_block_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[weights] get_current_block() timed out after %.1fs; resetting subtensor",
+                    get_block_timeout,
+                )
+                VALIDATOR_LOOP_TOTAL.labels(outcome="subtensor_error").inc()
+                reset_subtensor()
+                subtensor = None
+                await asyncio.sleep(2.0)
+                continue
+            except (KeyError, ConnectionError, RuntimeError) as err:
+                logger.warning("[weights] get_current_block error (%s); resetting subtensor", err)
+                VALIDATOR_LOOP_TOTAL.labels(outcome="subtensor_error").inc()
+                reset_subtensor()
+                subtensor = None
+                await asyncio.sleep(2.0)
+                continue
             VALIDATOR_BLOCK_HEIGHT.set(block)
 
             current_window_id = get_current_window_id(block, tempo=tempo)
@@ -354,11 +380,14 @@ async def weights_loop(
                             tail_for_element = public_tail_blocks
                         max_tail_used = max(max_tail_used, tail_for_element)
                         baseline_theta = None
+                        first_block = None
                         try:
                             elem = manifest.get_element(id=element_id)
                             baseline_theta = getattr(elem, "baseline_theta", None) if elem is not None else None
+                            first_block = getattr(elem, "first_block", None) if elem is not None else None
                         except Exception:
                             baseline_theta = None
+                            first_block = None
 
                         logger.info(
                             "[weights] element=%s track=%s eval_window_days=%s -> tail_blocks=%d",
@@ -373,12 +402,13 @@ async def weights_loop(
 
                         lane = "private" if is_private else "public"
                         min_samples = private_min_samples if is_private else public_min_samples
-                        winner_uid, _, winner_meta, sample_rows_all = await get_winner_for_element(
+                        winner_uid, winner_scores_by_uid, winner_meta, sample_rows_all = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
                             m_min=min_samples,
                             baseline_theta=baseline_theta,
+                            first_block=first_block,
                             blacklisted_hotkeys=blacklisted_hotkeys,
                             validator_hotkey_ss58=validator_hotkey_ss58,
                             lane=lane,
@@ -389,13 +419,38 @@ async def weights_loop(
                             continue
 
                         share = float(elem_weight)
+                        raw_groundtruth_type = getattr(elem, "groundtruth_type", None) if elem is not None else None
+                        if hasattr(raw_groundtruth_type, "value"):
+                            groundtruth_type = str(raw_groundtruth_type.value or "").strip().lower()
+                        else:
+                            groundtruth_type = str(raw_groundtruth_type or "").strip().lower()
+                        if is_private and groundtruth_type == "cricket_delivery":
+                            winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
+                            winner_score = max(0.0, min(1.0, winner_score_raw))
+                            share = share * winner_score
+                            logger.info(
+                                "[weights] Cricket private weighting enabled element=%s winner_uid=%d elem_weight=%.6f winner_score=%.6f share=%.6f",
+                                element_id,
+                                winner_uid,
+                                elem_weight,
+                                winner_score,
+                                share,
+                            )
+                        elif is_private:
+                            logger.info(
+                                "[weights] Private element=%s not in cricket weighting mode (groundtruth_type=%s)",
+                                element_id,
+                                groundtruth_type or "<empty>",
+                            )
+
                         weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
 
                         logger.info(
-                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f",
+                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f share=%.6f",
                             element_id,
                             winner_uid,
                             elem_weight,
+                            share,
                         )
                         if winner_meta and winner_meta.get("hotkey"):
                             top_3_official = _top_rows(

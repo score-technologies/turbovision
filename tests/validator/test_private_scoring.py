@@ -1,16 +1,18 @@
 from unittest.mock import patch
 from types import SimpleNamespace
+import pytest
 
 from scorevision.validator.central.private_track.scoring import (
     calculate_time_decay,
     find_best_match,
     frame_to_seconds,
     register_pillar_scorer,
+    score_cricket_prediction_with_breakdown,
     score_predictions,
     score_predictions_for_pillar,
     score_predictions_with_breakdown,
 )
-from scorevision.utils.schemas import FramePrediction
+from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
 
 
 _FAKE_SETTINGS = SimpleNamespace(PRIVATE_FRAME_RATE=25)
@@ -149,3 +151,20 @@ def test_register_pillar_scorer_dispatches_custom_pillar():
         )
         assert score == 0.42
         assert breakdown["rugby_action"] == 0.42
+
+
+def test_cricket_scoring_top6_fields_perfect_match():
+    prediction = CricketDeliveryPrediction(
+        kph=130.0,
+        bounce_x=6.0,
+        stump_y=0.2,
+        deviation=1.0,
+        swing_angle=-0.5,
+        stump_z=0.8,
+    )
+    score, breakdown = score_cricket_prediction_with_breakdown(prediction, prediction)
+
+    # Only the 6 heaviest-weight fields are present in this fixture.
+    # Their total weight is 0.74, so a perfect match on those fields yields 0.74.
+    assert score == pytest.approx(0.74)
+    assert breakdown["kph"] == 1.0

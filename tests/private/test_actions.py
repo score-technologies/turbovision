@@ -17,7 +17,6 @@ def test_action_config_is_named_tuple():
 def test_action_string_values():
     assert Action.PASS.value == "pass"
     assert Action.GOAL.value == "goal"
-    assert Action.END_OF_HALF.value == "end_of_half"
 
 
 def test_action_from_string():

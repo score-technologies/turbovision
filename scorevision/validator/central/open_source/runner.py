@@ -474,6 +474,7 @@ async def runner(
         miners, skipped_miners = await get_miners_from_registry(
             netuid,
             element_id=element_id,
+            first_block=getattr(element, "first_block", None),
             max_model_size_mb=getattr(element, "max_model_size_mb", None),
             onnx_only=getattr(element, "onnx_model", None),
         )

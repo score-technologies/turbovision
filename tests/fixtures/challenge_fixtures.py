@@ -3,9 +3,6 @@ from pathlib import Path
 
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
 from scorevision.utils.data_models import SVChallenge
-from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
-    ChallengeType,
-)
 from scorevision.utils.video_processing import FrameStore
 
 
@@ -26,11 +23,11 @@ def fake_challenge(fake_payload) -> SVChallenge:
     return SVChallenge(
         env="SVEnv",
         payload=fake_payload,
-        meta={},
+        meta={"challenge_type_id": 1},
         prompt="ScoreVision video task mock-challenge",
         challenge_id="0",
         frame_numbers=[1, 2, 3],
         frames=[],
         dense_optical_flow_frames=[],
-        challenge_type=ChallengeType.FOOTBALL,
+        challenge_type_id=1,
     )

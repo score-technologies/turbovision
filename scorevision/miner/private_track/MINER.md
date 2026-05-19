@@ -1,12 +1,14 @@
 # Miner Guide
 
-## Overview
+## Overview   
 
 Miners receive video challenges from Score's central validator and return action predictions.
 
 ```
 Score Validator → POST /challenge → Your Miner → Response → Score Validator
 ```
+
+Private track is for now element-specific. A miner deployment should serve one private element at a time (for example football or cricket), and commit that exact `element_id` on-chain.
 
 ## Registration on the Subnet
 Make sure your hotkey is registered on subnet **44**:
@@ -184,6 +186,77 @@ def predict_actions(video_path: Path) -> list[FramePrediction]:
     return predictions
 ```
 
+### 1.1 Choose Your Private Element Mode
+
+Current private elements are served as separate tracks from the miner point of view:
+
+- Football private element (`groundtruth_type=soccer_action`)
+- Cricket private element (`groundtruth_type=cricket_delivery`)
+
+The template miner uses a static mode switch in `scorevision/miner/private_track/routes.py`:
+
+```python
+MINER_MODE = "soccer_action"  # or "cricket_delivery"
+```
+
+Keep one deployment per mode. Do not expect one running container to handle both private element types automatically.
+
+### 1.2 Response Contract (Important)
+
+`/challenge` must return a `ChallengeResponse` compatible payload:
+
+- For football:
+
+```json
+{
+  "challenge_id": "123",
+  "prediction": {
+    "type": "soccer_action",
+    "items": [
+      {"frame": 25, "action": "pass", "confidence": 1.0}
+    ]
+  },
+  "processing_time": 0.42
+}
+```
+
+- For cricket:
+
+```json
+{
+  "challenge_id": "123",
+  "prediction": {
+    "type": "cricket_delivery",
+    "item": {
+      "kph": 126.8,
+      "bounce_x": 8.0,
+      "stump_y": 0.02
+    }
+  },
+  "processing_time": 0.42
+}
+```
+
+For full cricket field guidance, see `scorevision/miner/CRICKET_MINER_SPEC.md`.
+
+### 1.3 On-Chain Commitment Must Match Element
+
+Your private commitment must include the exact `element_id` you serve. If commitment and served element differ, the validator will skip or zero-score your miner for that element.
+
+Example commitment shape (conceptual):
+
+```json
+{
+  "track": "private",
+  "role": "miner",
+  "element_id": "manako/DetectFootballEvent",
+  "image_repo": "ghcr.io/<user>/pt-solution",
+  "image_tag": "v1.0.0"
+}
+```
+
+If you serve cricket, use the cricket element id instead.
+
 ### 2. Test Locally (Without Wallet)
 
 For local development without a Bittensor wallet, disable security checks:
@@ -244,6 +317,18 @@ The CLI will:
 4. Start the container locally
 
 After deployment, **share with Score** (see [GHCR Setup](#ghcr-setup) step 4).
+
+## Private Miner Checklist (Football / Cricket)
+
+Before declaring your miner live:
+
+1. Set `MINER_MODE` to the intended private element type.
+2. Ensure predictor output matches the expected response payload (`soccer_action.items` or `cricket_delivery.item`).
+3. Deploy image and commit with the correct private `element_id`.
+4. Verify your axon IP/port is reachable.
+5. Confirm Score has GHCR read access to your package.
+
+If any of these are mismatched, your miner may appear online but still be excluded from private scoring.
 
 **For production**, always run with wallet mounted and security enabled:
 

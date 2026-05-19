@@ -56,7 +56,7 @@ async def run(cfg: RunnerConfig) -> None:
         emit({**base, "status": "FAIL", "reason": "no_response"})
         sys.exit(1)
 
-    spotcheck_score = score_predictions(response.predictions, cfg.ground_truth)
+    spotcheck_score = score_predictions(response.predictions or [], cfg.ground_truth)
 
     passed = scores_match(cfg.original_score, spotcheck_score, cfg.match_threshold)
 
@@ -67,7 +67,7 @@ async def run(cfg: RunnerConfig) -> None:
         "spotcheck_score": round(spotcheck_score, 6),
         "score_diff": round(abs(cfg.original_score - spotcheck_score), 6),
         "elapsed_s": round(elapsed, 3),
-        "prediction_count": len(response.predictions),
+        "prediction_count": response.prediction_count,
         "processing_time": round(response.processing_time, 3),
     })
 
