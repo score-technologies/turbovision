@@ -553,16 +553,55 @@ async def run_public_compliance_once() -> dict[str, Any]:
         all_ok = True
         details: list[dict[str, Any]] = []
         did_warmup = False
+        missing_blob_count = 0
+        local_error_count = 0
+        iou_fail_count = 0
+        ok_count = 0
         for record in sampled:
+            challenge_id = record["challenge_id"]
+            responses_key = record["responses_key"]
             exp_preds, _video_url, payload_frames = await fetch_responses_data(
-                record["responses_key"], settings.SCOREVISION_PUBLIC_RESULTS_URL
+                responses_key, settings.SCOREVISION_PUBLIC_RESULTS_URL
             )
             if not exp_preds or not payload_frames:
                 all_ok = False
-                details.append({"challenge_id": record["challenge_id"], "ok": False, "reason": "missing_response_blob"})
+                missing_blob_count += 1
+                logger.warning(
+                    "[compliance] missing response blob element=%s hotkey=%s challenge_id=%s responses_key=%s has_preds=%s has_frames=%s",
+                    element_id,
+                    hotkey,
+                    challenge_id,
+                    responses_key,
+                    bool(exp_preds),
+                    bool(payload_frames),
+                )
+                details.append({"challenge_id": challenge_id, "ok": False, "reason": "missing_response_blob"})
                 continue
             if not did_warmup:
-                _ = run_local_inference_from_hf(
+                try:
+                    _ = run_local_inference_from_hf(
+                        model_repo=str(target["model"]),
+                        revision=str(target["revision"]),
+                        payload_frames=payload_frames,
+                        n_keypoints=32,
+                        max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
+                        memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
+                        cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
+                        wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[compliance] warmup exception element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
+                        element_id,
+                        hotkey,
+                        challenge_id,
+                        target["model"],
+                        target["revision"],
+                        e,
+                    )
+                did_warmup = True
+            try:
+                local = run_local_inference_from_hf(
                     model_repo=str(target["model"]),
                     revision=str(target["revision"]),
                     payload_frames=payload_frames,
@@ -572,20 +611,33 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
                     wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
                 )
-                did_warmup = True
-            local = run_local_inference_from_hf(
-                model_repo=str(target["model"]),
-                revision=str(target["revision"]),
-                payload_frames=payload_frames,
-                n_keypoints=32,
-                max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
-                memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
-                cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
-                wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
-            )
+            except Exception as e:
+                all_ok = False
+                local_error_count += 1
+                logger.warning(
+                    "[compliance] local run exception element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
+                    element_id,
+                    hotkey,
+                    challenge_id,
+                    target["model"],
+                    target["revision"],
+                    e,
+                )
+                details.append({"challenge_id": challenge_id, "ok": False, "reason": f"local_exception:{e}"})
+                continue
             if not local.success or not local.predictions:
                 all_ok = False
-                details.append({"challenge_id": record["challenge_id"], "ok": False, "reason": local.error})
+                local_error_count += 1
+                logger.warning(
+                    "[compliance] local run failed element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
+                    element_id,
+                    hotkey,
+                    challenge_id,
+                    target["model"],
+                    target["revision"],
+                    local.error,
+                )
+                details.append({"challenge_id": challenge_id, "ok": False, "reason": local.error})
                 continue
             latencies.append(float(local.latency_ms))
             ok_iou, info = _compare_predictions_iou(
@@ -595,9 +647,20 @@ async def run_public_compliance_once() -> dict[str, Any]:
             )
             if not ok_iou:
                 all_ok = False
+                iou_fail_count += 1
+                logger.warning(
+                    "[compliance] iou mismatch element=%s hotkey=%s challenge_id=%s mean_iou=%.4f threshold=%.4f",
+                    element_id,
+                    hotkey,
+                    challenge_id,
+                    float(info.get("mean_iou", 0.0)),
+                    float(info.get("threshold", settings.CHECKER_IOU_MATCH_THRESHOLD)),
+                )
+            else:
+                ok_count += 1
             details.append(
                 {
-                    "challenge_id": record["challenge_id"],
+                    "challenge_id": challenge_id,
                     "ok": ok_iou,
                     "latency_ms": local.latency_ms,
                     "compare": info,
@@ -619,6 +682,18 @@ async def run_public_compliance_once() -> dict[str, Any]:
             "details": details,
         }
         run_results.append(result_row)
+        logger.info(
+            "[compliance] target done element=%s hotkey=%s status=%s sampled=%d ok=%d local_errors=%d missing_blob=%d iou_fail=%d p95=%.2fms",
+            element_id,
+            hotkey,
+            status,
+            len(sampled),
+            ok_count,
+            local_error_count,
+            missing_blob_count,
+            iou_fail_count,
+            float(p95_ms),
+        )
         if status != "PASS":
             failed_tuples.append(
                 {
