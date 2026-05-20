@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import json
 import random
 from json import dumps
 from logging import getLogger
@@ -12,7 +13,6 @@ from types import SimpleNamespace
 import os
 
 from scorevision.utils.bittensor_helpers import get_subtensor
-from scorevision.utils.miner_registry import get_miners_from_registry
 from scorevision.utils.r2 import (
     add_index_key_if_new,
     create_s3_client,
@@ -246,36 +246,135 @@ async def _load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
 
 def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
     winners = snapshot.get("winners") or {}
-    pairs: set[tuple[str, str]] = set()
+    targets: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
     for element_id, entry in winners.items():
         if not isinstance(entry, dict):
             continue
         for key in ("top_3_official", "top_3_watchlist"):
             for row in (entry.get(key) or []):
                 hk = str((row or {}).get("hotkey") or "").strip()
-                if hk:
-                    pairs.add((str(element_id), hk))
-    return sorted(pairs)
+                eid = str(element_id)
+                if not hk:
+                    continue
+                dedup_key = (eid, hk)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                commit_block = row.get("commit_block", row.get("block"))
+                try:
+                    commit_block = int(commit_block) if commit_block is not None else None
+                except Exception:
+                    commit_block = None
+                targets.append(
+                    {
+                        "element_id": eid,
+                        "hotkey": hk,
+                        "model": row.get("model"),
+                        "revision": row.get("revision"),
+                        "commit_block": commit_block,
+                    }
+                )
+    return sorted(targets, key=lambda t: (t["element_id"], t["hotkey"]))
+
+
+def _pick_latest_miner_commit_for_element(
+    commits: list[tuple[int, str]] | None,
+    wanted_element_id: str,
+) -> tuple[int | None, dict[str, Any] | None]:
+    best_block = None
+    best_obj = None
+    for block, payload in (commits or []):
+        try:
+            block_i = int(block)
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        if obj.get("role") != "miner":
+            continue
+        committed_eid = obj.get("element_id")
+        committed_eid = str(committed_eid).strip() if committed_eid is not None else None
+        if committed_eid != wanted_element_id:
+            continue
+        if best_block is None or block_i > best_block:
+            best_block = block_i
+            best_obj = obj
+    return best_block, best_obj
+
+
+async def _fetch_commitment_context(
+    netuid: int,
+) -> tuple[dict[str, list[tuple[int, str]]], dict[str, int]]:
+    st = await get_subtensor()
+    meta = await st.metagraph(netuid, mechid=get_settings().SCOREVISION_MECHID)
+    commits = await st.get_all_revealed_commitments(netuid)
+    hotkey_to_uid = {hk: uid for uid, hk in enumerate(meta.hotkeys)}
+    return commits, hotkey_to_uid
 
 
 async def _resolve_target_commit(
-    element_id: str,
-    hotkey: str,
+    target: dict[str, Any],
+    commits_by_hotkey: dict[str, list[tuple[int, str]]],
+    hotkey_to_uid: dict[str, int],
 ) -> dict[str, Any] | None:
-    settings = get_settings()
-    miners, _ = await get_miners_from_registry(settings.SCOREVISION_NETUID, element_id=element_id)
-    for miner in miners.values():
-        if (miner.hotkey or "").strip() == hotkey:
-            if not miner.model or not miner.revision:
-                return None
-            return {
-                "element_id": element_id,
-                "hotkey": hotkey,
-                "commit_block": int(miner.block),
-                "model": str(miner.model),
-                "revision": str(miner.revision),
-            }
-    return None
+    element_id = str(target["element_id"])
+    hotkey = str(target["hotkey"])
+    model = target.get("model")
+    revision = target.get("revision")
+    commit_block = target.get("commit_block")
+
+    if model and revision and commit_block is not None:
+        logger.info(
+            "[compliance] target element=%s hotkey=%s resolved from winners snapshot block=%s",
+            element_id,
+            hotkey,
+            commit_block,
+        )
+        return {
+            "element_id": element_id,
+            "hotkey": hotkey,
+            "commit_block": int(commit_block),
+            "model": str(model),
+            "revision": str(revision),
+            "uid": hotkey_to_uid.get(hotkey),
+        }
+
+    commits = commits_by_hotkey.get(hotkey)
+    block, obj = _pick_latest_miner_commit_for_element(commits, element_id)
+    if obj is None or block is None:
+        logger.warning(
+            "[compliance] target element=%s hotkey=%s no matching on-chain miner commitment",
+            element_id,
+            hotkey,
+        )
+        return None
+
+    model = obj.get("model")
+    revision = obj.get("revision")
+    if not model or not revision:
+        logger.warning(
+            "[compliance] target element=%s hotkey=%s commitment missing model/revision",
+            element_id,
+            hotkey,
+        )
+        return None
+    logger.info(
+        "[compliance] target element=%s hotkey=%s resolved on-chain uid=%s block=%s model=%s revision=%s",
+        element_id,
+        hotkey,
+        hotkey_to_uid.get(hotkey),
+        block,
+        model,
+        revision,
+    )
+    return {
+        "element_id": element_id,
+        "hotkey": hotkey,
+        "commit_block": int(block),
+        "model": str(model),
+        "revision": str(revision),
+        "uid": hotkey_to_uid.get(hotkey),
+    }
 
 
 async def _sample_challenges_for_tuple(
@@ -335,12 +434,26 @@ async def run_public_compliance_once() -> dict[str, Any]:
 
     winners_block, snapshot = await _load_latest_winners_snapshot()
     targets = _targets_from_winners(snapshot)
+    logger.info(
+        "[compliance] winners block=%s extracted targets=%d",
+        winners_block,
+        len(targets),
+    )
+    if targets:
+        sample = ", ".join(
+            f"{t['element_id']}:{t['hotkey'][:8]}...({('snapshot' if t.get('model') and t.get('revision') else 'chain')})"
+            for t in targets[:5]
+        )
+        logger.info("[compliance] winners sample: %s", sample)
+    commits_by_hotkey, hotkey_to_uid = await _fetch_commitment_context(settings.SCOREVISION_NETUID)
 
     run_results: list[dict[str, Any]] = []
     failed_tuples: list[dict[str, Any]] = []
 
-    for element_id, hotkey in targets:
-        target = await _resolve_target_commit(element_id, hotkey)
+    for target_row in targets:
+        element_id = str(target_row["element_id"])
+        hotkey = str(target_row["hotkey"])
+        target = await _resolve_target_commit(target_row, commits_by_hotkey, hotkey_to_uid)
         if not target:
             run_results.append(
                 {
