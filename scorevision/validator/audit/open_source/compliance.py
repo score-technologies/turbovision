@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import random
+import threading
 from json import dumps
 from logging import getLogger
 from time import time
@@ -29,6 +30,18 @@ from scorevision.utils.settings import get_settings
 from scorevision.validator.central.scheduling import load_manifest
 
 logger = getLogger(__name__)
+
+_PREV_THREAD_EXCEPTHOOK = threading.excepthook
+
+
+def _quiet_thread_eof(args: threading.ExceptHookArgs):
+    # Suppress noisy QueueListener EOFError monitor thread tracebacks.
+    if args.exc_type is EOFError and args.thread and args.thread.name == "Thread-2":
+        return
+    _PREV_THREAD_EXCEPTHOOK(args)
+
+
+threading.excepthook = _quiet_thread_eof
 
 
 def _load_security_runner():
@@ -55,6 +68,21 @@ def _load_security_runner():
     if callable(fn):
         return fn
     raise RuntimeError("default security runner unavailable")
+
+
+def _load_security_module():
+    module_name = (os.getenv("CHECKER_SECURITY_MODULE") or "").strip()
+    file_path = (os.getenv("CHECKER_SECURITY_FILE") or "").strip()
+    if module_name:
+        return importlib.import_module(module_name)
+    if file_path:
+        spec = importlib.util.spec_from_file_location("checker_security_local", file_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"unable to load security file: {file_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    return importlib.import_module("scorevision.validator.audit.open_source.security")
 
 
 def _fallback_security_runner(
@@ -87,6 +115,7 @@ def _fallback_security_runner(
 
 
 _SECURITY_RUNNER = None
+_PERSISTENT_WORKER_CLASS = None
 
 
 def _get_security_runner():
@@ -99,6 +128,22 @@ def _get_security_runner():
         logger.warning("Falling back to stub security runner: %s", e)
         _SECURITY_RUNNER = _fallback_security_runner
     return _SECURITY_RUNNER
+
+
+def _get_persistent_worker_class():
+    global _PERSISTENT_WORKER_CLASS
+    if _PERSISTENT_WORKER_CLASS is not None:
+        return _PERSISTENT_WORKER_CLASS
+    try:
+        mod = _load_security_module()
+        klass = getattr(mod, "PersistentInferenceWorker", None)
+        if klass is not None:
+            logger.info("[compliance] using PersistentInferenceWorker from security module")
+        _PERSISTENT_WORKER_CLASS = klass
+    except Exception as e:
+        logger.warning("[compliance] persistent worker unavailable: %s", e)
+        _PERSISTENT_WORKER_CLASS = None
+    return _PERSISTENT_WORKER_CLASS
 
 
 def checker_r2_config() -> R2Config:
@@ -465,6 +510,7 @@ def _p95(values: list[float]) -> float:
 async def run_public_compliance_once() -> dict[str, Any]:
     settings = get_settings()
     run_local_inference_from_hf = _get_security_runner()
+    persistent_worker_class = _get_persistent_worker_class()
     cfg = checker_r2_config()
     if not is_configured(cfg, require_bucket=True):
         raise RuntimeError("Checker R2 not configured")
@@ -552,11 +598,41 @@ async def run_public_compliance_once() -> dict[str, Any]:
         latencies: list[float] = []
         all_ok = True
         details: list[dict[str, Any]] = []
-        did_warmup = False
         missing_blob_count = 0
         local_error_count = 0
         iou_fail_count = 0
         ok_count = 0
+        worker = None
+        if persistent_worker_class is not None:
+            try:
+                worker = persistent_worker_class(
+                    model_repo=str(target["model"]),
+                    revision=str(target["revision"]),
+                    n_keypoints=32,
+                    max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
+                    memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
+                    cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
+                    wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
+                )
+                worker.start()
+                logger.info(
+                    "[compliance] persistent worker started element=%s hotkey=%s model=%s revision=%s",
+                    element_id,
+                    hotkey,
+                    target["model"],
+                    target["revision"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "[compliance] failed to start persistent worker element=%s hotkey=%s model=%s revision=%s err=%s; falling back",
+                    element_id,
+                    hotkey,
+                    target["model"],
+                    target["revision"],
+                    e,
+                )
+                worker = None
+
         for record in sampled:
             challenge_id = record["challenge_id"]
             responses_key = record["responses_key"]
@@ -577,9 +653,11 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 )
                 details.append({"challenge_id": challenge_id, "ok": False, "reason": "missing_response_blob"})
                 continue
-            if not did_warmup:
-                try:
-                    _ = run_local_inference_from_hf(
+            try:
+                if worker is not None:
+                    local = worker.infer(payload_frames=payload_frames, challenge_id=challenge_id)
+                else:
+                    local = run_local_inference_from_hf(
                         model_repo=str(target["model"]),
                         revision=str(target["revision"]),
                         payload_frames=payload_frames,
@@ -589,28 +667,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
                         cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
                         wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
                     )
-                except Exception as e:
-                    logger.warning(
-                        "[compliance] warmup exception element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
-                        element_id,
-                        hotkey,
-                        challenge_id,
-                        target["model"],
-                        target["revision"],
-                        e,
-                    )
-                did_warmup = True
-            try:
-                local = run_local_inference_from_hf(
-                    model_repo=str(target["model"]),
-                    revision=str(target["revision"]),
-                    payload_frames=payload_frames,
-                    n_keypoints=32,
-                    max_repo_bytes=settings.CHECKER_MAX_MODEL_BYTES,
-                    memory_bytes=settings.CHECKER_RUNTIME_MEMORY_BYTES,
-                    cpu_seconds=settings.CHECKER_RUNTIME_CPU_SECONDS,
-                    wall_timeout_seconds=settings.CHECKER_RUNTIME_WALL_TIMEOUT_S,
-                )
             except Exception as e:
                 all_ok = False
                 local_error_count += 1
@@ -666,6 +722,13 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     "compare": info,
                 }
             )
+
+        if worker is not None:
+            try:
+                worker.close()
+                logger.info("[compliance] persistent worker closed element=%s hotkey=%s", element_id, hotkey)
+            except Exception as e:
+                logger.warning("[compliance] persistent worker close error element=%s hotkey=%s err=%s", element_id, hotkey, e)
 
         p95_ms = _p95(latencies)
         latency_ok = p95_ms <= settings.CHECKER_LATENCY_P95_MS
