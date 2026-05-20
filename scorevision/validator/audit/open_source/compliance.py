@@ -473,15 +473,27 @@ async def _sample_challenges_for_tuple(
     )
     random.shuffle(candidates)
     sampled = []
+    seen_response_keys: set[str] = set()
     for key in candidates:
         lines = await fetch_shard_lines(public_url, key)
         for line in lines:
             payload = line.get("payload") or {}
+            composite_score = payload.get("composite_score")
+            try:
+                score_val = float(composite_score)
+            except Exception:
+                score_val = 0.0
+            if score_val <= 0.0:
+                continue
             telemetry = payload.get("telemetry") or {}
             run_info = telemetry.get("run") or {}
             responses_key = run_info.get("responses_key")
             if not responses_key:
                 continue
+            responses_key = str(responses_key)
+            if responses_key in seen_response_keys:
+                continue
+            seen_response_keys.add(responses_key)
             sampled.append(
                 {
                     "challenge_id": str(
@@ -572,7 +584,10 @@ async def run_public_compliance_once() -> dict[str, Any]:
             element_id=element_id,
             hotkey=hotkey,
             commit_block=int(target["commit_block"]),
-            k=settings.CHECKER_CHALLENGES_PER_TARGET,
+            k=max(
+                settings.CHECKER_CHALLENGES_PER_TARGET,
+                settings.CHECKER_CHALLENGES_PER_TARGET * 4,
+            ),
         )
         if not sampled:
             logger.warning(
@@ -595,6 +610,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
             )
             continue
 
+        desired_k = int(settings.CHECKER_CHALLENGES_PER_TARGET)
         latencies: list[float] = []
         all_ok = True
         details: list[dict[str, Any]] = []
@@ -633,14 +649,18 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 )
                 worker = None
 
+        attempted = 0
+        accepted = 0
         for record in sampled:
+            if accepted >= desired_k:
+                break
+            attempted += 1
             challenge_id = record["challenge_id"]
             responses_key = record["responses_key"]
             exp_preds, _video_url, payload_frames = await fetch_responses_data(
                 responses_key, settings.SCOREVISION_PUBLIC_RESULTS_URL
             )
             if not exp_preds or not payload_frames:
-                all_ok = False
                 missing_blob_count += 1
                 logger.warning(
                     "[compliance] missing response blob element=%s hotkey=%s challenge_id=%s responses_key=%s has_preds=%s has_frames=%s",
@@ -653,6 +673,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 )
                 details.append({"challenge_id": challenge_id, "ok": False, "reason": "missing_response_blob"})
                 continue
+            accepted += 1
             try:
                 if worker is not None:
                     local = worker.infer(payload_frames=payload_frames, challenge_id=challenge_id)
@@ -730,6 +751,16 @@ async def run_public_compliance_once() -> dict[str, Any]:
             except Exception as e:
                 logger.warning("[compliance] persistent worker close error element=%s hotkey=%s err=%s", element_id, hotkey, e)
 
+        if accepted == 0:
+            all_ok = False
+            logger.warning(
+                "[compliance] no usable challenges after filtering/fetch element=%s hotkey=%s attempted=%d desired=%d",
+                element_id,
+                hotkey,
+                attempted,
+                desired_k,
+            )
+
         p95_ms = _p95(latencies)
         latency_ok = p95_ms <= settings.CHECKER_LATENCY_P95_MS
         status = "PASS" if all_ok and latency_ok else ("FAIL_OUTPUT" if not all_ok else "FAIL_LATENCY")
@@ -750,7 +781,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
             element_id,
             hotkey,
             status,
-            len(sampled),
+            accepted,
             ok_count,
             local_error_count,
             missing_blob_count,
