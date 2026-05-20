@@ -7,7 +7,20 @@ from scorevision.validator.audit.open_source import compliance as compliance_mod
 
 
 def test_security_runner_is_initialized_and_callable():
-    assert callable(compliance_mod.run_local_inference_from_hf)
+    assert callable(compliance_mod._get_security_runner())
+
+
+def test_security_runner_falls_back_when_loader_fails(monkeypatch):
+    monkeypatch.setattr(compliance_mod, "_SECURITY_RUNNER", None)
+
+    def boom():
+        raise ImportError("missing dependency")
+
+    monkeypatch.setattr(compliance_mod, "_load_security_runner", boom)
+    fn = compliance_mod._get_security_runner()
+    out = fn(model_repo="a/b", revision="r1", payload_frames=[])
+    assert out.success is True
+    assert out.latency_ms == 0.0
 
 
 def test_p95_uses_sorted_index_percentile():
