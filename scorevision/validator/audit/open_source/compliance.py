@@ -26,6 +26,7 @@ from scorevision.utils.r2 import (
 )
 from scorevision.utils.r2_public import extract_base_url
 from scorevision.utils.settings import get_settings
+from scorevision.validator.central.scheduling import load_manifest
 
 logger = getLogger(__name__)
 
@@ -244,6 +245,32 @@ async def _load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
     return int(snapshot.get("block", 0) or 0), snapshot
 
 
+def _manifest_public_element_ids(manifest: Any) -> set[str]:
+    public_ids: set[str] = set()
+    elems = getattr(manifest, "elements", None)
+    if not elems:
+        return public_ids
+
+    if isinstance(elems, dict):
+        for raw_eid, cfg in elems.items():
+            track = cfg.get("track") if isinstance(cfg, dict) else getattr(cfg, "track", None)
+            if track != "private":
+                public_ids.add(str(raw_eid))
+        return public_ids
+
+    if isinstance(elems, (list, tuple)):
+        for elem in elems:
+            if isinstance(elem, dict):
+                track = elem.get("track")
+                eid = elem.get("element_id") or elem.get("id")
+            else:
+                track = getattr(elem, "track", None)
+                eid = getattr(elem, "element_id", None) or getattr(elem, "id", None)
+            if eid and track != "private":
+                public_ids.add(str(eid))
+    return public_ids
+
+
 def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
     winners = snapshot.get("winners") or {}
     targets: list[dict[str, Any]] = []
@@ -380,15 +407,23 @@ async def _resolve_target_commit(
 async def _sample_challenges_for_tuple(
     *,
     public_url: str,
+    index_keys: list[str],
     element_id: str,
     hotkey: str,
     commit_block: int,
     k: int,
 ) -> list[dict[str, Any]]:
-    keys = await fetch_index_keys(public_url)
+    keys = list(index_keys)
     random.shuffle(keys)
     prefix = f"manako/{element_id}/{hotkey}/{max(0, int(commit_block)):09d}/evaluation/"
     candidates = [k for k in keys if isinstance(k, str) and k.startswith(prefix)]
+    logger.info(
+        "[compliance] sampling element=%s hotkey=%s block=%s prefix_matches=%d",
+        element_id,
+        hotkey,
+        max(0, int(commit_block)),
+        len(candidates),
+    )
     random.shuffle(candidates)
     sampled = []
     for key in candidates:
@@ -432,13 +467,28 @@ async def run_public_compliance_once() -> dict[str, Any]:
     if not is_configured(cfg, require_bucket=True):
         raise RuntimeError("Checker R2 not configured")
 
+    st_for_manifest = await get_subtensor()
+    current_block = int(await st_for_manifest.get_current_block())
+    manifest = await load_manifest(path_manifest=None, settings=settings, block=current_block)
+    public_element_ids = _manifest_public_element_ids(manifest)
     winners_block, snapshot = await _load_latest_winners_snapshot()
-    targets = _targets_from_winners(snapshot)
+    raw_targets = _targets_from_winners(snapshot)
+    targets = [t for t in raw_targets if str(t["element_id"]) in public_element_ids]
+    skipped_non_public = len(raw_targets) - len(targets)
     logger.info(
-        "[compliance] winners block=%s extracted targets=%d",
+        "[compliance] block=%s manifest_public_elements=%d winners_block=%s extracted_targets=%d public_targets=%d skipped_non_public=%d",
+        current_block,
+        len(public_element_ids),
         winners_block,
+        len(raw_targets),
         len(targets),
+        skipped_non_public,
     )
+    if public_element_ids:
+        logger.info(
+            "[compliance] manifest public element ids sample: %s",
+            ", ".join(sorted(public_element_ids)[:8]),
+        )
     if targets:
         sample = ", ".join(
             f"{t['element_id']}:{t['hotkey'][:8]}...({('snapshot' if t.get('model') and t.get('revision') else 'chain')})"
@@ -446,6 +496,8 @@ async def run_public_compliance_once() -> dict[str, Any]:
         )
         logger.info("[compliance] winners sample: %s", sample)
     commits_by_hotkey, hotkey_to_uid = await _fetch_commitment_context(settings.SCOREVISION_NETUID)
+    index_keys = await fetch_index_keys(settings.SCOREVISION_PUBLIC_RESULTS_URL)
+    logger.info("[compliance] loaded public index keys=%d", len(index_keys))
 
     run_results: list[dict[str, Any]] = []
     failed_tuples: list[dict[str, Any]] = []
@@ -468,12 +520,19 @@ async def run_public_compliance_once() -> dict[str, Any]:
 
         sampled = await _sample_challenges_for_tuple(
             public_url=settings.SCOREVISION_PUBLIC_RESULTS_URL,
+            index_keys=index_keys,
             element_id=element_id,
             hotkey=hotkey,
             commit_block=int(target["commit_block"]),
             k=settings.CHECKER_CHALLENGES_PER_TARGET,
         )
         if not sampled:
+            logger.warning(
+                "[compliance] no challenges found for element=%s hotkey=%s commit_block=%s",
+                element_id,
+                hotkey,
+                target["commit_block"],
+            )
             run_results.append(
                 {
                     "element_id": element_id,
