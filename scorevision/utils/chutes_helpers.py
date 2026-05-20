@@ -9,6 +9,7 @@ from random import Random
 from hashlib import sha256
 from re import sub
 import re
+import importlib.util
 
 from jinja2 import Template
 import petname
@@ -20,6 +21,29 @@ from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
 from scorevision.utils.async_clients import get_async_client
 
 logger = getLogger(__name__)
+
+
+def load_miner_from_hf_repo(
+    *,
+    path_hf_repo: Path,
+    filename: str = "miner.py",
+    classname: str = "Miner",
+):
+    """Load a miner class instance from a downloaded HF repo snapshot."""
+    module_path = Path(path_hf_repo) / filename
+    if not module_path.exists():
+        raise ValueError(f"missing_miner_file:{module_path}")
+
+    spec = importlib.util.spec_from_file_location("scorevision_hf_miner", module_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"invalid_miner_spec:{module_path}")
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    cls = getattr(mod, classname, None)
+    if cls is None:
+        raise ValueError(f"missing_miner_class:{classname}")
+    return cls()
 
 
 @contextmanager
