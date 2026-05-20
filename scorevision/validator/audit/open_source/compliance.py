@@ -415,11 +415,13 @@ async def _sample_challenges_for_tuple(
 ) -> list[dict[str, Any]]:
     keys = list(index_keys)
     random.shuffle(keys)
-    prefix = f"manako/{element_id}/{hotkey}/{max(0, int(commit_block)):09d}/evaluation/"
+    safe_element_id = str(element_id).strip().replace("/", "_")
+    prefix = f"manako/{safe_element_id}/{hotkey}/{max(0, int(commit_block)):09d}/evaluation/"
     candidates = [k for k in keys if isinstance(k, str) and k.startswith(prefix)]
     logger.info(
-        "[compliance] sampling element=%s hotkey=%s block=%s prefix_matches=%d",
+        "[compliance] sampling element=%s safe_element=%s hotkey=%s block=%s prefix_matches=%d",
         element_id,
+        safe_element_id,
         hotkey,
         max(0, int(commit_block)),
         len(candidates),
