@@ -618,6 +618,9 @@ async def run_public_compliance_once() -> dict[str, Any]:
         local_error_count = 0
         iou_fail_count = 0
         ok_count = 0
+        network_blocked_count = 0
+        broken_pipe_count = 0
+        worker_fatal_count = 0
         worker = None
         if persistent_worker_class is not None:
             try:
@@ -691,6 +694,31 @@ async def run_public_compliance_once() -> dict[str, Any]:
             except Exception as e:
                 all_ok = False
                 local_error_count += 1
+                err_text = str(e)
+                if "network_disabled_in_compliance_runner" in err_text:
+                    network_blocked_count += 1
+                if "Broken pipe" in err_text or "[Errno 32]" in err_text:
+                    broken_pipe_count += 1
+                if "worker_fatal" in err_text:
+                    worker_fatal_count += 1
+                if worker is not None and (
+                    "Broken pipe" in err_text
+                    or "[Errno 32]" in err_text
+                    or "worker_fatal" in err_text
+                    or "network_disabled_in_compliance_runner" in err_text
+                ):
+                    try:
+                        worker.close()
+                    except Exception:
+                        pass
+                    worker = None
+                    logger.warning(
+                        "[compliance] persistent worker disabled after fatal exception element=%s hotkey=%s model=%s revision=%s",
+                        element_id,
+                        hotkey,
+                        target["model"],
+                        target["revision"],
+                    )
                 logger.warning(
                     "[compliance] local run exception element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
                     element_id,
@@ -705,6 +733,29 @@ async def run_public_compliance_once() -> dict[str, Any]:
             if not local.success or not local.predictions:
                 all_ok = False
                 local_error_count += 1
+                local_err = str(local.error or "")
+                if "network_disabled_in_compliance_runner" in local_err:
+                    network_blocked_count += 1
+                if "Broken pipe" in local_err or "[Errno 32]" in local_err:
+                    broken_pipe_count += 1
+                if "worker_fatal" in local_err:
+                    worker_fatal_count += 1
+                if worker is not None and (
+                    "worker_fatal" in local_err
+                    or "network_disabled_in_compliance_runner" in local_err
+                ):
+                    try:
+                        worker.close()
+                    except Exception:
+                        pass
+                    worker = None
+                    logger.warning(
+                        "[compliance] persistent worker disabled after fatal result element=%s hotkey=%s model=%s revision=%s",
+                        element_id,
+                        hotkey,
+                        target["model"],
+                        target["revision"],
+                    )
                 logger.warning(
                     "[compliance] local run failed element=%s hotkey=%s challenge_id=%s model=%s revision=%s err=%s",
                     element_id,
@@ -777,7 +828,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
         }
         run_results.append(result_row)
         logger.info(
-            "[compliance] target done element=%s hotkey=%s status=%s sampled=%d ok=%d local_errors=%d missing_blob=%d iou_fail=%d p95=%.2fms",
+            "[compliance] target done element=%s hotkey=%s status=%s sampled=%d ok=%d local_errors=%d missing_blob=%d iou_fail=%d network_blocked=%d worker_fatal=%d broken_pipe=%d p95=%.2fms",
             element_id,
             hotkey,
             status,
@@ -786,8 +837,17 @@ async def run_public_compliance_once() -> dict[str, Any]:
             local_error_count,
             missing_blob_count,
             iou_fail_count,
+            network_blocked_count,
+            worker_fatal_count,
+            broken_pipe_count,
             float(p95_ms),
         )
+        if network_blocked_count > 0 or worker_fatal_count > 0 or broken_pipe_count > 0:
+            logger.warning(
+                "[compliance] diagnostics element=%s hotkey=%s note=network guard likely kills worker; broken_pipe is cascade",
+                element_id,
+                hotkey,
+            )
         if status != "PASS":
             failed_tuples.append(
                 {
