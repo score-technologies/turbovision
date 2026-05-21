@@ -866,21 +866,51 @@ async def run_public_compliance_once() -> dict[str, Any]:
         "results": run_results,
     }
 
-    await ensure_index_exists(
-        client_factory=_get_checker_client,
-        bucket=cfg.bucket,
-        index_key=_checker_runs_index_key(),
-    )
     run_key = _checker_runs_key(winners_block)
-    await _put_json(run_key, payload)
-    await add_index_key_if_new(
-        client_factory=_get_checker_client,
-        bucket=cfg.bucket,
-        key=run_key,
-        index_key=_checker_runs_index_key(),
+    logger.info(
+        "[compliance:r2] begin write bucket=%s runs_index=%s run_key=%s",
+        cfg.bucket,
+        _checker_runs_index_key(),
+        run_key,
     )
+    try:
+        logger.info("[compliance:r2] ensure_index_exists start")
+        await ensure_index_exists(
+            client_factory=_get_checker_client,
+            bucket=cfg.bucket,
+            index_key=_checker_runs_index_key(),
+        )
+        logger.info("[compliance:r2] ensure_index_exists done")
 
-    existing = await _get_json(_checker_fails_key())
+        logger.info("[compliance:r2] put run payload start key=%s", run_key)
+        await _put_json(run_key, payload)
+        logger.info("[compliance:r2] put run payload done key=%s", run_key)
+
+        logger.info("[compliance:r2] add run key to index start key=%s", run_key)
+        await add_index_key_if_new(
+            client_factory=_get_checker_client,
+            bucket=cfg.bucket,
+            key=run_key,
+            index_key=_checker_runs_index_key(),
+        )
+        logger.info("[compliance:r2] add run key to index done key=%s", run_key)
+    except Exception:
+        logger.exception(
+            "[compliance:r2] failed while writing run artifacts bucket=%s run_key=%s",
+            cfg.bucket,
+            run_key,
+        )
+        raise
+
+    fails_key = _checker_fails_key()
+    logger.info("[compliance:r2] load fails list start key=%s", fails_key)
+    existing = await _get_json(fails_key)
+    logger.info(
+        "[compliance:r2] load fails list done key=%s has_existing=%s type=%s",
+        fails_key,
+        existing is not None,
+        type(existing).__name__ if existing is not None else "None",
+    )
     merged: dict[tuple[str, str, int], dict[str, Any]] = {}
     if isinstance(existing, list):
         for row in existing:
@@ -909,7 +939,25 @@ async def run_public_compliance_once() -> dict[str, Any]:
             prev["last_seen"] = now
             prev["latest_status"] = row.get("status")
 
-    await _put_json(_checker_fails_key(), list(merged.values()))
+    try:
+        logger.info(
+            "[compliance:r2] write fails list start key=%s rows=%d",
+            fails_key,
+            len(merged),
+        )
+        await _put_json(fails_key, list(merged.values()))
+        logger.info(
+            "[compliance:r2] write fails list done key=%s rows=%d",
+            fails_key,
+            len(merged),
+        )
+    except Exception:
+        logger.exception(
+            "[compliance:r2] failed while writing fails list key=%s rows=%d",
+            fails_key,
+            len(merged),
+        )
+        raise
     return payload
 
 
