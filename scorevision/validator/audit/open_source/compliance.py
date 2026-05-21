@@ -203,6 +203,33 @@ async def _get_json(key: str) -> dict | list | None:
             return None
 
 
+async def _load_last_trigger_block_from_runs_index() -> int:
+    cfg = checker_r2_config()
+    if not is_configured(cfg, require_bucket=True):
+        return 0
+
+    index_key = _checker_runs_index_key()
+    data = await _get_json(index_key)
+    if not isinstance(data, list) or not data:
+        logger.info("[compliance] runs index empty/unavailable key=%s", index_key)
+        return 0
+
+    last_key = str(data[-1]).strip()
+    # expected suffix: .../runs/008231850.json
+    stem = Path(last_key).stem
+    try:
+        block = int(stem)
+        logger.info("[compliance] recovered last_trigger_block=%s from runs index key=%s", block, last_key)
+        return block
+    except Exception:
+        logger.warning(
+            "[compliance] unable to parse block from runs index key=%s stem=%s; fallback to 0",
+            last_key,
+            stem,
+        )
+        return 0
+
+
 def _iou(a: dict[str, Any], b: dict[str, Any]) -> float:
     ax1, ay1, ax2, ay2 = float(a["x1"]), float(a["y1"]), float(a["x2"]), float(a["y2"])
     bx1, by1, bx2, by2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
@@ -963,7 +990,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
 
 async def compliance_loop() -> None:
     settings = get_settings()
-    last_trigger_block = 0
+    last_trigger_block = await _load_last_trigger_block_from_runs_index()
     while True:
         try:
             st = await get_subtensor()
