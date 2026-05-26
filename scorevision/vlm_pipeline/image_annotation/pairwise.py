@@ -1,5 +1,6 @@
 from numpy import logical_and, logical_or, ndarray, uint8, where, zeros
 
+from scorevision.vlm_pipeline.utils.geometry import geometry_to_mask
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox
 
 
@@ -8,8 +9,16 @@ def bboxes_to_mask(
 ) -> ndarray:
     mask = zeros((image_height, image_width), dtype=uint8)
     for bbox in bboxes:
-        x_min, y_min, x_max, y_max = bbox.bbox_2d
-        mask[y_min:y_max, x_min:x_max] = 1
+        if bbox.geometry is None:
+            continue
+        mask = logical_or(
+            mask,
+            geometry_to_mask(
+                geometry=bbox.geometry,
+                image_height=image_height,
+                image_width=image_width,
+            ),
+        ).astype(uint8)
     return mask
 
 

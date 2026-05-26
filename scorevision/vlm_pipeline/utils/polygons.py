@@ -1,5 +1,6 @@
 from numpy import ndarray
 
+from scorevision.vlm_pipeline.utils.geometry import AnnotationGeometry, AnnotationGeometryType, Point2D
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox
 from scorevision.vlm_pipeline.domain_specific_schemas.football import (
     ShirtColor,
@@ -37,10 +38,16 @@ def sam3_predictions_to_bounding_boxes(
             colour = ShirtColor.OTHER
         for prediction in result.predictions:
             for polygon in prediction.masks:
-
+                x1, y1, x2, y2 = bbox_from_polygon(polygon=polygon)
                 bbox = BoundingBox(
-                    bbox_2d=bbox_from_polygon(polygon=polygon),
                     label=object_label,
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[
+                            Point2D(x=float(x1), y=float(y1)),
+                            Point2D(x=float(x2), y=float(y2)),
+                        ],
+                    ),
                     cluster_id=colour,
                 )
                 bboxes.append(bbox)

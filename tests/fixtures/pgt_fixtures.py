@@ -3,6 +3,11 @@ from pytest import fixture
 from numpy import zeros, ndarray
 
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    Point2D,
+)
 from scorevision.vlm_pipeline.utils.response_models import (
     FrameAnnotation,
     BoundingBox,
@@ -13,15 +18,18 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 @fixture
 def fake_vlm_bbox() -> BoundingBox:
     return BoundingBox(
-        bbox_2d=[10, 23, 100, 200],
         label="ball",
+        geometry=AnnotationGeometry(
+            type=AnnotationGeometryType.BBOX,
+            points=[Point2D(x=10, y=23), Point2D(x=100, y=200)],
+        ),
     )
 
 
 @fixture
 def fake_annotation(fake_vlm_bbox) -> FrameAnnotation:
     return FrameAnnotation(
-        bboxes=[fake_vlm_bbox, fake_vlm_bbox, fake_vlm_bbox],
+        annotations=[fake_vlm_bbox, fake_vlm_bbox, fake_vlm_bbox],
         category=Action.GOAL,
         confidence=100,
         reason="",

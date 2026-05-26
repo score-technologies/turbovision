@@ -26,6 +26,11 @@ from scorevision.utils.image_processing import image_to_b64string
 from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    Point2D,
+)
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     parse_challenge_type,
@@ -60,12 +65,9 @@ def _parse_ground_truth_payload(
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
-        bbox = ann.get("bbox")
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            continue
-        try:
-            x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
-        except (TypeError, ValueError):
+
+        geometry = _parse_annotation_geometry(ann)
+        if geometry is None:
             continue
 
         label = ann.get("class") or ann.get("label")
@@ -80,8 +82,8 @@ def _parse_ground_truth_payload(
 
         grouped.setdefault(frame_idx, []).append(
             BoundingBox(
-                bbox_2d=(x1, y1, x2, y2),
                 label=str(label),
+                geometry=geometry,
                 cluster_id=None,
             )
         )
@@ -100,7 +102,7 @@ def _parse_ground_truth_payload(
                 spatial_image=spatial_stub,
                 temporal_image=temporal_stub,
                 annotation=FrameAnnotation(
-                    bboxes=grouped[frame_number],
+                    annotations=grouped[frame_number],
                     category=Action.NONE,
                     confidence=100,
                     reason="ScoreVision API ground truth",
@@ -108,6 +110,53 @@ def _parse_ground_truth_payload(
             )
         )
     return pseudo_gt
+
+
+def _parse_annotation_geometry(ann: dict) -> AnnotationGeometry | None:
+    geometry_type = ann.get("geometry_type") or ann.get("annotation_type") or ann.get("type")
+    geometry_type_value = str(geometry_type).strip().lower() if geometry_type is not None else ""
+
+    if not geometry_type_value:
+        return None
+
+    if geometry_type_value == AnnotationGeometryType.POINT.value:
+        point = ann.get("point") or ann.get("points")
+        if isinstance(point, dict):
+            x = point.get("x")
+            y = point.get("y")
+            if x is None or y is None:
+                return None
+            return AnnotationGeometry(
+                type=AnnotationGeometryType.POINT,
+                points=[Point2D(x=float(x), y=float(y))],
+            )
+        if isinstance(point, list) and len(point) == 2 and all(
+            isinstance(v, (int, float)) for v in point
+        ):
+            return AnnotationGeometry(
+                type=AnnotationGeometryType.POINT,
+                points=[Point2D(x=float(point[0]), y=float(point[1]))],
+            )
+        return None
+
+    if geometry_type_value == AnnotationGeometryType.POLYGON.value:
+        points = ann.get("points") or ann.get("polygon")
+        if not isinstance(points, list) or len(points) < 3:
+            return None
+        parsed_points = []
+        for point in points:
+            if isinstance(point, dict) and "x" in point and "y" in point:
+                parsed_points.append(Point2D(x=float(point["x"]), y=float(point["y"])))
+            elif isinstance(point, (list, tuple)) and len(point) == 2:
+                parsed_points.append(Point2D(x=float(point[0]), y=float(point[1])))
+        if len(parsed_points) < 3:
+            return None
+        return AnnotationGeometry(
+            type=AnnotationGeometryType.POLYGON,
+            points=parsed_points,
+        )
+
+    return None
 
 
 def _looks_like_image_url(url: str) -> bool:

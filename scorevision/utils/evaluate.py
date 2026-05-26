@@ -19,6 +19,11 @@ from scorevision.vlm_pipeline.utils.response_models import (
     TEAM2_SHIRT_COLOUR,
     ShirtColor,
 )
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    Point2D,
+)
 from scorevision.utils.pillar_metric_registry import (
     METRIC_REGISTRY,
 )
@@ -122,13 +127,14 @@ def parse_miner_prediction(
 
                     bboxes.append(
                         BoundingBox(
-                            bbox_2d=[
-                                int(bbox["x1"]),
-                                int(bbox["y1"]),
-                                int(bbox["x2"]),
-                                int(bbox["y2"]),
-                            ],
                             label=looked_up,
+                            geometry=AnnotationGeometry(
+                                type=AnnotationGeometryType.BBOX,
+                                points=[
+                                    Point2D(x=float(bbox["x1"]), y=float(bbox["y1"])),
+                                    Point2D(x=float(bbox["x2"]), y=float(bbox["y2"])),
+                                ],
+                            ),
                             score=bbox.get("score", bbox.get("conf")),
                             cluster_id=cluster_id,
                         )

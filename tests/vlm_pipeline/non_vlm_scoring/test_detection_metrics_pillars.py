@@ -11,13 +11,18 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_recall,
 )
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    Point2D,
+)
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
 
 
 def _pgt(frame_number: int, boxes: list[BoundingBox]) -> PseudoGroundTruth:
     image = np.zeros((2, 2, 3), dtype=np.uint8)
     annotation = FrameAnnotation(
-        bboxes=boxes,
+        annotations=boxes,
         category=Action.NONE,
         confidence=100,
         reason="test",
@@ -36,16 +41,40 @@ def test_detection_metrics_perfect_match():
         _pgt(
             1,
             [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
-                BoundingBox(bbox_2d=(20, 20, 30, 30), label="ball"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="ball",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=20, y=20), Point2D(x=30, y=30)],
+                    ),
+                ),
             ],
         )
     ]
     miner_predictions = {
         1: {
             "bboxes": [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
-                BoundingBox(bbox_2d=(20, 20, 30, 30), label="ball"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="ball",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=20, y=20), Point2D(x=30, y=30)],
+                    ),
+                ),
             ]
         }
     }
@@ -70,15 +99,33 @@ def test_detection_metrics_partial_match():
         _pgt(
             1,
             [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
-                BoundingBox(bbox_2d=(20, 20, 30, 30), label="ball"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="ball",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=20, y=20), Point2D(x=30, y=30)],
+                    ),
+                ),
             ],
         )
     ]
     miner_predictions = {
         1: {
             "bboxes": [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
             ]
         }
     }
@@ -111,8 +158,20 @@ def test_map50_uses_detection_confidence_ranking():
         _pgt(
             1,
             [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
-                BoundingBox(bbox_2d=(20, 20, 30, 30), label="player"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=20, y=20), Point2D(x=30, y=30)],
+                    ),
+                ),
             ],
         )
     ]
@@ -120,16 +179,44 @@ def test_map50_uses_detection_confidence_ranking():
     high_first = {
         1: {
             "bboxes": [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player", score=0.99),
-                BoundingBox(bbox_2d=(50, 50, 60, 60), label="player", score=0.98),
+                BoundingBox(
+                    label="player",
+                    score=0.99,
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="player",
+                    score=0.98,
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=50, y=50), Point2D(x=60, y=60)],
+                    ),
+                ),
             ]
         }
     }
     low_first = {
         1: {
             "bboxes": [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player", score=0.01),
-                BoundingBox(bbox_2d=(50, 50, 60, 60), label="player", score=0.99),
+                BoundingBox(
+                    label="player",
+                    score=0.01,
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
+                BoundingBox(
+                    label="player",
+                    score=0.99,
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=50, y=50), Point2D(x=60, y=60)],
+                    ),
+                ),
             ]
         }
     }
@@ -144,19 +231,25 @@ def test_false_positive_uses_ffpi_formula():
         _pgt(
             1,
             [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+                BoundingBox(
+                    label="player",
+                    geometry=AnnotationGeometry(
+                        type=AnnotationGeometryType.BBOX,
+                        points=[Point2D(x=0, y=0), Point2D(x=10, y=10)],
+                    ),
+                ),
             ],
         )
     ]
     miner_predictions = {
         1: {
             "bboxes": [
-                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
-                BoundingBox(bbox_2d=(20, 20, 30, 30), label="player"),
-                BoundingBox(bbox_2d=(40, 40, 50, 50), label="player"),
-                BoundingBox(bbox_2d=(60, 60, 70, 70), label="player"),
-                BoundingBox(bbox_2d=(80, 80, 90, 90), label="player"),
-                BoundingBox(bbox_2d=(100, 100, 110, 110), label="player"),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=0, y=0), Point2D(x=10, y=10)])),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=20, y=20), Point2D(x=30, y=30)])),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=40, y=40), Point2D(x=50, y=50)])),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=60, y=60), Point2D(x=70, y=70)])),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=80, y=80), Point2D(x=90, y=90)])),
+                BoundingBox(label="player", geometry=AnnotationGeometry(type=AnnotationGeometryType.BBOX, points=[Point2D(x=100, y=100), Point2D(x=110, y=110)])),
             ]
         }
     }

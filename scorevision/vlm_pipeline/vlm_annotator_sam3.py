@@ -127,7 +127,7 @@ async def generate_annotations_for_select_frame_sam3(
         spatial_image=frame,
         temporal_image=flow_frame,
         annotation=FrameAnnotation(
-            bboxes=bboxes, category=Action.NONE, confidence=100, reason="Sam3"
+            annotations=bboxes, category=Action.NONE, confidence=100, reason="Sam3"
         ),
     )
 

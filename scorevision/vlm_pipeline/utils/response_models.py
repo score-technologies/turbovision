@@ -3,6 +3,12 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action, ShirtColor
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    bbox_points_to_geometry,
+    geometry_to_bbox,
+)
 
 
 TEAM1_SHIRT_COLOUR = (
@@ -12,12 +18,8 @@ TEAM2_SHIRT_COLOUR = ShirtColor.BLACK
 
 
 class BoundingBox(BaseModel):
-    """The bounding box around a single object"""
+    """Geometry-first annotation wrapper."""
 
-    bbox_2d: tuple[int, int, int, int] = Field(
-        ...,
-        description="x_min, y_min, x_max, y_max in pixels (where x=0 is the left of the image and y=0 is the top of the image",
-    )
     label: str | None = Field(..., description="The type of object shown")
     score: float | None = Field(
         None,
@@ -27,12 +29,22 @@ class BoundingBox(BaseModel):
         None,
         description="Based on the visual appearance and colours of the object, assign a cluster colour to group it with other similar looking objects.",
     )
+    geometry: AnnotationGeometry = Field(
+        ...,
+        description="Canonical geometry for this annotation.",
+    )
+
+    @property
+    def bbox_2d(self) -> tuple[int, int, int, int]:
+        if self.geometry is None:
+            raise AttributeError("BoundingBox.geometry is not set")
+        return geometry_to_bbox(self.geometry)
 
 
 class FrameAnnotation(BaseModel):
     """Annotations for objects and points of interest shown in a video frame"""
 
-    bboxes: list[BoundingBox] = Field(
+    annotations: list[BoundingBox] = Field(
         ..., description="The objects of interest in this frame"
     )
     category: Action = Field(..., description="The action being shown in this frame")
@@ -43,6 +55,14 @@ class FrameAnnotation(BaseModel):
         description="Confidence score between 0 and 100 for the category predicted",
     )
     reason: str = Field(..., description="Reasoning for the category predicted")
+
+    @property
+    def bboxes(self) -> list[BoundingBox]:
+        return self.annotations
+
+    @property
+    def geometries(self) -> list[AnnotationGeometry]:
+        return [ann.geometry for ann in self.annotations if ann.geometry is not None]
 
 
 class Winner(Enum):
