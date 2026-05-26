@@ -145,15 +145,31 @@ def _parse_annotation_geometry(ann: dict) -> AnnotationGeometry | None:
             return None
         parsed_points = []
         for point in points:
-            if isinstance(point, dict) and "x" in point and "y" in point:
-                parsed_points.append(Point2D(x=float(point["x"]), y=float(point["y"])))
-            elif isinstance(point, (list, tuple)) and len(point) == 2:
-                parsed_points.append(Point2D(x=float(point[0]), y=float(point[1])))
+            try:
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    parsed_points.append(Point2D(x=float(point["x"]), y=float(point["y"])))
+                elif isinstance(point, (list, tuple)) and len(point) == 2:
+                    parsed_points.append(Point2D(x=float(point[0]), y=float(point[1])))
+            except (TypeError, ValueError):
+                return None
         if len(parsed_points) < 3:
             return None
         return AnnotationGeometry(
             type=AnnotationGeometryType.POLYGON,
             points=parsed_points,
+        )
+
+    if geometry_type_value == AnnotationGeometryType.BBOX.value:
+        bbox = ann.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return None
+        try:
+            x1, y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        except (TypeError, ValueError):
+            return None
+        return AnnotationGeometry(
+            type=AnnotationGeometryType.BBOX,
+            points=[Point2D(x=x1, y=y1), Point2D(x=x2, y=y2)],
         )
 
     return None

@@ -70,11 +70,12 @@ These usually need coordinated updates because they define the contract between 
 
 ## Track Split
 
-The upstream changes should not be treated as one global contract change.
+The upstream changes should not be treated as two unrelated payload shapes.
 
 ### Private Track
 
 - Keep the existing bbox/action-based request and response shapes.
+- Use a private-track adapter to translate any upstream `type=bbox` geometry into the legacy private-track shape.
 - Do not introduce geometry-first annotations into the private-track miner contract unless that track is explicitly being redesigned.
 - Private-track documentation and examples should remain bbox-centric.
 
@@ -83,3 +84,10 @@ The upstream changes should not be treated as one global contract change.
 - Move to the geometry-first annotation schema.
 - This is the path that should carry polygons, points, and bboxes as typed geometry.
 - Upstream data producers and validators for this track should be updated separately from private track.
+
+### Unified Upstream Contract
+
+- The recommended upstream model is a single typed-geometry schema.
+- `type=bbox` remains a valid geometry variant in that schema.
+- Private track consumes the canonical upstream output through an adapter that converts bbox geometry into its legacy contract.
+- Open / VLM track consumes the same canonical geometry directly.
