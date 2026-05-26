@@ -10,6 +10,7 @@ from scipy.optimize import linear_sum_assignment
 from scorevision.utils.manifest import ElementPrefix, PillarName
 from scorevision.utils.pillar_metric_registry import register_metric
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
+from scorevision.vlm_pipeline.utils.geometry import geometry_to_bbox
 from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
@@ -99,17 +100,23 @@ def _build_per_image_rows(
             class_name = _normalize_class_name(box.label)
             if not class_name:
                 continue
-            gt_detections.append({"class": class_name, "bbox": list(box.bbox_2d)})
+            if box.geometry is None:
+                continue
+            gt_detections.append(
+                {"class": class_name, "bbox": list(geometry_to_bbox(box.geometry))}
+            )
 
         pred_detections = []
         for box in miner_boxes:
             class_name = _normalize_class_name(box.label)
             if not class_name:
                 continue
+            if box.geometry is None:
+                continue
             pred_detections.append(
                 {
                     "class": class_name,
-                    "bbox": list(box.bbox_2d),
+                    "bbox": list(geometry_to_bbox(box.geometry)),
                     "score": _safe_detection_score(box),
                 }
             )
@@ -285,7 +292,9 @@ def _extract_boxes_labels(
     for bb in bboxes or []:
         if only_players and bb.label != "player":
             continue
-        boxes.append(tuple(bb.bbox_2d))
+        if bb.geometry is None:
+            continue
+        boxes.append(tuple(geometry_to_bbox(bb.geometry)))
         labels.append(bb.cluster_id if use_team else bb.label)
     return boxes, labels
 

@@ -1,8 +1,14 @@
 from logging import getLogger
 
-from cv2 import FONT_HERSHEY_SIMPLEX, putText, rectangle
+from cv2 import FONT_HERSHEY_SIMPLEX, LINE_AA, circle, fillPoly, polylines, putText, rectangle
+import numpy as np
 from numpy import ndarray
 
+from scorevision.vlm_pipeline.utils.geometry import (
+    AnnotationGeometry,
+    AnnotationGeometryType,
+    geometry_to_bbox,
+)
 from scorevision.vlm_pipeline.utils.response_models import (
     BoundingBox,
     FrameAnnotation,
@@ -44,19 +50,47 @@ def annotate_frame_label(frame: ndarray, label: str) -> None:
     )
 
 
-def annotate_bbox(frame: ndarray, bbox: BoundingBox) -> None:
-    x_min, y_min, x_max, y_max = bbox.bbox_2d
+def _geometry_color(bbox: BoundingBox) -> tuple[int, int, int]:
     color = COLOURS[bbox.cluster_id]
-    rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
-    putText(
-        frame,
-        bbox.label,
-        (x_min, y_min - 4),
-        FONT_HERSHEY_SIMPLEX,
-        0.5,
-        color,
-        1,
-    )
+    return color
+
+
+def annotate_bbox(frame: ndarray, bbox: BoundingBox) -> None:
+    if bbox.geometry is None:
+        return
+
+    color = _geometry_color(bbox)
+    geometry = bbox.geometry
+    x_min, y_min, x_max, y_max = geometry_to_bbox(geometry)
+
+    if geometry.type == AnnotationGeometryType.BBOX:
+        rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
+    elif geometry.type == AnnotationGeometryType.POINT:
+        pt = geometry.points[0]
+        circle(frame, (int(round(pt.x)), int(round(pt.y))), 4, color, -1, lineType=LINE_AA)
+    else:
+        pts = np.array(
+            [[int(round(p.x)), int(round(p.y))] for p in geometry.points],
+            dtype=np.int32,
+        )
+        if len(pts) >= 3:
+            polylines(frame, [pts], isClosed=True, color=color, thickness=2, lineType=LINE_AA)
+            overlay = frame.copy()
+            fillPoly(overlay, [pts], color)
+            frame[:] = np.where(overlay > 0, overlay, frame)
+
+    label = bbox.label or ""
+    if label:
+        putText(
+            frame,
+            label,
+            (x_min, max(0, y_min - 4)),
+            FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+            lineType=LINE_AA,
+        )
 
 
 def annotate_image(image: ndarray, annotations: FrameAnnotation, name: str) -> ndarray:
