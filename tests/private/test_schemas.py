@@ -6,6 +6,10 @@ from scorevision.utils.schemas import (
     ChallengeRequest,
     ChallengeResponse,
     FramePrediction,
+    PredictionPayload,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
 )
 
 
@@ -23,6 +27,24 @@ def test_frame_prediction_negative_frame_rejected():
 def test_challenge_request_valid():
     req = ChallengeRequest(challenge_id="abc", video_url="https://example.com/v.mp4")
     assert req.challenge_id == "abc"
+
+
+def test_challenge_request_valid_with_target_frames():
+    req = ChallengeRequest(
+        challenge_id="abc",
+        video_url="https://example.com/snooker.mp4",
+        target_frames=[50, 150, 250, 350, 450],
+    )
+    assert req.target_frames == [50, 150, 250, 350, 450]
+
+
+def test_challenge_request_rejects_negative_target_frame():
+    with pytest.raises(ValidationError):
+        ChallengeRequest(
+            challenge_id="abc",
+            video_url="https://example.com/snooker.mp4",
+            target_frames=[50, -1],
+        )
 
 
 def test_challenge_request_valid_with_frames_only():
@@ -56,6 +78,31 @@ def test_challenge_response_cricket_valid():
         processing_time=0.0,
     )
     assert resp.prediction is not None
+    assert resp.prediction_count == 1
+
+
+def test_challenge_response_snooker_ball_state_valid():
+    resp = ChallengeResponse(
+        challenge_id="abc",
+        prediction=SnookerBallStatePrediction(
+            frames=[
+                SnookerBallStateFrame(
+                    frame=10,
+                    balls=[
+                        SnookerBallPrediction(
+                            label="cue",
+                            x=0.5,
+                            y=0.5,
+                            state="on_table",
+                        )
+                    ],
+                )
+            ]
+        ),
+        processing_time=0.2,
+    )
+    assert isinstance(resp.prediction, PredictionPayload)
+    assert resp.prediction.type == "snooker_ball_state"
     assert resp.prediction_count == 1
 
 

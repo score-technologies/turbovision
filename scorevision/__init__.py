@@ -1,18 +1,21 @@
 import asyncio
 from asyncio import run
+import importlib
 from logging import getLogger
 from pathlib import Path
 import click
-from scorevision.cli.audit_validator import audit_validator
-from scorevision.cli.benchmark import benchmark_cli
-from scorevision.cli.central_validator import central_validator
-from scorevision.cli.elements import elements_cli
-from scorevision.cli.index_maintenance import index_cli
-from scorevision.cli.manifest import manifest_cli
 from scorevision.utils.logging import setup_logging
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
+
+
+def _add_optional_command(module_name: str, command_name: str) -> None:
+    try:
+        module = importlib.import_module(module_name)
+        app.add_command(getattr(module, command_name))
+    except Exception as e:
+        logger.debug("Optional CLI command %s.%s unavailable: %s", module_name, command_name, e)
 
 
 @click.group(name="sv")
@@ -126,9 +129,9 @@ def validate_cmd(tail: int, m_min: int, tempo: int, manifest_path):
     )
 
 
-app.add_command(audit_validator)
-app.add_command(benchmark_cli)
-app.add_command(central_validator)
-app.add_command(index_cli)
-app.add_command(manifest_cli)
-app.add_command(elements_cli)
+_add_optional_command("scorevision.cli.audit_validator", "audit_validator")
+_add_optional_command("scorevision.cli.benchmark", "benchmark_cli")
+_add_optional_command("scorevision.cli.central_validator", "central_validator")
+_add_optional_command("scorevision.cli.index_maintenance", "index_cli")
+_add_optional_command("scorevision.cli.manifest", "manifest_cli")
+_add_optional_command("scorevision.cli.elements", "elements_cli")

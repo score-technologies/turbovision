@@ -3,7 +3,6 @@ import os
 from json import dumps
 from logging import getLogger
 from time import time
-from bittensor import wallet
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.r2 import (
     add_index_key_if_new,
@@ -124,6 +123,8 @@ async def commit_audit_index_on_start() -> None:
 
 
 async def _commit_audit_index(index_url: str) -> bool:
+    from bittensor import wallet
+
     s = get_settings()
     w = wallet(
         name=s.BITTENSOR_WALLET_COLD,
