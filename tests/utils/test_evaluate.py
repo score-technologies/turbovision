@@ -2,7 +2,6 @@ from scorevision.utils.evaluate import (
     post_vlm_ranking,
     get_element_scores,
     parse_miner_prediction,
-    _polygon_metric_kwargs,
 )
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
@@ -203,14 +202,3 @@ def test_parse_miner_prediction_prefers_score_over_conf():
 
     assert bboxes[0].score == 0.77
 
-
-def test_polygon_metric_kwargs_only_for_polygon_elements():
-    miner_annotations = {1: {"polygons": [1], "bboxes": [2]}}
-
-    assert _polygon_metric_kwargs(miner_annotations) == {
-        "video_polygons": [[1]]
-    }
-
-
-def test_polygon_metric_kwargs_empty_when_no_polygons():
-    assert _polygon_metric_kwargs({1: {"polygons": [], "bboxes": [2]}}) == {}

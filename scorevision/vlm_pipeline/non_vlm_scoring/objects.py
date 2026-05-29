@@ -16,6 +16,14 @@ from scorevision.vlm_pipeline.utils.response_models import (
     BoundingBox,
     ShirtColor,
 )
+from scorevision.vlm_pipeline.non_vlm_scoring.polygons import (
+    compare_polygon_counts,
+    compare_polygon_false_positive,
+    compare_polygon_map50,
+    compare_polygon_placement,
+    compare_polygon_precision,
+    compare_polygon_recall,
+)
 
 AUC_IOU_THRESHOLDS = (0.3, 0.5)
 ENUM_IOU_THRESHOLD = 0.3
@@ -413,38 +421,9 @@ def _team_auc_f1(
 def compare_object_placement(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    """
-    Placement (label-agnostic AUC-F1).
-    Frame-wise average of AUC-F1 between PGT and miner boxes using Hungarian,
-    ignoring labels (pure geometry).
-    """
-    if not pseudo_gt:
-        return 0.0
-
-    per_frame = []
-    for pgt in pseudo_gt:
-        fr = pgt.frame_number
-        miner = miner_predictions.get(fr) or {}
-        h_bboxes = miner.get("bboxes") or []
-        p_boxes, p_lab = _extract_boxes_labels(
-            pgt.annotation.bboxes, only_players=False, use_team=False
-        )
-        h_boxes, h_lab = _extract_boxes_labels(
-            h_bboxes, only_players=False, use_team=False
-        )
-        val = _auc_f1(
-            p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=False
-        )
-        logger.info(
-            "[bbox][iou] frame=%s pgt=%s miner=%s score=%.6f",
-            fr,
-            len(p_boxes),
-            len(h_boxes),
-            val,
-        )
-        per_frame.append(val)
-
-    return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
+    return compare_polygon_placement(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
 
 
 def compare_object_labels(
@@ -521,9 +500,9 @@ def compare_team_labels(
 def compare_map50(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(
-        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
-    )["map_50"]
+    return compare_polygon_map50(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
 
 
 @register_metric(
@@ -533,9 +512,9 @@ def compare_map50(
 def compare_precision(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(
-        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
-    )["precision"]
+    return compare_polygon_precision(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
 
 
 @register_metric(
@@ -545,9 +524,9 @@ def compare_precision(
 def compare_recall(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(
-        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
-    )["recall"]
+    return compare_polygon_recall(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
 
 
 @register_metric(
@@ -557,9 +536,9 @@ def compare_recall(
 def compare_false_positive(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(
-        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
-    )["false_positive"]
+    return compare_polygon_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
 
 
 @register_metric((ElementPrefix.PLAYER_DETECTION, PillarName.PALETTE))
@@ -591,39 +570,6 @@ def compare_object_and_team_labels(
 def compare_object_counts(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    """
-    Enumeration (F1 at IoU τ=0.3, label-agnostic).
-    Emphasizes presence/count agreement with a lenient IoU threshold.
-    """
-    if not pseudo_gt:
-        return 0.0
-
-    per_frame = []
-    for pgt in pseudo_gt:
-        fr = pgt.frame_number
-        miner = miner_predictions.get(fr) or {}
-        h_bboxes = miner.get("bboxes") or []
-        p_boxes, p_lab = _extract_boxes_labels(
-            pgt.annotation.bboxes, only_players=False, use_team=False
-        )
-        h_boxes, h_lab = _extract_boxes_labels(
-            h_bboxes, only_players=False, use_team=False
-        )
-        val = _hungarian_f1(
-            p_boxes,
-            p_lab,
-            h_boxes,
-            h_lab,
-            iou_thresh=ENUM_IOU_THRESHOLD,
-            label_strict=False,
-        )
-        logger.info(
-            "[bbox][count] frame=%s pgt=%s miner=%s score=%.6f",
-            fr,
-            len(p_boxes),
-            len(h_boxes),
-            val,
-        )
-        per_frame.append(val)
-
-    return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
+    return compare_polygon_counts(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )
