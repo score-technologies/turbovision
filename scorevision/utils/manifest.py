@@ -64,6 +64,11 @@ class PillarName(str, Enum):
     SOCCER_ACTION = "soccer_action"
     CRICKET_SCORING = "cricket_scoring"
     FALSE_POSITIVE = "false_positive"
+    POLYGON_IOU = "polygon_iou"
+    POLYGON_COUNT = "polygon_count"
+    POLYGON_PRECISION = "polygon_precision"
+    POLYGON_RECALL = "polygon_recall"
+    POLYGON_FALSE_POSITIVE = "polygon_false_positive"
 
 
 class ElementPrefix(str, Enum):
@@ -79,6 +84,7 @@ class ElementPrefix(str, Enum):
     # NOTE:Player Detection is a special case of Object Detection that adds team classification
     PLAYER_DETECTION = "PlayerDetect"
     OBJECT_TRACKING = "Track"
+    POLYGON_DETECTION = "PolygonDetect"
     SCENE_CLASSIFICATION = "ClassifyImage"
     OBJECT_CLASSIFICATION = "ClassifyObject"
 
