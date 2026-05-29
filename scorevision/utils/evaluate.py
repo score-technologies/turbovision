@@ -33,8 +33,20 @@ from scorevision.utils.rtf import (
     check_rtf_gate,
     get_service_rate_fps_for_element,
 )
+from scorevision.utils.manifest import ElementPrefix
 
 logger = getLogger(__name__)
+
+
+def _polygon_metric_kwargs(element, miner_annotations: dict[int, dict]) -> dict:
+    if element is None or element.category != ElementPrefix.POLYGON_DETECTION:
+        return {}
+    return {
+        "video_polygons": [
+            miner_annotations[frame_num]["polygons"]
+            for frame_num in sorted(miner_annotations.keys())
+        ]
+    }
 
 
 def _collect_scored_frame_numbers(pseudo_gt_annotations: list[object]) -> list[int]:
@@ -389,15 +401,12 @@ def get_element_scores(
                     miner_annotations[frame_num]["bboxes"]
                     for frame_num in sorted(miner_annotations.keys())
                 ],
-                video_polygons=[
-                    miner_annotations[frame_num]["polygons"]
-                    for frame_num in sorted(miner_annotations.keys())
-                ],
                 image_height=settings.SCOREVISION_IMAGE_HEIGHT,
                 image_width=settings.SCOREVISION_IMAGE_WIDTH,
                 frames=frame_store,
                 challenge_type_id=challenge_type_id,
                 keypoints_template=element.keypoints,
+                **_polygon_metric_kwargs(element, miner_annotations),
             )
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
 
