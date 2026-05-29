@@ -207,11 +207,12 @@ def test_parse_miner_prediction_prefers_score_over_conf():
 
 
 def test_polygon_metric_kwargs_only_for_polygon_elements():
-    polygon_element = SimpleNamespace(category=ElementPrefix.POLYGON_DETECTION)
-    bbox_element = SimpleNamespace(category=ElementPrefix.PLAYER_DETECTION)
     miner_annotations = {1: {"polygons": [1], "bboxes": [2]}}
 
-    assert _polygon_metric_kwargs(bbox_element, miner_annotations) == {}
-    assert _polygon_metric_kwargs(polygon_element, miner_annotations) == {
+    assert _polygon_metric_kwargs(miner_annotations) == {
         "video_polygons": [[1]]
     }
+
+
+def test_polygon_metric_kwargs_empty_when_no_polygons():
+    assert _polygon_metric_kwargs({1: {"polygons": [], "bboxes": [2]}}) == {}

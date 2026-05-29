@@ -33,7 +33,6 @@ def element_pillar_registry_availability() -> dict:
         elif element.value in (
             ElementPrefix.OBJECT_DETECTION,
             ElementPrefix.PLAYER_DETECTION,
-            ElementPrefix.POLYGON_DETECTION,
         ):
             element_metadata["objects"] = [
                 "object name 1 (e.g. player)",

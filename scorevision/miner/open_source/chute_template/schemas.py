@@ -46,8 +46,15 @@ class SVBox(BaseModel):
     conf: float = 1.0
 
 
+class SVPolygon(BaseModel):
+    cls_id: int
+    conf: float = 1.0
+    points: list[tuple[int, int]]
+
+
 class SVFrameResult(BaseModel):
     frame_id: int
-    boxes: list[SVBox]
-    keypoints: list[tuple[int, int]]  # pixel coordinates
+    boxes: list[SVBox] | None = None
+    polygons: list[SVPolygon] | None = None
+    keypoints: list[tuple[int, int]] | None = None  # pixel coordinates
     # action:str #TODO:

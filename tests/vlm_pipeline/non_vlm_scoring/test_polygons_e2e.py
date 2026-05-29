@@ -68,7 +68,7 @@ async def test_sam3_polygon_end_to_end(tmp_path):
         "E",
         (),
         {
-            "category": ElementPrefix.POLYGON_DETECTION,
+            "category": ElementPrefix.OBJECT_DETECTION,
             "objects": ["player", "ball"],
         },
     )()

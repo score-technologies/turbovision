@@ -6,7 +6,7 @@ from scorevision.utils.data_models import (
     SVEvaluation,
 )
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Manifest, PillarName
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
@@ -26,20 +26,32 @@ from scorevision.utils.pillar_metric_registry import (
 # NOTE: The following imports are required to load METRIC_REGISTRY
 import scorevision.vlm_pipeline.non_vlm_scoring.keypoints
 import scorevision.vlm_pipeline.non_vlm_scoring.objects
-import scorevision.vlm_pipeline.non_vlm_scoring.polygons
+import scorevision.vlm_pipeline.non_vlm_scoring.polygons as polygon_metrics
 import scorevision.vlm_pipeline.non_vlm_scoring.smoothness
 from scorevision.utils.rtf import (
     calculate_rtf,
     check_rtf_gate,
     get_service_rate_fps_for_element,
 )
-from scorevision.utils.manifest import ElementPrefix
-
 logger = getLogger(__name__)
 
 
-def _polygon_metric_kwargs(element, miner_annotations: dict[int, dict]) -> dict:
-    if element is None or element.category != ElementPrefix.POLYGON_DETECTION:
+POLYGON_METRIC_FN_BY_PILLAR = {
+    PillarName.IOU: polygon_metrics.compare_polygon_placement,
+    PillarName.MAP50: polygon_metrics.compare_polygon_map50,
+    PillarName.COUNT: polygon_metrics.compare_polygon_counts,
+    PillarName.PRECISION: polygon_metrics.compare_polygon_precision,
+    PillarName.RECALL: polygon_metrics.compare_polygon_recall,
+    PillarName.FALSE_POSITIVE: polygon_metrics.compare_polygon_false_positive,
+}
+
+
+def _miner_annotations_have_polygons(miner_annotations: dict[int, dict]) -> bool:
+    return any(bool((frame.get("polygons") or [])) for frame in miner_annotations.values())
+
+
+def _polygon_metric_kwargs(miner_annotations: dict[int, dict]) -> dict:
+    if not _miner_annotations_have_polygons(miner_annotations):
         return {}
     return {
         "video_polygons": [
@@ -387,9 +399,14 @@ def get_element_scores(
         miner_annotations = parse_miner_prediction(
             miner_run=miner_run, object_names=element.objects or []
         )
+        use_polygon_metrics = _miner_annotations_have_polygons(miner_annotations)
         pillar_scores = {}
         for pillar, weight in element.metrics.pillars.items():
-            metric_fn = METRIC_REGISTRY.get((element.category, pillar))
+            metric_fn = (
+                POLYGON_METRIC_FN_BY_PILLAR.get(pillar)
+                if use_polygon_metrics
+                else METRIC_REGISTRY.get((element.category, pillar))
+            )
             if metric_fn is None:
                 raise NotImplementedError(
                     f"Could not compute score for pillar {pillar} in element of type {element.category}: A metric has yet to be defined and/or registered with @register_metric"
@@ -406,7 +423,7 @@ def get_element_scores(
                 frames=frame_store,
                 challenge_type_id=challenge_type_id,
                 keypoints_template=element.keypoints,
-                **_polygon_metric_kwargs(element, miner_annotations),
+                **_polygon_metric_kwargs(miner_annotations),
             )
             pillar_scores[pillar] = dict(score=score, weighted_score=score * weight)
 

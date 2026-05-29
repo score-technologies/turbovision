@@ -8,8 +8,6 @@ import numpy as np
 from cv2 import fillPoly
 from scipy.optimize import linear_sum_assignment
 
-from scorevision.utils.manifest import ElementPrefix, PillarName
-from scorevision.utils.pillar_metric_registry import register_metric
 from scorevision.utils.settings import get_settings
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import (
@@ -225,7 +223,7 @@ def _build_per_image_rows(
         frame_number = pgt.frame_number
         miner_frame = miner_predictions.get(frame_number) or {}
         pgt_polygons = pgt.annotation.bboxes or []
-        miner_polygons = miner_frame.get("polygons") or []
+        miner_polygons = miner_frame.get("polygons") or miner_frame.get("bboxes") or []
 
         gt_detections = []
         for box in pgt_polygons:
@@ -375,7 +373,6 @@ def _evaluate_detection_metrics(
     }
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.POLYGON_IOU))
 def compare_polygon_placement(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -386,7 +383,7 @@ def compare_polygon_placement(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_polygons = miner.get("polygons") or []
+        h_polygons = miner.get("polygons") or miner.get("bboxes") or []
         p_boxes, p_lab = _extract_boxes_labels(pgt.annotation.bboxes, only_players=False, use_team=False)
         h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
         val = _auc_f1(p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=False)
@@ -394,7 +391,6 @@ def compare_polygon_placement(
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.MAP50))
 def compare_polygon_map50(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -403,7 +399,6 @@ def compare_polygon_map50(
     )["map_50"]
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.POLYGON_PRECISION))
 def compare_polygon_precision(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -412,7 +407,6 @@ def compare_polygon_precision(
     ]
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.POLYGON_RECALL))
 def compare_polygon_recall(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -421,7 +415,6 @@ def compare_polygon_recall(
     ]
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.POLYGON_FALSE_POSITIVE))
 def compare_polygon_false_positive(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -430,7 +423,6 @@ def compare_polygon_false_positive(
     ]
 
 
-@register_metric((ElementPrefix.POLYGON_DETECTION, PillarName.POLYGON_COUNT))
 def compare_polygon_counts(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
@@ -441,7 +433,7 @@ def compare_polygon_counts(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_polygons = miner.get("polygons") or []
+        h_polygons = miner.get("polygons") or miner.get("bboxes") or []
         p_boxes, p_lab = _extract_boxes_labels(pgt.annotation.bboxes, only_players=False, use_team=False)
         h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
         val = _hungarian_f1(
