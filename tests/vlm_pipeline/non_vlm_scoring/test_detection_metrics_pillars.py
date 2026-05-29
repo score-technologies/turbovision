@@ -165,3 +165,31 @@ def test_false_positive_uses_ffpi_formula():
     assert compare_false_positive(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     ) == pytest.approx(0.5)
+
+
+def test_pseudo_gt_can_carry_polygons_without_affecting_bbox_scoring():
+    polygon = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=polygon,
+                    label="player",
+                )
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "bboxes": [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+            ]
+        }
+    }
+
+    assert compare_map50(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert pseudo_gt[0].annotation.bboxes[0].polygon == polygon
