@@ -348,6 +348,7 @@ def geometry_to_bbox(geometry: AnnotationGeometry) -> tuple[int, int, int, int]:
 - `bbox` is no longer stored as canonical data.
 - `points` is intentionally generic enough to support boxes, polygons, and points without adding separate top-level fields for each shape.
 - If you later need rotated boxes, they can be added as another `AnnotationGeometryType` without changing the overall model structure.
+- `geometry.type` is the only shape discriminator needed in the simplified contract.
 
 ## Current File Mapping
 

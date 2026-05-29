@@ -102,8 +102,9 @@ def parse_miner_prediction(
     for predicted_frame in predicted_frames:
         bboxes = []
         frame_number = predicted_frame.get("frame_id", -1)
+        raw_boxes = predicted_frame.get("annotations") or predicted_frame.get("boxes") or []
         if any(object_names):
-            for bbox in predicted_frame.get("boxes", []) or []:
+            for bbox in raw_boxes:
                 try:
                     raw_cls = bbox.get("cls_id")
                     try:
@@ -115,7 +116,11 @@ def parse_miner_prediction(
                     if object_id is not None and 0 <= object_id < len(object_names):
                         looked_up = object_names[object_id]
                     else:
-                        continue
+                        label = bbox.get("label")
+                        if label is not None:
+                            looked_up = str(label)
+                        else:
+                            continue
 
                     raw_cluster = None
                     if "cluster_id" in bbox:
@@ -125,14 +130,63 @@ def parse_miner_prediction(
 
                     cluster_id = _normalize_cluster_id(raw_cluster)
 
+                    geometry = bbox.get("geometry")
+                    if isinstance(geometry, dict):
+                        geom_type = str(geometry.get("type") or "").strip().lower()
+                        points = geometry.get("points") or []
+                        if geom_type and isinstance(points, list):
+                            if geom_type == AnnotationGeometryType.BBOX.value and len(points) == 2:
+                                bboxes.append(
+                                    BoundingBox(
+                                        label=looked_up,
+                                        geometry=AnnotationGeometry(
+                                            type=AnnotationGeometryType.BBOX,
+                                            points=[
+                                                Point2D(x=float(points[0]["x"] if isinstance(points[0], dict) else points[0][0]), y=float(points[0]["y"] if isinstance(points[0], dict) else points[0][1])),
+                                                Point2D(x=float(points[1]["x"] if isinstance(points[1], dict) else points[1][0]), y=float(points[1]["y"] if isinstance(points[1], dict) else points[1][1])),
+                                            ],
+                                        ),
+                                        score=bbox.get("score", bbox.get("conf")),
+                                        cluster_id=cluster_id,
+                                    )
+                                )
+                                continue
+                            if geom_type in {AnnotationGeometryType.POLYGON.value, AnnotationGeometryType.POINT.value}:
+                                parsed_points = []
+                                for point in points:
+                                    if isinstance(point, dict) and "x" in point and "y" in point:
+                                        parsed_points.append(Point2D(x=float(point["x"]), y=float(point["y"])))
+                                    elif isinstance(point, (list, tuple)) and len(point) == 2:
+                                        parsed_points.append(Point2D(x=float(point[0]), y=float(point[1])))
+                                if parsed_points:
+                                    bboxes.append(
+                                        BoundingBox(
+                                            label=looked_up,
+                                            geometry=AnnotationGeometry(
+                                                type=AnnotationGeometryType(geom_type),
+                                                points=parsed_points,
+                                            ),
+                                            score=bbox.get("score", bbox.get("conf")),
+                                            cluster_id=cluster_id,
+                                        )
+                                    )
+                                    continue
+
+                    x1 = bbox.get("x1")
+                    y1 = bbox.get("y1")
+                    x2 = bbox.get("x2")
+                    y2 = bbox.get("y2")
+                    if x1 is None or y1 is None or x2 is None or y2 is None:
+                        continue
+
                     bboxes.append(
                         BoundingBox(
                             label=looked_up,
                             geometry=AnnotationGeometry(
                                 type=AnnotationGeometryType.BBOX,
                                 points=[
-                                    Point2D(x=float(bbox["x1"]), y=float(bbox["y1"])),
-                                    Point2D(x=float(bbox["x2"]), y=float(bbox["y2"])),
+                                    Point2D(x=float(x1), y=float(y1)),
+                                    Point2D(x=float(x2), y=float(y2)),
                                 ],
                             ),
                             score=bbox.get("score", bbox.get("conf")),

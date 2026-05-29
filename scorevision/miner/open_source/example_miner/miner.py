@@ -5,18 +5,26 @@ from numpy import ndarray
 from pydantic import BaseModel
 
 
-class BoundingBox(BaseModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-    cls_id: int
-    conf: float
+class GeometryPoint(BaseModel):
+    x: float
+    y: float
+
+
+class Geometry(BaseModel):
+    type: str
+    points: list[GeometryPoint]
+
+
+class Annotation(BaseModel):
+    label: str | None = None
+    score: float = 1.0
+    cluster_id: int | None = None
+    geometry: Geometry
 
 
 class TVFrameResult(BaseModel):
     frame_id: int
-    boxes: list[BoundingBox]
+    annotations: list[Annotation]
     keypoints: list[tuple[int, int]]
 
 
@@ -83,29 +91,33 @@ class Miner:
                 A list of predictions for each image in the batch
         """
 
-        bboxes: dict[int, list[BoundingBox]] = {}
+        annotations: dict[int, list[Annotation]] = {}
         bbox_model_results = self.bbox_model.predict(batch_images)
         if bbox_model_results is not None:
             for frame_number_in_batch, detection in enumerate(bbox_model_results):
                 if not hasattr(detection, "boxes") or detection.boxes is None:
                     continue
-                boxes = []
+                frame_annotations = []
                 for box in detection.boxes.data:
                     x1, y1, x2, y2, conf, cls_id = box.tolist()
-                    boxes.append(
-                        BoundingBox(
-                            x1=int(x1),
-                            y1=int(y1),
-                            x2=int(x2),
-                            y2=int(y2),
-                            cls_id=int(cls_id),
-                            conf=float(conf),
+                    frame_annotations.append(
+                        Annotation(
+                            label=None,
+                            score=float(conf),
+                            cluster_id=int(cls_id),
+                            geometry=Geometry(
+                                type="bbox",
+                                points=[
+                                    GeometryPoint(x=float(x1), y=float(y1)),
+                                    GeometryPoint(x=float(x2), y=float(y2)),
+                                ],
+                            ),
                         )
                     )
-                bboxes[offset + frame_number_in_batch] = boxes
+                annotations[offset + frame_number_in_batch] = frame_annotations
         print("✅ BBoxes predicted")
 
-        keypoints: dict[int, tuple[int, int]] = {}
+        keypoints: dict[int, list[tuple[int, int]]] = {}
         keypoints_model_results = self.keypoints_model.predict(batch_images)
         if keypoints_model_results is not None:
             for frame_number_in_batch, detection in enumerate(keypoints_model_results):
@@ -129,7 +141,7 @@ class Miner:
             results.append(
                 TVFrameResult(
                     frame_id=frame_number,
-                    boxes=bboxes.get(frame_number, []),
+                    annotations=annotations.get(frame_number, []),
                     keypoints=keypoints.get(
                         frame_number, [(0, 0) for _ in range(n_keypoints)]
                     ),

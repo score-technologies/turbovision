@@ -3,7 +3,7 @@ from base64 import b64decode
 from typing import Any
 
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 # ======NOTE: These must match what is in the chute ==========
@@ -37,17 +37,35 @@ class SVFrame(BaseModel):
         return Image.open(BytesIO(b64decode(self.data))).convert("RGB")
 
 
-class SVBox(BaseModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-    cls_id: int
-    conf: float = 1.0
+class GeometryPoint(BaseModel):
+    x: float
+    y: float
+
+
+class Geometry(BaseModel):
+    type: str
+    points: list[GeometryPoint] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_points(self):
+        if self.type == "bbox" and len(self.points) != 2:
+            raise ValueError("bbox geometry requires exactly 2 points")
+        if self.type == "polygon" and len(self.points) < 3:
+            raise ValueError("polygon geometry requires at least 3 points")
+        if self.type == "point" and len(self.points) != 1:
+            raise ValueError("point geometry requires exactly 1 point")
+        return self
+
+
+class SVAnnotation(BaseModel):
+    label: str | None = None
+    score: float = 1.0
+    cluster_id: int | None = None
+    geometry: Geometry
 
 
 class SVFrameResult(BaseModel):
     frame_id: int
-    boxes: list[SVBox]
+    annotations: list[SVAnnotation]
     keypoints: list[tuple[int, int]]  # pixel coordinates
     # action:str #TODO:
