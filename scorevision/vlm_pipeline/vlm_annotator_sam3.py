@@ -65,11 +65,15 @@ async def generate_annotations_for_select_frame_sam3(
     if not any(object_names) and element.category in (
         ElementPrefix.OBJECT_DETECTION,
         ElementPrefix.PLAYER_DETECTION,
+        ElementPrefix.POLYGON_DETECTION,
     ):
         raise ValueError(
             "No object names in Element!  Object names are required to use SAM3 to detect objects"
         )
-    if element.category == ElementPrefix.OBJECT_DETECTION:
+    if element.category in (
+        ElementPrefix.OBJECT_DETECTION,
+        ElementPrefix.POLYGON_DETECTION,
+    ):
         bboxes = await detect_objects_sam3(
             frame=frame,
             object_names=object_names,
@@ -118,7 +122,7 @@ async def generate_annotations_for_select_frame_sam3(
         )
     else:
         raise SAM3Error(
-            f"Sam3 was attempted to be used on Element {element.category} but is currently only used to validate the following Element Types: {ElementPrefix.PLAYER_DETECTION} and {ElementPrefix.OBJECT_DETECTION}"
+            f"Sam3 was attempted to be used on Element {element.category} but is currently only used to validate the following Element Types: {ElementPrefix.PLAYER_DETECTION}, {ElementPrefix.OBJECT_DETECTION}, and {ElementPrefix.POLYGON_DETECTION}"
         )
 
     return PseudoGroundTruth(
