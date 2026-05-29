@@ -11,10 +11,6 @@ from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
 from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation, ShirtColor
 
 
-def test_polygon_metrics_registered():
-    assert True
-
-
 def test_polygon_placeholder_metrics_return_zero():
     gt = PseudoGroundTruth(
         video_name="v",

@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from scorevision.utils.evaluate import (
     post_vlm_ranking,
     get_element_scores,
