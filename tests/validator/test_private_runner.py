@@ -1,6 +1,13 @@
 from unittest.mock import AsyncMock, patch
 import pytest
-from scorevision.utils.schemas import ChallengeResponse, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeResponse,
+    FramePrediction,
+    PredictionPayload,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
+)
 from scorevision.validator.central.private_track.challenges import Challenge
 from scorevision.validator.central.private_track.miners import ChallengeAttempt
 from scorevision.validator.central.private_track.registry import RegisteredMiner
@@ -28,6 +35,30 @@ def _challenge() -> Challenge:
         challenge_id="challenge-1",
         video_url="https://example.com/video.mp4",
         ground_truth=[FramePrediction(frame=25, action="pass")],
+    )
+
+
+def _snooker_challenge() -> Challenge:
+    return Challenge(
+        challenge_id="snooker-1",
+        video_url="https://example.com/snooker.mp4",
+        target_frames=[50],
+        ground_truth=SnookerBallStatePrediction(
+            frames=[
+                SnookerBallStateFrame(
+                    frame=50,
+                    balls=[
+                        SnookerBallPrediction(
+                            label="cue",
+                            x=0.5,
+                            y=0.5,
+                            state="on_table",
+                        )
+                    ],
+                )
+            ]
+        ),
+        groundtruth_type="snooker_ball_state",
     )
 
 
@@ -104,6 +135,66 @@ async def test_challenge_miner_excludes_timeout_from_weights():
     assert result["prediction_count"] == 0
     assert result["timed_out"] is True
     assert response_predictions is None
+    assert benchmark_result is None
+
+
+@pytest.mark.asyncio
+async def test_challenge_miner_scores_snooker_only_on_target_frames():
+    attempt = ChallengeAttempt(
+        response=ChallengeResponse(
+            challenge_id="snooker-1",
+            prediction=PredictionPayload(
+                type="snooker_ball_state",
+                frames=[
+                    SnookerBallStateFrame(
+                        frame=50,
+                        balls=[
+                            SnookerBallPrediction(
+                                label="cue",
+                                x=0.5,
+                                y=0.5,
+                                state="on_table",
+                            )
+                        ],
+                    ),
+                    SnookerBallStateFrame(
+                        frame=999,
+                        balls=[
+                            SnookerBallPrediction(
+                                label="alien",
+                                x=0.1,
+                                y=0.1,
+                                state="on_table",
+                            )
+                        ],
+                    ),
+                ],
+            ),
+            processing_time=1.2,
+        ),
+        elapsed_s=2.5,
+        timed_out=False,
+    )
+
+    with patch(
+        "scorevision.validator.central.private_track.runner.send_challenge",
+        new=AsyncMock(return_value=attempt),
+    ):
+        result, response_predictions, benchmark_result = await _challenge_miner(
+            miner=_miner(),
+            challenge=_snooker_challenge(),
+            keypair=None,
+            timeout=30.0,
+            block=1234,
+            element_id="manako/DetectSnookerBallState",
+            pillar_weights={"snooker_ball_state": 1.0},
+            image_digest="sha256:abc123",
+        )
+
+    assert result["score"] == pytest.approx(1.0)
+    assert result["score_breakdown"]["snooker_ball_state"] == pytest.approx(1.0)
+    assert response_predictions is not None
+    assert len(response_predictions) == 2
     assert benchmark_result is None
 
 

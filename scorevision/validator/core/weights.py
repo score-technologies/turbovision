@@ -9,7 +9,6 @@ from functools import lru_cache
 from logging import getLogger
 from pathlib import Path
 import aiohttp
-import bittensor as bt
 from scorevision.utils.settings import get_settings
 from scorevision.utils.windows import get_current_window_id
 from scorevision.utils.prometheus import (
@@ -66,6 +65,21 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5Gj9pWjksQXkuaoVxHRaKN1pmgQYiUddrNweY3SFBWMGo2QD",
 }
 
+SCORE_SCALED_PRIVATE_GROUNDTRUTH_TYPES = {"cricket_delivery", "snooker_ball_state"}
+
+
+def _private_element_weight_share(
+    *,
+    elem_weight: float,
+    is_private: bool,
+    groundtruth_type: str,
+    winner_score: float,
+) -> float:
+    if not is_private or groundtruth_type not in SCORE_SCALED_PRIVATE_GROUNDTRUTH_TYPES:
+        return float(elem_weight)
+    clamped_score = max(0.0, min(1.0, float(winner_score)))
+    return float(elem_weight) * clamped_score
+
 
 def _top_rows(
     rows: list[dict[str, float | int | str]],
@@ -88,6 +102,8 @@ def _top_rows(
 
 @lru_cache(maxsize=1)
 def get_validator_hotkey_ss58() -> str:
+    import bittensor as bt
+
     settings = get_settings()
     wallet = bt.wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -252,6 +268,8 @@ async def weights_loop(
     setup_signal_handler()
     if commit_on_start:
         await commit_validator_on_start(netuid)
+
+    import bittensor as bt
 
     wallet = bt.wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -418,22 +436,26 @@ async def weights_loop(
                             logger.warning("[weights] No winner for element_id=%s", element_id)
                             continue
 
-                        share = float(elem_weight)
                         raw_groundtruth_type = getattr(elem, "groundtruth_type", None) if elem is not None else None
                         if hasattr(raw_groundtruth_type, "value"):
                             groundtruth_type = str(raw_groundtruth_type.value or "").strip().lower()
                         else:
                             groundtruth_type = str(raw_groundtruth_type or "").strip().lower()
-                        if is_private and groundtruth_type == "cricket_delivery":
-                            winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
-                            winner_score = max(0.0, min(1.0, winner_score_raw))
-                            share = share * winner_score
+                        winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
+                        share = _private_element_weight_share(
+                            elem_weight=elem_weight,
+                            is_private=is_private,
+                            groundtruth_type=groundtruth_type,
+                            winner_score=winner_score_raw,
+                        )
+                        if is_private and groundtruth_type in SCORE_SCALED_PRIVATE_GROUNDTRUTH_TYPES:
                             logger.info(
-                                "[weights] Cricket private weighting enabled element=%s winner_uid=%d elem_weight=%.6f winner_score=%.6f share=%.6f",
+                                "[weights] Score-scaled private weighting enabled element=%s groundtruth_type=%s winner_uid=%d elem_weight=%.6f winner_score=%.6f share=%.6f",
                                 element_id,
+                                groundtruth_type,
                                 winner_uid,
                                 elem_weight,
-                                winner_score,
+                                max(0.0, min(1.0, winner_score_raw)),
                                 share,
                             )
                         elif is_private:

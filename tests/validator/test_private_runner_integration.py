@@ -5,7 +5,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from scorevision.utils.manifest import Element, Manifest, Metrics, PillarName, Tee
-from scorevision.utils.schemas import ChallengeResponse, CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeResponse,
+    CricketDeliveryPrediction,
+    FramePrediction,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
+)
 from scorevision.validator.central.private_track.challenges import Challenge
 from scorevision.validator.central.private_track.registry import RegisteredMiner
 from scorevision.validator.central.private_track.runner import (
@@ -35,12 +42,22 @@ def _private_manifest() -> Manifest:
         groundtruth_type="cricket_delivery",
         metrics=Metrics(pillars={PillarName.CRICKET_SCORING: 1.0}),
     )
+    snooker = Element(
+        id="manako/DetectSnookerBallState",
+        track="private",
+        weight=0.05,
+        window_block=300,
+        eval_window=4,
+        beta=1.0,
+        groundtruth_type="snooker_ball_state",
+        metrics=Metrics(pillars={PillarName.SNOOKER_BALL_STATE: 1.0}),
+    )
     return Manifest(
         window_id="2025-10-27",
         version=1.3,
         expiry_block=12345678910,
         tee=Tee(trusted_share_gamma=0.2),
-        elements=[soccer, cricket],
+        elements=[soccer, cricket, snooker],
     )
 
 
@@ -75,8 +92,32 @@ def _cricket_challenge() -> Challenge:
     )
 
 
+def _snooker_challenge() -> Challenge:
+    return Challenge(
+        challenge_id="snooker-1",
+        video_url="https://example.com/snooker.mp4",
+        target_frames=[50, 150, 250, 350, 450],
+        ground_truth=SnookerBallStatePrediction(
+            frames=[
+                SnookerBallStateFrame(
+                    frame=50,
+                    balls=[
+                        SnookerBallPrediction(
+                            label="cue",
+                            x=0.5,
+                            y=0.5,
+                            state="on_table",
+                        )
+                    ],
+                )
+            ]
+        ),
+        groundtruth_type="snooker_ball_state",
+    )
+
+
 @pytest.mark.asyncio
-async def test_trigger_scheduled_runners_launches_two_private_elements_in_parallel():
+async def test_trigger_scheduled_runners_launches_three_private_elements_in_parallel():
     manifest = _private_manifest()
     block = 600
     keypair = object()
@@ -84,6 +125,7 @@ async def test_trigger_scheduled_runners_launches_two_private_elements_in_parall
     element_state = {
         "manako/DetectFootballEvent": {"tempo": 300, "anchor": 0, "task": None},
         "manako/DetectCricketDelivery": {"tempo": 300, "anchor": 0, "task": None},
+        "manako/DetectSnookerBallState": {"tempo": 300, "anchor": 0, "task": None},
     }
 
     started: list[str] = []
@@ -99,7 +141,11 @@ async def test_trigger_scheduled_runners_launches_two_private_elements_in_parall
         await asyncio.gather(*[entry["task"] for entry in element_state.values()])
 
     assert sorted(started) == sorted(
-        ["manako/DetectFootballEvent", "manako/DetectCricketDelivery"]
+        [
+            "manako/DetectFootballEvent",
+            "manako/DetectCricketDelivery",
+            "manako/DetectSnookerBallState",
+        ]
     )
 
 
@@ -256,6 +302,96 @@ async def test_run_challenge_for_element_cricket_uses_cricket_pillars_and_upload
     assert challenge_miner_mock.await_count == 1
     args = challenge_miner_mock.await_args.args
     assert args[6] == {"cricket_scoring": 1.0}
+    assert upload_shard_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_challenge_for_element_snooker_uses_snooker_pillars_and_uploads_results():
+    manifest = _private_manifest()
+    miner = _miner(9, "hk-snooker")
+    settings = SimpleNamespace(
+        BLACKLIST_API_URL="",
+        SCOREVISION_NETUID=44,
+        PRIVATE_MINER_TIMEOUT_S=30.0,
+    )
+    subtensor = SimpleNamespace(metagraph=AsyncMock(return_value=SimpleNamespace()))
+
+    challenge_miner_mock = AsyncMock(
+        return_value=(
+            {
+                "challenge_id": "snooker-1",
+                "element_id": "manako/DetectSnookerBallState",
+                "miner_hotkey": miner.hotkey,
+                "miner_uid": miner.uid,
+                "score": 0.88,
+                "prediction_count": 1,
+                "ground_truth_count": 1,
+                "processing_time": 2.1,
+                "response_time_s": 2.1,
+                "timed_out": False,
+                "image_digest": miner.image_digest,
+                "score_breakdown": {"snooker_ball_state": 0.88},
+            },
+            [
+                {
+                    "frame": 50,
+                    "balls": [
+                        {
+                            "label": "cue",
+                            "x": 0.5,
+                            "y": 0.5,
+                            "state": "on_table",
+                        }
+                    ],
+                }
+            ],
+            None,
+        )
+    )
+    upload_shard_mock = AsyncMock(return_value="privatevision_results/shard.json")
+
+    with (
+        patch("scorevision.validator.central.private_track.runner.get_settings", return_value=settings),
+        patch(
+            "scorevision.validator.central.private_track.runner.get_registered_miners",
+            new=AsyncMock(return_value=[miner]),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner.get_challenge_with_ground_truth",
+            new=AsyncMock(return_value=_snooker_challenge()),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._challenge_miner",
+            new=challenge_miner_mock,
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._upload_private_response_blob",
+            new=AsyncMock(return_value="private_responses/key.json"),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._emit_private_score_to_public_db",
+            new=AsyncMock(),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._upload_benchmark_result",
+            new=AsyncMock(),
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._upload_shard",
+            new=upload_shard_mock,
+        ),
+    ):
+        await _run_challenge_for_element(
+            element_id="manako/DetectSnookerBallState",
+            manifest=manifest,
+            block=9002,
+            keypair=SimpleNamespace(ss58_address="validator-hk"),
+            subtensor=subtensor,
+        )
+
+    assert challenge_miner_mock.await_count == 1
+    args = challenge_miner_mock.await_args.args
+    assert args[6] == {"snooker_ball_state": 1.0}
     assert upload_shard_mock.await_count == 1
 
 

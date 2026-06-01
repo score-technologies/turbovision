@@ -52,10 +52,29 @@ class CricketDeliveryPrediction(BaseModel):
     wickets: int | None = Field(default=None, validation_alias=AliasChoices("wickets", "wkts"))
 
 
+class SnookerBallPrediction(BaseModel):
+    label: str
+    x: float | None = Field(default=None, ge=0.0, le=1.0)
+    y: float | None = Field(default=None, ge=0.0, le=1.0)
+    state: str = "on_table"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    bbox: list[int] | None = None
+
+
+class SnookerBallStateFrame(BaseModel):
+    frame: int = Field(ge=0)
+    balls: list[SnookerBallPrediction]
+
+
+class SnookerBallStatePrediction(BaseModel):
+    frames: list[SnookerBallStateFrame]
+
+
 class PredictionPayload(BaseModel):
     type: str
     items: list[FramePrediction] | None = None
     item: CricketDeliveryPrediction | None = None
+    frames: list[SnookerBallStateFrame] | None = None
 
     @model_validator(mode="after")
     def validate_payload(self):
@@ -64,12 +83,22 @@ class PredictionPayload(BaseModel):
                 raise ValueError("soccer_action prediction requires items")
             if self.item is not None:
                 raise ValueError("soccer_action prediction must not include item")
+            if self.frames is not None:
+                raise ValueError("soccer_action prediction must not include frames")
             return self
         if self.type == "cricket_delivery":
             if self.item is None:
                 raise ValueError("cricket_delivery prediction requires item")
             if self.items is not None:
                 raise ValueError("cricket_delivery prediction must not include items")
+            if self.frames is not None:
+                raise ValueError("cricket_delivery prediction must not include frames")
+            return self
+        if self.type == "snooker_ball_state":
+            if self.frames is None:
+                raise ValueError("snooker_ball_state prediction requires frames")
+            if self.items is not None or self.item is not None:
+                raise ValueError("snooker_ball_state prediction must not include items or item")
             return self
         raise ValueError(f"Unsupported prediction type: {self.type}")
 
@@ -90,9 +119,12 @@ class ChallengeRequest(BaseModel):
     challenge_id: str
     video_url: str | None = None
     frames: list[ChallengeFrame] | None = None
+    target_frames: list[int] | None = None
 
     @model_validator(mode="after")
     def validate_payload(self):
+        if self.target_frames is not None and any(frame < 0 for frame in self.target_frames):
+            raise ValueError("target_frames must be non-negative frame ids")
         if self.video_url:
             return self
         if self.frames:
@@ -103,13 +135,18 @@ class ChallengeRequest(BaseModel):
 class ChallengeResponse(BaseModel):
     challenge_id: str
     predictions: list[FramePrediction] | None = None
-    prediction: PredictionPayload | CricketDeliveryPrediction | None = None
+    prediction: PredictionPayload | CricketDeliveryPrediction | SnookerBallStatePrediction | None = None
     processing_time: float
 
     @model_validator(mode="after")
     def validate_payload(self):
         if isinstance(self.prediction, CricketDeliveryPrediction):
             self.prediction = PredictionPayload(type="cricket_delivery", item=self.prediction)
+        if isinstance(self.prediction, SnookerBallStatePrediction):
+            self.prediction = PredictionPayload(
+                type="snooker_ball_state",
+                frames=self.prediction.frames,
+            )
 
         has_legacy_predictions = self.predictions is not None
         has_prediction = self.prediction is not None
@@ -128,6 +165,8 @@ class ChallengeResponse(BaseModel):
     def prediction_count(self) -> int:
         if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery":
             return 1
+        if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "snooker_ball_state":
+            return sum(len(frame.balls) for frame in (self.prediction.frames or []))
         if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "soccer_action":
             return len(self.prediction.items or [])
         return len(self.predictions or [])
@@ -135,6 +174,10 @@ class ChallengeResponse(BaseModel):
     @property
     def is_cricket(self) -> bool:
         return isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery"
+
+    @property
+    def is_snooker_ball_state(self) -> bool:
+        return isinstance(self.prediction, PredictionPayload) and self.prediction.type == "snooker_ball_state"
 
     @model_serializer(mode="wrap")
     def serialize_model(self, handler):

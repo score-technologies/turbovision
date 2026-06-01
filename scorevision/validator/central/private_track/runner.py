@@ -31,6 +31,7 @@ from scorevision.validator.central.private_track.benchmark import (
 from scorevision.validator.central.private_track.scoring import (
     PRIVATE_SCORING_VERSION,
     score_cricket_prediction_with_breakdown,
+    score_snooker_ball_state_with_breakdown,
     score_predictions_with_breakdown,
 )
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
@@ -42,6 +43,7 @@ from scorevision.validator.central.scheduling import (
     update_element_state,
 )
 from scorevision.validator.models import PrivateEvaluationResult
+from scorevision.utils.schemas import SnookerBallStatePrediction
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,8 @@ def _ground_truth_count(challenge: Challenge) -> int:
     ground_truth = challenge.ground_truth
     if isinstance(ground_truth, list):
         return len(ground_truth)
+    if isinstance(ground_truth, SnookerBallStatePrediction):
+        return sum(len(frame.balls) for frame in ground_truth.frames)
     return 1 if ground_truth is not None else 0
 
 
@@ -140,7 +144,7 @@ async def _upload_private_response_blob(
     block: int,
     response_predictions: list[dict] | None,
 ) -> str | None:
-    if not response_predictions:
+    if response_predictions is None:
         return None
 
     prefix = (get_settings().PRIVATE_RESPONSES_R2_PREFIX or "private_responses").strip().strip("/")
@@ -155,6 +159,7 @@ async def _upload_private_response_blob(
         "challenge_id": challenge.challenge_id,
         "video_url": challenge.video_url,
         "frames": [frame.model_dump(mode="json") for frame in (challenge.payload_frames or [])] or None,
+        "target_frames": challenge.target_frames,
         "miner_hotkey": miner.hotkey,
         "miner_uid": miner.uid,
         "predictions": response_predictions,
@@ -335,6 +340,24 @@ async def _challenge_miner(
                     [cricket_prediction.model_dump(mode="json")] if cricket_prediction else []
                 )
                 benchmark_result = None
+            elif challenge.groundtruth_type == "snooker_ball_state":
+                snooker_prediction = None
+                if response.prediction is not None and hasattr(response.prediction, "frames"):
+                    snooker_prediction = SnookerBallStatePrediction(
+                        frames=response.prediction.frames or []
+                    )
+                score, score_breakdown = score_snooker_ball_state_with_breakdown(
+                    snooker_prediction,
+                    challenge.ground_truth,
+                    target_frames=challenge.target_frames,
+                )
+                pred_count = response.prediction_count
+                response_predictions = (
+                    [frame.model_dump(mode="json") for frame in snooker_prediction.frames]
+                    if snooker_prediction
+                    else []
+                )
+                benchmark_result = None
             else:
                 score, score_breakdown = score_predictions_with_breakdown(
                     response.predictions or [],
@@ -432,11 +455,15 @@ async def _emit_private_score_to_public_db(
         payload=TVPredictInput(
             url=challenge.video_url,
             frames=payload_frames,
-            meta={"track": "private"},
+            meta={
+                "track": "private",
+                "target_frames": challenge.target_frames,
+            },
         ),
         meta={
             "source": "private_track",
             "task_id": challenge.challenge_id,
+            "target_frames": challenge.target_frames,
         },
         prompt="private-track challenge",
         challenge_id=challenge.challenge_id,
@@ -471,6 +498,7 @@ async def _emit_private_score_to_public_db(
             "timed_out": timed_out,
             "prediction_count": result.get("prediction_count", 0),
             "ground_truth_count": result.get("ground_truth_count", 0),
+            "target_frames": challenge.target_frames,
         },
         latency_p95_ms=latency_ms,
         latency_pass=not timed_out,

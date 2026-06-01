@@ -192,11 +192,12 @@ Current private elements are served as separate tracks from the miner point of v
 
 - Football private element (`groundtruth_type=soccer_action`)
 - Cricket private element (`groundtruth_type=cricket_delivery`)
+- Snooker ball-state private element (`groundtruth_type=snooker_ball_state`)
 
 The template miner uses a static mode switch in `scorevision/miner/private_track/routes.py`:
 
 ```python
-MINER_MODE = "soccer_action"  # or "cricket_delivery"
+MINER_MODE = "soccer_action"  # or "cricket_delivery" or "snooker_ball_state"
 ```
 
 Keep one deployment per mode. Do not expect one running container to handle both private element types automatically.
@@ -238,6 +239,7 @@ Keep one deployment per mode. Do not expect one running container to handle both
 ```
 
 For full cricket field guidance, see `scorevision/miner/CRICKET_MINER_SPEC.md`.
+For snooker ball-state guidance, see `scorevision/miner/private_track/SNOOKER_MINER_SPEC.md`.
 
 ### 1.3 On-Chain Commitment Must Match Element
 
@@ -255,7 +257,7 @@ Example commitment shape (conceptual):
 }
 ```
 
-If you serve cricket, use the cricket element id instead.
+If you serve cricket or snooker, use that element id instead.
 
 ### 2. Test Locally (Without Wallet)
 
@@ -318,12 +320,12 @@ The CLI will:
 
 After deployment, **share with Score** (see [GHCR Setup](#ghcr-setup) step 4).
 
-## Private Miner Checklist (Football / Cricket)
+## Private Miner Checklist (Football / Cricket / Snooker)
 
 Before declaring your miner live:
 
 1. Set `MINER_MODE` to the intended private element type.
-2. Ensure predictor output matches the expected response payload (`soccer_action.items` or `cricket_delivery.item`).
+2. Ensure predictor output matches the expected response payload (`soccer_action.items`, `cricket_delivery.item`, or `snooker_ball_state.frames`).
 3. Deploy image and commit with the correct private `element_id`.
 4. Verify your axon IP/port is reachable.
 5. Confirm Score has GHCR read access to your package.

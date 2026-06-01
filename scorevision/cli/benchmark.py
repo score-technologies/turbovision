@@ -3,11 +3,9 @@ import os
 from json import dumps, loads
 from pathlib import Path
 
-import bittensor as bt
 import click
 
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
-from scorevision.utils.bittensor_helpers import get_subtensor
 from scorevision.utils.cloudflare_helpers import get_s3_client
 from scorevision.utils.manifest import get_current_manifest, load_manifest_from_public_index
 from scorevision.utils.miner_registry import get_miners_from_registry
@@ -134,6 +132,8 @@ async def _resolve_private_target(
     element_id: str,
     winner_entry: dict,
 ):
+    from scorevision.utils.bittensor_helpers import get_subtensor
+
     settings = get_settings()
     winner_hotkey = str(winner_entry.get("winner_hotkey") or "").strip()
     if not winner_hotkey:
@@ -186,6 +186,8 @@ async def run_top_performer_benchmark(
     success_count = 0
 
     if track == "private":
+        import bittensor as bt
+
         target_miner = await _resolve_private_target(selected_element_id, winner_entry)
         wallet = bt.wallet(
             name=settings.BITTENSOR_WALLET_COLD,

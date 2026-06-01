@@ -4,7 +4,13 @@ from types import SimpleNamespace
 from scorevision.validator.central.private_track.challenges import (
     get_challenge_with_ground_truth,
 )
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
+)
 
 
 _FAKE_SETTINGS = SimpleNamespace(
@@ -116,3 +122,84 @@ async def test_get_challenge_accepts_single_cricket_ground_truth():
 
     assert challenge is not None
     assert challenge.groundtruth_type == "cricket_delivery"
+
+
+@pytest.mark.asyncio
+async def test_get_challenge_accepts_snooker_ball_state_ground_truth():
+    fake_chal = {
+        "task_id": "c123",
+        "payload": {
+            "clip_url": "https://example.com/v1.mp4",
+            "target_frames": [50, 150, 250, 350, 450],
+        },
+    }
+    snooker_gt = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(
+                        label="cue",
+                        x=0.5,
+                        y=0.5,
+                        state="on_table",
+                    )
+                ],
+            )
+        ]
+    )
+
+    with _patch_settings(), \
+         patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
+         patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=snooker_gt):
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash="abc123",
+            element_id="elem1",
+            keypair=None,
+            groundtruth_type="snooker_ball_state",
+            max_retries=1,
+        )
+
+    assert challenge is not None
+    assert challenge.groundtruth_type == "snooker_ball_state"
+    assert challenge.video_url == "https://example.com/v1.mp4"
+    assert challenge.target_frames == [50, 150, 250, 350, 450]
+
+
+@pytest.mark.asyncio
+async def test_get_challenge_rejects_snooker_without_target_frames():
+    fake_chal = {"task_id": "c123", "video_url": "https://example.com/v1.mp4"}
+    snooker_gt = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(
+                        label="cue",
+                        x=0.5,
+                        y=0.5,
+                        state="on_table",
+                    )
+                ],
+            )
+        ]
+    )
+    complete_mock = AsyncMock()
+    fetch_gt_mock = AsyncMock(return_value=snooker_gt)
+
+    with _patch_settings(), \
+         patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", complete_mock), \
+         patch(f"{_MODULE}.fetch_ground_truth", fetch_gt_mock):
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash="abc123",
+            element_id="elem1",
+            keypair=None,
+            groundtruth_type="snooker_ball_state",
+            max_retries=1,
+        )
+
+    assert challenge is None
+    complete_mock.assert_not_awaited()
+    fetch_gt_mock.assert_not_awaited()

@@ -8,7 +8,6 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from huggingface_hub import HfApi
-from bittensor import async_subtensor
 
 from scorevision.utils.bittensor_helpers import (
     get_subtensor,
@@ -629,6 +628,8 @@ async def get_miners_from_registry(
             )
             st_archive = None
             try:
+                from bittensor import async_subtensor
+
                 st_archive = async_subtensor(_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
                 await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
                 sem = asyncio.Semaphore(_REGISTRY_COMMIT_BACKFILL_CONCURRENCY)

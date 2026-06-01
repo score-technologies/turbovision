@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 from pathlib import Path
@@ -5,10 +7,10 @@ from base64 import b64decode
 from json import load, dumps, loads
 from logging import getLogger
 from traceback import print_exc
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from substrateinterface import Keypair
-from bittensor import wallet, async_subtensor
+if TYPE_CHECKING:
+    from substrateinterface import Keypair
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
@@ -118,6 +120,8 @@ def get_last_update_for_hotkey(
 
 
 def load_hotkey_keypair(wallet_name: str, hotkey_name: str) -> Keypair:
+    from substrateinterface import Keypair
+
     settings = get_settings()
 
     wallet_dir = Path(settings.BITTENSOR_WALLET_PATH).expanduser()
@@ -149,6 +153,8 @@ async def get_subtensor():
     init_timeout = float(os.getenv("SUBTENSOR_INIT_TIMEOUT_S", "15.0"))
 
     async def _init(ep: str):
+        from bittensor import async_subtensor
+
         st = async_subtensor(ep)
         await asyncio.wait_for(st.initialize(), timeout=init_timeout)
         return st
@@ -175,6 +181,8 @@ async def on_chain_commit(
     chute_slug: str | None,
     element_id: str | None,
 ) -> None:
+    from bittensor import wallet
+
     settings = get_settings()
     repo_name = get_huggingface_repo_name()
     w = wallet(
@@ -314,6 +322,8 @@ async def _set_weights_with_confirmation(
 
 async def on_chain_commit_validator(index_url: str) -> None:
     """ """
+    from bittensor import wallet
+
     settings = get_settings()
     w = wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -387,6 +397,8 @@ async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
     st = await get_subtensor()
     meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
     commits = await st.get_all_revealed_commitments(netuid)
+
+    from bittensor import wallet
 
     w = wallet(
         name=settings.BITTENSOR_WALLET_COLD,
@@ -486,6 +498,8 @@ async def _first_commit_block_by_miner(
             ):
                 st_archive = None
                 try:
+                    from bittensor import async_subtensor
+
                     st_archive = async_subtensor(_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
                     await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
                     sem = asyncio.Semaphore(_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY)
@@ -631,6 +645,8 @@ async def on_chain_commit_validator_retry(
     max_retries: int | None = None,
 ) -> bool:
     """ """
+    from bittensor import wallet
+
     settings = get_settings()
     w = wallet(
         name=settings.BITTENSOR_WALLET_COLD,

@@ -29,6 +29,7 @@ async def send_challenge(
         challenge_id=challenge.challenge_id,
         video_url=challenge.video_url,
         frames=challenge.payload_frames,
+        target_frames=challenge.target_frames,
     )
     start = perf_counter()
 

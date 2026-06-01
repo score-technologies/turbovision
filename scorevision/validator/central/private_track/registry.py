@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass
-import bittensor as bt
+from typing import Any
 from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,7 @@ def _pick_latest_private_commit_for_element(
 
 
 async def get_registered_miners(
-    subtensor: bt.AsyncSubtensor,
+    subtensor: Any,
     metagraph,
     blacklist: set[str],
     element_id: str | None = None,

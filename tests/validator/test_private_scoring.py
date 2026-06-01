@@ -8,11 +8,18 @@ from scorevision.validator.central.private_track.scoring import (
     frame_to_seconds,
     register_pillar_scorer,
     score_cricket_prediction_with_breakdown,
+    score_snooker_ball_state_with_breakdown,
     score_predictions,
     score_predictions_for_pillar,
     score_predictions_with_breakdown,
 )
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
+)
 
 
 _FAKE_SETTINGS = SimpleNamespace(PRIVATE_FRAME_RATE=25)
@@ -168,3 +175,389 @@ def test_cricket_scoring_top6_fields_perfect_match():
     # Their total weight is 0.74, so a perfect match on those fields yields 0.74.
     assert score == pytest.approx(0.74)
     assert breakdown["kph"] == 1.0
+
+
+def test_snooker_ball_state_perfect_match():
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=0,
+                balls=[
+                    SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.6, y=0.6, state="on_table"),
+                ],
+            )
+        ]
+    )
+    score, breakdown = score_snooker_ball_state_with_breakdown(prediction, prediction)
+
+    assert score == pytest.approx(1.0)
+    assert breakdown["snooker_ball_state"] == pytest.approx(1.0)
+
+
+def test_snooker_ball_state_missing_target_frame_scores_zero():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=999,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["snooker_ball_state"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_empty_prediction_scores_zero():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(frames=[SnookerBallStateFrame(frame=50, balls=[])])
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["false_positive_score"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_ignores_extra_non_target_frames():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            ),
+            SnookerBallStateFrame(
+                frame=999,
+                balls=[SnookerBallPrediction(label="invalid", x=0.1, y=0.1, state="on_table")],
+            ),
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(1.0)
+    assert breakdown["snooker_ball_state"] == pytest.approx(1.0)
+
+
+def test_snooker_ball_state_matches_reds_by_hungarian_assignment():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="red", x=0.2, y=0.2, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.8, y=0.8, state="on_table"),
+                ],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="red", x=0.8, y=0.8, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.2, y=0.2, state="on_table"),
+                ],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(1.0)
+    assert breakdown["coordinate_accuracy"] == pytest.approx(1.0)
+
+
+def test_snooker_ball_state_penalizes_wrong_red_count():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=0,
+                balls=[
+                    SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.6, y=0.6, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.7, y=0.7, state="on_table"),
+                ],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=0,
+                balls=[
+                    SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.6, y=0.6, state="on_table"),
+                ],
+            )
+        ]
+    )
+    score, breakdown = score_snooker_ball_state_with_breakdown(prediction, ground_truth)
+
+    assert score < 1.0
+    assert breakdown["red_count_accuracy"] < 1.0
+
+
+def test_snooker_ball_state_penalizes_duplicate_unique_colour():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="blue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="blue", x=0.5, y=0.5, state="on_table"),
+                    SnookerBallPrediction(label="blue", x=0.6, y=0.6, state="on_table"),
+                ],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score < 1.0
+    assert breakdown["false_positive_score"] < 1.0
+
+
+def test_snooker_ball_state_allows_potted_and_occluded_without_coordinates():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="cue", state="potted"),
+                    SnookerBallPrediction(label="blue", state="occluded"),
+                ],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="cue", state="potted"),
+                    SnookerBallPrediction(label="blue", state="occluded"),
+                ],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(1.0)
+    assert breakdown["state_accuracy"] == pytest.approx(1.0)
+
+
+def test_snooker_ball_state_penalizes_invalid_labels_and_missing_on_table_coordinates():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="orange", x=0.5, y=0.5, state="on_table"),
+                    SnookerBallPrediction(label="cue", state="on_table"),
+                ],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score < 1.0
+    assert breakdown["identity_accuracy"] == pytest.approx(0.0)
+    assert breakdown["false_positive_score"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_uses_tighter_coordinate_tolerance():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.50, y=0.50, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.56, y=0.50, state="on_table")],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["coordinate_accuracy"] == pytest.approx(0.0)
+    assert breakdown["identity_accuracy"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_does_not_normalize_invalid_state_to_unknown():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="blue", state="unknown")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="blue", state="hidden")],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["identity_accuracy"] == pytest.approx(0.0)
+    assert breakdown["false_positive_score"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_invalid_reds_do_not_earn_red_count_credit():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="red", x=0.30, y=0.30, state="on_table"),
+                    SnookerBallPrediction(label="red", x=0.40, y=0.40, state="on_table"),
+                ],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[
+                    SnookerBallPrediction(label="red", state="on_table"),
+                    SnookerBallPrediction(label="red", state="on_table"),
+                ],
+            )
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score == pytest.approx(0.0)
+    assert breakdown["red_count_accuracy"] == pytest.approx(0.0)
+    assert breakdown["false_positive_score"] == pytest.approx(0.0)
+
+
+def test_snooker_ball_state_penalizes_duplicate_target_frame_objects():
+    ground_truth = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            )
+        ]
+    )
+    prediction = SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            ),
+            SnookerBallStateFrame(
+                frame=50,
+                balls=[SnookerBallPrediction(label="cue", x=0.5, y=0.5, state="on_table")],
+            ),
+        ]
+    )
+
+    score, breakdown = score_snooker_ball_state_with_breakdown(
+        prediction,
+        ground_truth,
+        target_frames=[50],
+    )
+
+    assert score < 1.0
+    assert breakdown["false_positive_score"] < 1.0
+    assert breakdown["snooker_ball_state"] == pytest.approx(score)

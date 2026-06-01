@@ -1,6 +1,13 @@
 from pathlib import Path
 from scorevision.miner.private_track.video import get_frame_count
-from scorevision.utils.schemas import ChallengeRequest, CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeRequest,
+    CricketDeliveryPrediction,
+    FramePrediction,
+    SnookerBallPrediction,
+    SnookerBallStateFrame,
+    SnookerBallStatePrediction,
+)
 
 
 def predict_actions(video_path: Path) -> list[FramePrediction]:
@@ -41,4 +48,30 @@ def predict_cricket_delivery(request: ChallengeRequest) -> CricketDeliveryPredic
         deviation=-999.0,
         runs=-1,
         wickets=-1,
+    )
+
+
+def predict_snooker_ball_state(request: ChallengeRequest) -> SnookerBallStatePrediction:
+    # TODO: Replace this stub with actual snooker ball-state inference.
+    frame_id = 0
+    if request.target_frames:
+        frame_id = request.target_frames[0]
+    elif request.frames:
+        frame_id = request.frames[0].frame_id
+
+    return SnookerBallStatePrediction(
+        frames=[
+            SnookerBallStateFrame(
+                frame=frame_id,
+                balls=[
+                    SnookerBallPrediction(
+                        label="cue",
+                        x=0.5,
+                        y=0.5,
+                        state="unknown",
+                        confidence=0.0,
+                    )
+                ],
+            )
+        ]
     )

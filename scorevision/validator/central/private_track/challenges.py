@@ -3,7 +3,12 @@ from logging import getLogger
 import httpx
 from scorevision.utils.challenges import get_next_challenge_v3, _coerce_payload_frames
 from scorevision.utils.signing import build_validator_query_params
-from scorevision.utils.schemas import ChallengeFrame, CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeFrame,
+    CricketDeliveryPrediction,
+    FramePrediction,
+    SnookerBallStatePrediction,
+)
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -12,15 +17,41 @@ logger = getLogger(__name__)
 @dataclass
 class Challenge:
     challenge_id: str
-    ground_truth: list[FramePrediction] | CricketDeliveryPrediction
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction | SnookerBallStatePrediction
     groundtruth_type: str = "soccer_action"
     video_url: str | None = None
     payload_frames: list[ChallengeFrame] | None = None
+    target_frames: list[int] | None = None
 
 
-def has_sufficient_actions(ground_truth: list[FramePrediction] | CricketDeliveryPrediction, groundtruth_type: str) -> bool:
+def _coerce_target_frames(raw: object) -> list[int]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    frames: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        try:
+            frame = int(item)
+        except (TypeError, ValueError):
+            continue
+        if frame < 0 or frame in seen:
+            continue
+        seen.add(frame)
+        frames.append(frame)
+    return frames
+
+
+def has_sufficient_actions(
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction | SnookerBallStatePrediction,
+    groundtruth_type: str,
+) -> bool:
     if groundtruth_type == "cricket_delivery":
         return True
+    if groundtruth_type == "snooker_ball_state":
+        return bool(getattr(ground_truth, "frames", None))
     return len(ground_truth) >= get_settings().PRIVATE_MIN_ACTIONS_FOR_CHALLENGE
 
 
@@ -36,7 +67,7 @@ async def fetch_ground_truth(
     keypair,
     element_id: str | None = None,
     groundtruth_type: str = "soccer_action",
-) -> list[FramePrediction] | CricketDeliveryPrediction:
+) -> list[FramePrediction] | CricketDeliveryPrediction | SnookerBallStatePrediction:
     settings = get_settings()
     api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
     if not api_url:
@@ -62,6 +93,14 @@ async def fetch_ground_truth(
         if not isinstance(meta, dict):
             raise ValueError("Cricket ground truth missing meta payload")
         return CricketDeliveryPrediction(**meta)
+
+    if groundtruth_type == "snooker_ball_state":
+        raw = data.get("ground_truth") or {}
+        if isinstance(raw, dict) and "frames" in raw:
+            return SnookerBallStatePrediction(**raw)
+        if isinstance(raw, list):
+            return SnookerBallStatePrediction(frames=raw)
+        raise ValueError("Snooker ground truth missing frames payload")
 
     ground_truth: list[FramePrediction] = []
     for gt in data.get("ground_truth", []):
@@ -118,11 +157,18 @@ async def get_challenge_with_ground_truth(
             or payload.get("video_url")
             or payload.get("clip_url")
         )
+        target_frames = _coerce_target_frames(chal.get("target_frames") or payload.get("target_frames"))
         payload_frames_raw = _coerce_payload_frames(payload)
         payload_frames = [ChallengeFrame(**frame) for frame in payload_frames_raw] or None
 
         if not challenge_id or (not video_url and not payload_frames):
             logger.warning("Challenge missing task_id or challenge asset (video_url/frames), retrying")
+            continue
+        if groundtruth_type == "snooker_ball_state" and (not video_url or not target_frames):
+            logger.warning(
+                "Snooker challenge %s missing required video_url or target_frames, retrying",
+                challenge_id,
+            )
             continue
 
         try:
@@ -153,6 +199,7 @@ async def get_challenge_with_ground_truth(
             challenge_id=str(challenge_id),
             video_url=video_url,
             payload_frames=payload_frames,
+            target_frames=target_frames or None,
             ground_truth=ground_truth,
             groundtruth_type=groundtruth_type,
         )

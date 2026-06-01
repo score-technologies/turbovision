@@ -13,6 +13,7 @@ from scorevision.validator.scoring import (
     are_similar_by_challenges,
 )
 from scorevision.validator.models import WeightsResult, OpenSourceMinerMeta
+from scorevision.validator.core.weights import _private_element_weight_share
 
 
 def test_extract_miner_and_score_from_payload_valid():
@@ -150,3 +151,28 @@ def test_weights_result_dataclass():
     assert result.element_id == "soccer_detect"
     assert result.winner_uid == 7
     assert result.scores_by_uid[7] == 0.9
+
+
+@pytest.mark.parametrize("groundtruth_type", ["cricket_delivery", "snooker_ball_state"])
+def test_private_score_scaled_element_share_for_cricket_and_snooker(groundtruth_type):
+    assert _private_element_weight_share(
+        elem_weight=0.05,
+        is_private=True,
+        groundtruth_type=groundtruth_type,
+        winner_score=0.5,
+    ) == pytest.approx(0.025)
+
+
+def test_private_element_share_does_not_score_scale_soccer_or_public_elements():
+    assert _private_element_weight_share(
+        elem_weight=0.2,
+        is_private=True,
+        groundtruth_type="soccer_action",
+        winner_score=0.5,
+    ) == pytest.approx(0.2)
+    assert _private_element_weight_share(
+        elem_weight=0.05,
+        is_private=False,
+        groundtruth_type="snooker_ball_state",
+        winner_score=0.5,
+    ) == pytest.approx(0.05)

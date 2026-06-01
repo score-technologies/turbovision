@@ -8,8 +8,12 @@ from pathlib import Path
 from time import time
 from urllib.parse import urljoin, urlparse
 import aiohttp
-from async_substrate_interface.errors import SubstrateRequestException
-from substrateinterface import Keypair
+try:
+    from async_substrate_interface.errors import SubstrateRequestException
+except ImportError:
+    class SubstrateRequestException(Exception):
+        pass
+
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.prometheus import (
@@ -88,6 +92,8 @@ def _get_cache_dir():
 
 def _verify_signature(hk_ss58: str, payload: str, sig_hex: str) -> bool:
     try:
+        from substrateinterface import Keypair
+
         if not hk_ss58 or not sig_hex:
             return False
         sig_hex = sig_hex[2:] if sig_hex.startswith("0x") else sig_hex
