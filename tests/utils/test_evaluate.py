@@ -202,3 +202,34 @@ def test_parse_miner_prediction_prefers_score_over_conf():
 
     assert bboxes[0].score == 0.77
 
+
+def test_parse_miner_prediction_parses_points_only_polygons():
+    miner_run = SVRunOutput(
+        success=True,
+        latency_ms=0.0,
+        predictions={
+            "frames": [
+                {
+                    "frame_id": 4,
+                    "polygons": [
+                        {
+                            "cls_id": 0,
+                            "points": [(2, 3), (12, 3), (12, 15), (2, 15)],
+                            "conf": 0.88,
+                        }
+                    ],
+                    "keypoints": [],
+                }
+            ]
+        },
+        error=None,
+        model=None,
+    )
+
+    parsed = parse_miner_prediction(miner_run=miner_run, object_names=["player"])
+    polygons = parsed[4]["polygons"]
+
+    assert len(polygons) == 1
+    assert polygons[0].polygon == [(2, 3), (12, 3), (12, 15), (2, 15)]
+    assert polygons[0].bbox_2d == (2, 3, 12, 15)
+    assert polygons[0].score == 0.88

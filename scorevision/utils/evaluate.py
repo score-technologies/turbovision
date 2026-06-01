@@ -13,6 +13,7 @@ from scorevision.utils.video_processing import FrameStore
 from scorevision.vlm_pipeline.utils.data_models import (
     PseudoGroundTruth,
 )
+from scorevision.vlm_pipeline.utils.polygons import bbox_from_polygon
 from scorevision.vlm_pipeline.utils.response_models import (
     BoundingBox,
     TEAM1_SHIRT_COLOUR,
@@ -157,17 +158,19 @@ def parse_miner_prediction(
                         raw_cluster = poly.get("team_id")
 
                     cluster_id = _normalize_cluster_id(raw_cluster)
-                    points = poly.get("polygon") or poly.get("masks")
-                    if points and isinstance(points, list) and points and isinstance(points[0], (list, tuple)) and len(points[0]) == 2:
+                    points = poly.get("points") or poly.get("polygon") or poly.get("masks")
+                    if (
+                        points
+                        and isinstance(points, list)
+                        and points
+                        and isinstance(points[0], (list, tuple))
+                        and len(points[0]) == 2
+                    ):
                         polygon_points = [(int(x), int(y)) for x, y in points]
+                        bbox = bbox_from_polygon(polygon=polygon_points)
                         polygons.append(
                             BoundingBox(
-                                bbox_2d=[
-                                    int(poly["x1"]),
-                                    int(poly["y1"]),
-                                    int(poly["x2"]),
-                                    int(poly["y2"]),
-                                ],
+                                bbox_2d=bbox,
                                 polygon=polygon_points,
                                 label=looked_up,
                                 score=poly.get("score", poly.get("conf")),
