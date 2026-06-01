@@ -74,3 +74,98 @@ def test_polygon_metrics_merge_bbox_and_polygon_predictions():
     assert compare_polygon_counts(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions) == 1.0
     assert compare_polygon_precision(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions) == 1.0
     assert compare_polygon_recall(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions) == 1.0
+
+
+def test_polygon_metrics_select_pgt_geometry_to_match_miner_mode():
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=[(0, 0), (10, 0), (10, 10), (0, 10)],
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                )
+                ,
+                BoundingBox(
+                    bbox_2d=(20, 20, 30, 30),
+                    polygon=[(20, 20), (30, 20), (30, 30), (20, 30)],
+                    label="ball",
+                    cluster_id=ShirtColor.OTHER,
+                ),
+            ],
+        )
+    ]
+
+    bbox_only = {
+        1: {
+            "bboxes": [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                ),
+                BoundingBox(
+                    bbox_2d=(20, 20, 30, 30),
+                    label="ball",
+                    cluster_id=ShirtColor.OTHER,
+                )
+            ]
+        }
+    }
+    polygon_only = {
+        1: {
+            "polygons": [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=[(0, 0), (10, 0), (10, 10), (0, 10)],
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                ),
+                BoundingBox(
+                    bbox_2d=(20, 20, 30, 30),
+                    polygon=[(20, 20), (30, 20), (30, 30), (20, 30)],
+                    label="ball",
+                    cluster_id=ShirtColor.OTHER,
+                )
+            ]
+        }
+    }
+    mixed = {
+        1: {
+            "bboxes": [
+                BoundingBox(
+                    bbox_2d=(20, 20, 30, 30),
+                    label="ball",
+                    cluster_id=ShirtColor.OTHER,
+                )
+            ],
+            "polygons": [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=[(0, 0), (10, 0), (10, 10), (0, 10)],
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                )
+            ],
+        }
+    }
+
+    assert compare_polygon_placement(pseudo_gt=pseudo_gt, miner_predictions=bbox_only) == 1.0
+    assert compare_polygon_map50(pseudo_gt=pseudo_gt, miner_predictions=bbox_only) == 1.0
+    assert compare_polygon_counts(pseudo_gt=pseudo_gt, miner_predictions=bbox_only) == 1.0
+    assert compare_polygon_precision(pseudo_gt=pseudo_gt, miner_predictions=bbox_only) == 1.0
+    assert compare_polygon_recall(pseudo_gt=pseudo_gt, miner_predictions=bbox_only) == 1.0
+
+    assert compare_polygon_placement(pseudo_gt=pseudo_gt, miner_predictions=polygon_only) == 1.0
+    assert compare_polygon_map50(pseudo_gt=pseudo_gt, miner_predictions=polygon_only) == 1.0
+    assert compare_polygon_counts(pseudo_gt=pseudo_gt, miner_predictions=polygon_only) == 1.0
+    assert compare_polygon_precision(pseudo_gt=pseudo_gt, miner_predictions=polygon_only) == 1.0
+    assert compare_polygon_recall(pseudo_gt=pseudo_gt, miner_predictions=polygon_only) == 1.0
+
+    assert compare_polygon_placement(pseudo_gt=pseudo_gt, miner_predictions=mixed) == 1.0
+    assert compare_polygon_map50(pseudo_gt=pseudo_gt, miner_predictions=mixed) == 1.0
+    assert compare_polygon_counts(pseudo_gt=pseudo_gt, miner_predictions=mixed) == 1.0
+    assert compare_polygon_precision(pseudo_gt=pseudo_gt, miner_predictions=mixed) == 1.0
+    assert compare_polygon_recall(pseudo_gt=pseudo_gt, miner_predictions=mixed) == 1.0
