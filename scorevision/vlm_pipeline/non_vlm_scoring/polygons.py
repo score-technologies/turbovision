@@ -70,26 +70,46 @@ def _polygon_only_copy(detection: BoundingBox) -> BoundingBox:
     return _clone_bbox(detection, polygon=polygon)
 
 
-def _miner_frame_mode(miner_frame: dict) -> str:
-    has_bboxes = bool(miner_frame.get("bboxes"))
-    has_polygons = bool(miner_frame.get("polygons"))
-    if has_bboxes and has_polygons:
-        return "mixed"
-    if has_polygons:
-        return "polygons"
-    if has_bboxes:
-        return "bboxes"
-    return "none"
+def _miner_label_modes(miner_frame: dict) -> dict[str, str]:
+    label_modes: dict[str, set[str]] = {}
+
+    def _add_label_mode(detection: BoundingBox, mode: str) -> None:
+        label = _normalize_class_name(detection.label)
+        if not label:
+            return
+        label_modes.setdefault(label, set()).add(mode)
+
+    for bbox in miner_frame.get("bboxes") or []:
+        _add_label_mode(bbox, "bboxes")
+    for polygon in miner_frame.get("polygons") or []:
+        _add_label_mode(polygon, "polygons")
+
+    resolved: dict[str, str] = {}
+    for label, modes in label_modes.items():
+        if "bboxes" in modes and "polygons" in modes:
+            resolved[label] = "mixed"
+        elif "polygons" in modes:
+            resolved[label] = "polygons"
+        else:
+            resolved[label] = "bboxes"
+    return resolved
 
 
-def _project_pgt_boxes_for_mode(
-    pgt_boxes: list[BoundingBox], mode: str
+def _project_pgt_boxes_for_predictions(
+    pgt_boxes: list[BoundingBox], miner_frame: dict
 ) -> list[BoundingBox]:
-    if mode == "bboxes":
-        return [_bbox_only_copy(box) for box in pgt_boxes]
-    if mode == "polygons":
-        return [_polygon_only_copy(box) for box in pgt_boxes]
-    return list(pgt_boxes)
+    label_modes = _miner_label_modes(miner_frame)
+    projected: list[BoundingBox] = []
+    for box in pgt_boxes:
+        label = _normalize_class_name(box.label)
+        mode = label_modes.get(label, "mixed" if label_modes else "bboxes")
+        if mode == "bboxes":
+            projected.append(_bbox_only_copy(box))
+        elif mode == "polygons":
+            projected.append(_polygon_only_copy(box))
+        else:
+            projected.append(box)
+    return projected
 
 
 def _mean(values: List[float]) -> float:
@@ -272,8 +292,7 @@ def _build_per_image_rows(
     for pgt in pseudo_gt:
         frame_number = pgt.frame_number
         miner_frame = miner_predictions.get(frame_number) or {}
-        mode = _miner_frame_mode(miner_frame)
-        pgt_polygons = _project_pgt_boxes_for_mode(pgt.annotation.bboxes or [], mode)
+        pgt_polygons = _project_pgt_boxes_for_predictions(pgt.annotation.bboxes or [], miner_frame)
         miner_polygons = []
         miner_polygons.extend(miner_frame.get("bboxes") or [])
         miner_polygons.extend(miner_frame.get("polygons") or [])
@@ -433,19 +452,19 @@ def compare_polygon_placement(
         return 0.0
 
     per_frame = []
-    for pgt in pseudo_gt:
-        fr = pgt.frame_number
-        miner = miner_predictions.get(fr) or {}
-        mode = _miner_frame_mode(miner)
-        h_polygons = []
-        h_polygons.extend(miner.get("bboxes") or [])
-        h_polygons.extend(miner.get("polygons") or [])
+    for row in _build_per_image_rows(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ):
         p_boxes, p_lab = _extract_boxes_labels(
-            _project_pgt_boxes_for_mode(pgt.annotation.bboxes or [], mode),
+            [det["box"] for det in row.get("gt") or []],
             only_players=False,
             use_team=False,
         )
-        h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
+        h_boxes, h_lab = _extract_boxes_labels(
+            [det["box"] for det in row.get("predictions") or []],
+            only_players=False,
+            use_team=False,
+        )
         val = _auc_f1(p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=False)
         per_frame.append(val)
     return float(sum(per_frame) / len(per_frame)) if per_frame else 0.0
@@ -490,19 +509,9 @@ def compare_polygon_counts(
         return 0.0
 
     per_frame = []
-    for pgt in pseudo_gt:
-        fr = pgt.frame_number
-        miner = miner_predictions.get(fr) or {}
-        mode = _miner_frame_mode(miner)
-        h_polygons = []
-        h_polygons.extend(miner.get("bboxes") or [])
-        h_polygons.extend(miner.get("polygons") or [])
-        p_boxes, p_lab = _extract_boxes_labels(
-            _project_pgt_boxes_for_mode(pgt.annotation.bboxes or [], mode),
-            only_players=False,
-            use_team=False,
-        )
-        h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
+    for row in _build_per_image_rows(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions):
+        p_boxes, p_lab = _extract_boxes_labels([det["box"] for det in row.get("gt") or []], only_players=False, use_team=False)
+        h_boxes, h_lab = _extract_boxes_labels([det["box"] for det in row.get("predictions") or []], only_players=False, use_team=False)
         val = _hungarian_f1(
             p_boxes,
             p_lab,

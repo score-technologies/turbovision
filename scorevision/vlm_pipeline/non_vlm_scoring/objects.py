@@ -92,6 +92,10 @@ def _mean(values: List[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _combined_miner_boxes(miner: dict) -> list[BoundingBox]:
+    return list(miner.get("bboxes") or []) + list(miner.get("polygons") or [])
+
+
 def _build_per_image_rows(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict]
 ) -> List[dict]:
@@ -442,7 +446,7 @@ def compare_object_labels(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_bboxes = miner.get("bboxes") or []
+        h_bboxes = _combined_miner_boxes(miner)
         p_boxes, p_lab = _extract_boxes_labels(
             pgt.annotation.bboxes, only_players=False, use_team=False
         )
@@ -479,7 +483,7 @@ def compare_team_labels(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_bboxes = miner.get("bboxes") or []
+        h_bboxes = _combined_miner_boxes(miner)
         val = _team_auc_f1(pgt.annotation.bboxes, h_bboxes, AUC_IOU_THRESHOLDS)
         logger.info(
             "[bbox][team] frame=%s pgt=%s miner=%s score=%.6f",
