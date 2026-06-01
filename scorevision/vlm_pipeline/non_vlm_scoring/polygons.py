@@ -223,7 +223,9 @@ def _build_per_image_rows(
         frame_number = pgt.frame_number
         miner_frame = miner_predictions.get(frame_number) or {}
         pgt_polygons = pgt.annotation.bboxes or []
-        miner_polygons = miner_frame.get("polygons") or miner_frame.get("bboxes") or []
+        miner_polygons = []
+        miner_polygons.extend(miner_frame.get("bboxes") or [])
+        miner_polygons.extend(miner_frame.get("polygons") or [])
 
         gt_detections = []
         for box in pgt_polygons:
@@ -383,7 +385,9 @@ def compare_polygon_placement(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_polygons = miner.get("polygons") or miner.get("bboxes") or []
+        h_polygons = []
+        h_polygons.extend(miner.get("bboxes") or [])
+        h_polygons.extend(miner.get("polygons") or [])
         p_boxes, p_lab = _extract_boxes_labels(pgt.annotation.bboxes, only_players=False, use_team=False)
         h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
         val = _auc_f1(p_boxes, p_lab, h_boxes, h_lab, AUC_IOU_THRESHOLDS, label_strict=False)
@@ -433,7 +437,9 @@ def compare_polygon_counts(
     for pgt in pseudo_gt:
         fr = pgt.frame_number
         miner = miner_predictions.get(fr) or {}
-        h_polygons = miner.get("polygons") or miner.get("bboxes") or []
+        h_polygons = []
+        h_polygons.extend(miner.get("bboxes") or [])
+        h_polygons.extend(miner.get("polygons") or [])
         p_boxes, p_lab = _extract_boxes_labels(pgt.annotation.bboxes, only_players=False, use_team=False)
         h_boxes, h_lab = _extract_boxes_labels(h_polygons, only_players=False, use_team=False)
         val = _hungarian_f1(
