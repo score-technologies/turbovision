@@ -14,6 +14,7 @@ from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 def fake_vlm_bbox() -> BoundingBox:
     return BoundingBox(
         bbox_2d=[10, 23, 100, 200],
+        polygon=[(10, 23), (100, 23), (100, 200), (10, 200)],
         label="ball",
     )
 

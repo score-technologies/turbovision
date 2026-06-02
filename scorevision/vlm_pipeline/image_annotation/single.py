@@ -1,6 +1,7 @@
 from logging import getLogger
 
-from cv2 import FONT_HERSHEY_SIMPLEX, putText, rectangle
+from cv2 import FONT_HERSHEY_SIMPLEX, LINE_AA, fillPoly, polylines, putText, rectangle
+from numpy import array
 from numpy import ndarray
 
 from scorevision.vlm_pipeline.utils.response_models import (
@@ -48,6 +49,11 @@ def annotate_bbox(frame: ndarray, bbox: BoundingBox) -> None:
     x_min, y_min, x_max, y_max = bbox.bbox_2d
     color = COLOURS[bbox.cluster_id]
     rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
+    polygon = getattr(bbox, "polygon", None)
+    if polygon:
+        poly_pts = array(polygon, dtype="int32")
+        fillPoly(frame, [poly_pts], color)
+        polylines(frame, [poly_pts], isClosed=True, color=color, thickness=2, lineType=LINE_AA)
     putText(
         frame,
         bbox.label,

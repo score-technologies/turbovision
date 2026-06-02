@@ -56,6 +56,24 @@ def _parse_ground_truth_payload(
     if not isinstance(annotations, list):
         return []
 
+    def _parse_polygon(raw_polygon: Any) -> list[tuple[int, int]] | None:
+        if not isinstance(raw_polygon, (list, tuple)):
+            return None
+        points: list[tuple[int, int]] = []
+        for point in raw_polygon:
+            if (
+                not isinstance(point, (list, tuple))
+                or len(point) != 2
+            ):
+                return None
+            try:
+                x = int(point[0])
+                y = int(point[1])
+            except (TypeError, ValueError):
+                return None
+            points.append((x, y))
+        return points or None
+
     grouped: dict[int, list[BoundingBox]] = {}
     for ann in annotations:
         if not isinstance(ann, dict):
@@ -81,6 +99,7 @@ def _parse_ground_truth_payload(
         grouped.setdefault(frame_idx, []).append(
             BoundingBox(
                 bbox_2d=(x1, y1, x2, y2),
+                polygon=_parse_polygon(ann.get("polygon")),
                 label=str(label),
                 cluster_id=None,
             )

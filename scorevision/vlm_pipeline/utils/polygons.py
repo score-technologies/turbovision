@@ -37,9 +37,9 @@ def sam3_predictions_to_bounding_boxes(
             colour = ShirtColor.OTHER
         for prediction in result.predictions:
             for polygon in prediction.masks:
-
                 bbox = BoundingBox(
                     bbox_2d=bbox_from_polygon(polygon=polygon),
+                    polygon=[(int(x), int(y)) for x, y in polygon],
                     label=object_label,
                     cluster_id=colour,
                 )

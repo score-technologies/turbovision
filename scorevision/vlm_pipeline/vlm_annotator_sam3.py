@@ -69,7 +69,9 @@ async def generate_annotations_for_select_frame_sam3(
         raise ValueError(
             "No object names in Element!  Object names are required to use SAM3 to detect objects"
         )
-    if element.category == ElementPrefix.OBJECT_DETECTION:
+    if element.category in (
+        ElementPrefix.OBJECT_DETECTION,
+    ):
         bboxes = await detect_objects_sam3(
             frame=frame,
             object_names=object_names,
