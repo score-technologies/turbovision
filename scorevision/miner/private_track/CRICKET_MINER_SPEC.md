@@ -98,14 +98,14 @@ All positional measurements are in meters and use a shared coordinate system:
 
 The validator currently supports the full canonical row, but miners should focus first on these six fields:
 
-1. `kph`
-2. `bounce_x`
-3. `stump_y`
-4. `deviation`
-5. `swing_angle`
-6. `stump_z`
+1. `bounce_x` (22%)
+2. `stump_y` (17%)
+3. `deviation` (12%)
+4. `swing_angle` (10%)
+5. `stump_z` (10%)
+6. `kph` (3%)
 
-These are the main v1 ball-tracking asks and dominate the score.
+These are the main v1 ball-tracking asks and together account for 74% of the score.
 
 ## Recommended Return Shape
 
@@ -113,12 +113,12 @@ These are the main v1 ball-tracking asks and dominate the score.
 
 These fields carry most of the reward signal and should be implemented first:
 
-- `kph`
-- `bounce_x`
-- `stump_y`
-- `deviation`
-- `swing_angle`
-- `stump_z`
+- `bounce_x` (22%)
+- `stump_y` (17%)
+- `deviation` (12%)
+- `swing_angle` (10%)
+- `stump_z` (10%)
+- `kph` (3%)
 
 ### Optional / lower-value metadata fields
 
