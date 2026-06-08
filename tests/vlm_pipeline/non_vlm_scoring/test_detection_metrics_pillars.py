@@ -72,6 +72,41 @@ def test_detection_metrics_perfect_match():
     ) == pytest.approx(1.0)
 
 
+def test_detection_metrics_do_not_clip_large_bbox_coordinates_to_settings():
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(bbox_2d=(479, 530, 678, 628), label="drainage gate"),
+                BoundingBox(bbox_2d=(558, 295, 1112, 767), label="track"),
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "bboxes": [
+                BoundingBox(
+                    bbox_2d=(541, 304, 1109, 764),
+                    label="track",
+                    score=0.93505859375,
+                ),
+                BoundingBox(
+                    bbox_2d=(477, 519, 684, 632),
+                    label="drainage gate",
+                    score=0.96142578125,
+                ),
+            ]
+        }
+    }
+
+    assert compare_map50(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert compare_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+
+
 def test_detection_metrics_partial_match():
     pseudo_gt = [
         _pgt(

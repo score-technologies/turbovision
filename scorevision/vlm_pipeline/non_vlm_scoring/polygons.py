@@ -148,9 +148,45 @@ def _polygon_points(detection: BoundingBox) -> list[tuple[int, int]]:
     return pts
 
 
-def _polygon_mask(points: list[tuple[int, int]]) -> np.ndarray:
+def _bbox_iou(a: BoundingBox, b: BoundingBox) -> float:
+    ax1, ay1, ax2, ay2 = a.bbox_2d
+    bx1, by1, bx2, by2 = b.bbox_2d
+    inter_x1, inter_y1 = max(ax1, bx1), max(ay1, by1)
+    inter_x2, inter_y2 = min(ax2, bx2), min(ay2, by2)
+    inter_w, inter_h = max(0, inter_x2 - inter_x1), max(0, inter_y2 - inter_y1)
+    intersection = inter_w * inter_h
+    if intersection == 0:
+        return 0.0
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    union = area_a + area_b - intersection
+    return float(intersection / union) if union > 0 else 0.0
+
+
+def _mask_shape_for_points(
+    points: list[tuple[int, int]],
+    *,
+    image_height: int | None = None,
+    image_width: int | None = None,
+) -> tuple[int, int]:
     settings = get_settings()
-    mask = np.zeros((settings.SCOREVISION_IMAGE_HEIGHT, settings.SCOREVISION_IMAGE_WIDTH), dtype=np.uint8)
+    max_x = max((x for x, _y in points), default=0)
+    max_y = max((y for _x, y in points), default=0)
+    width = image_width or settings.SCOREVISION_IMAGE_WIDTH
+    height = image_height or settings.SCOREVISION_IMAGE_HEIGHT
+    return max(1, height, max_y + 1), max(1, width, max_x + 1)
+
+
+def _polygon_mask(
+    points: list[tuple[int, int]],
+    *,
+    image_height: int | None = None,
+    image_width: int | None = None,
+) -> np.ndarray:
+    height, width = _mask_shape_for_points(
+        points, image_height=image_height, image_width=image_width
+    )
+    mask = np.zeros((height, width), dtype=np.uint8)
     if not points:
         return mask
     poly = np.array(points, dtype=np.int32)
@@ -158,9 +194,23 @@ def _polygon_mask(points: list[tuple[int, int]]) -> np.ndarray:
     return mask
 
 
-def _polygon_iou(a: BoundingBox, b: BoundingBox) -> float:
-    mask_a = _polygon_mask(_polygon_points(a))
-    mask_b = _polygon_mask(_polygon_points(b))
+def _polygon_iou(
+    a: BoundingBox,
+    b: BoundingBox,
+    *,
+    image_height: int | None = None,
+    image_width: int | None = None,
+) -> float:
+    if not getattr(a, "polygon", None) and not getattr(b, "polygon", None):
+        return _bbox_iou(a, b)
+
+    points_a = _polygon_points(a)
+    points_b = _polygon_points(b)
+    height, width = _mask_shape_for_points(
+        points_a + points_b, image_height=image_height, image_width=image_width
+    )
+    mask_a = _polygon_mask(points_a, image_height=height, image_width=width)
+    mask_b = _polygon_mask(points_b, image_height=height, image_width=width)
     intersection = np.logical_and(mask_a, mask_b).sum()
     union = np.logical_or(mask_a, mask_b).sum()
     if union == 0:
@@ -192,6 +242,8 @@ def _hungarian_f1(
     *,
     iou_thresh: float,
     label_strict: bool,
+    image_height: int | None = None,
+    image_width: int | None = None,
 ) -> float:
     if len(p_boxes) == 0 and len(h_boxes) == 0:
         return 1.0
@@ -202,7 +254,12 @@ def _hungarian_f1(
     cost = np.zeros((n, m), dtype=np.float32)
     for i in range(n):
         for j in range(m):
-            iou = _polygon_iou(p_boxes[i], h_boxes[j])
+            iou = _polygon_iou(
+                p_boxes[i],
+                h_boxes[j],
+                image_height=image_height,
+                image_width=image_width,
+            )
             if label_strict and (p_labels[i] != h_labels[j]):
                 iou = 0.0
             cost[i, j] = -iou
@@ -232,6 +289,8 @@ def _auc_f1(
     thresholds: Iterable[float],
     *,
     label_strict: bool,
+    image_height: int | None = None,
+    image_width: int | None = None,
 ) -> float:
     vals = [
         _hungarian_f1(
@@ -241,6 +300,8 @@ def _auc_f1(
             h_labels,
             iou_thresh=t,
             label_strict=label_strict,
+            image_height=image_height,
+            image_width=image_width,
         )
         for t in thresholds
     ]
@@ -320,6 +381,12 @@ def _build_per_image_rows(
         rows.append(
             {
                 "image_id": str(frame_number),
+                "image_height": int(pgt.spatial_image.shape[0])
+                if getattr(pgt, "spatial_image", None) is not None
+                else None,
+                "image_width": int(pgt.spatial_image.shape[1])
+                if getattr(pgt, "spatial_image", None) is not None
+                else None,
                 "gt": gt_detections,
                 "predictions": pred_detections,
             }
@@ -331,13 +398,19 @@ def _evaluate_detection_metrics_at_threshold(
     *,
     per_image: List[dict],
     iou_threshold: float,
+    image_height: int | None = None,
+    image_width: int | None = None,
 ) -> dict:
     gt_by_class_image: dict[str, dict[str, list[BoundingBox]]] = {}
     pred_by_class: dict[str, list[tuple[float, str, BoundingBox]]] = {}
+    image_sizes: dict[str, tuple[int | None, int | None]] = {}
     class_names: set[str] = set()
 
     for row in per_image:
         image_id = str(row.get("image_id", ""))
+        row_height = row.get("image_height") or image_height
+        row_width = row.get("image_width") or image_width
+        image_sizes[image_id] = (row_height, row_width)
         gts = row.get("gt") or []
         preds = row.get("predictions") or []
 
@@ -377,12 +450,18 @@ def _evaluate_detection_metrics_at_threshold(
 
         for _score, image_id, pred_box in preds:
             gt_boxes = gt_images.get(image_id, [])
+            row_height, row_width = image_sizes.get(image_id, (image_height, image_width))
             best_idx = -1
             best_iou = 0.0
             for gt_idx, gt_box in enumerate(gt_boxes):
                 if matched[image_id][gt_idx]:
                     continue
-                iou = _polygon_iou(pred_box, gt_box)
+                iou = _polygon_iou(
+                    pred_box,
+                    gt_box,
+                    image_height=row_height,
+                    image_width=row_width,
+                )
                 if iou > best_iou:
                     best_iou = iou
                     best_idx = gt_idx
@@ -430,13 +509,20 @@ def _evaluate_detection_metrics_at_threshold(
 
 
 def _evaluate_detection_metrics(
-    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict]
+    pseudo_gt: List[PseudoGroundTruth],
+    miner_predictions: dict[int, dict],
+    **kwargs,
 ) -> dict:
     per_image = _build_per_image_rows(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions)
     if not per_image:
         return {"map_50": 0.0, "precision": 0.0, "recall": 0.0, "false_positive": 0.0}
 
-    at_50 = _evaluate_detection_metrics_at_threshold(per_image=per_image, iou_threshold=0.5)
+    at_50 = _evaluate_detection_metrics_at_threshold(
+        per_image=per_image,
+        iou_threshold=0.5,
+        image_height=kwargs.get("image_height"),
+        image_width=kwargs.get("image_width"),
+    )
     return {
         "map_50": float(at_50["map"]),
         "precision": float(at_50["precision"]),
@@ -474,14 +560,16 @@ def compare_polygon_map50(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
     return _evaluate_detection_metrics(
-        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
     )["map_50"]
 
 
 def compare_polygon_precision(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions)[
+    return _evaluate_detection_metrics(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )[
         "precision"
     ]
 
@@ -489,7 +577,9 @@ def compare_polygon_precision(
 def compare_polygon_recall(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions)[
+    return _evaluate_detection_metrics(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )[
         "recall"
     ]
 
@@ -497,7 +587,9 @@ def compare_polygon_recall(
 def compare_polygon_false_positive(
     pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict], **kwargs
 ) -> float:
-    return _evaluate_detection_metrics(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions)[
+    return _evaluate_detection_metrics(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions, **kwargs
+    )[
         "false_positive"
     ]
 
