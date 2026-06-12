@@ -90,6 +90,20 @@ def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits(
     assert dropped[4] == 0
 
 
+def test_apply_recent_commit_initial_zero_filter_can_be_disabled_for_private_lane():
+    filtered, dropped = _apply_recent_commit_initial_zero_filter(
+        samples_by_uid={1: [(100, 0.0), (101, 0.0), (102, 0.8)]},
+        uid_to_hk={1: "hk1"},
+        first_commit_block_by_hk={"hk1": 95},
+        max_block=102,
+        recent_commit_blocks=10,
+        enabled=False,
+    )
+
+    assert filtered[1] == [0.0, 0.0, 0.8]
+    assert dropped[1] == 0
+
+
 def test_apply_recent_commit_initial_zero_filter_orders_scores_by_block():
     filtered, dropped = _apply_recent_commit_initial_zero_filter(
         samples_by_uid={1: [(102, 0.8), (100, 0.0), (101, 0.0), (103, 0.0)]},

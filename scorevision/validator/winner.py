@@ -63,6 +63,7 @@ def _apply_recent_commit_initial_zero_filter(
     first_commit_block_by_hk: dict[str, int],
     max_block: int | None,
     recent_commit_blocks: int,
+    enabled: bool = True,
 ) -> tuple[dict[int, list[float]], dict[int, int]]:
     filtered_scores_by_uid: dict[int, list[float]] = {}
     dropped_zero_prefix_by_uid: dict[int, int] = {}
@@ -74,7 +75,8 @@ def _apply_recent_commit_initial_zero_filter(
         commit_block = first_commit_block_by_hk.get(hk) if hk else None
 
         should_filter = (
-            max_block is not None
+            enabled
+            and max_block is not None
             and commit_block is not None
             and int(max_block) - int(commit_block) <= int(recent_commit_blocks)
         )
@@ -242,6 +244,7 @@ async def get_winner_for_element(
     netuid = settings.SCOREVISION_NETUID
     mechid = settings.SCOREVISION_MECHID
     fallback_uid = settings.VALIDATOR_FALLBACK_UID
+    normalized_lane = str(lane or "public").strip() or "public"
 
     meta = await subtensor.metagraph(netuid, mechid=mechid)
     if blacklisted_hotkeys is None:
@@ -322,12 +325,14 @@ async def get_winner_for_element(
         first_block=first_block,
     )
     recent_commit_blocks = days_to_blocks(3) or 0
+    initial_zero_filter_enabled = normalized_lane != "private"
     filtered_scores_by_uid, dropped_zero_prefix_by_uid = _apply_recent_commit_initial_zero_filter(
         samples_by_uid=samples_by_miner,
         uid_to_hk=uid_to_hk,
         first_commit_block_by_hk=first_commit_block_by_hk,
         max_block=max_observed_block,
         recent_commit_blocks=recent_commit_blocks,
+        enabled=initial_zero_filter_enabled,
     )
 
     dropped_total = 0
@@ -347,6 +352,8 @@ async def get_winner_for_element(
             recent_commit_blocks,
             max_observed_block,
         )
+    elif not initial_zero_filter_enabled:
+        logger.info("[weights:warmup-filter] element_id=%s disabled for private lane", element_id)
 
     if not cnt_by_miner:
         logger.warning(
@@ -459,7 +466,7 @@ async def get_winner_for_element(
     )
 
     winner_from_tiebreak_only_pool = False
-    tiebreak_enabled_for_lane = settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE and lane != "private"
+    tiebreak_enabled_for_lane = settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE and normalized_lane != "private"
     if tiebreak_enabled_for_lane:
         try:
             adaptive_delta_rel = compute_adaptive_delta_rel(
@@ -554,7 +561,7 @@ async def get_winner_for_element(
             winner_from_tiebreak_only_pool = winner_uid in tiebreak_only_uids
         except Exception as e:
             logger.warning("[window-tiebreak] Element=%s disabled due to error: %s", element_id, e)
-    elif lane == "private" and settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
+    elif normalized_lane == "private" and settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE:
         logger.info("[window-tiebreak] Element=%s disabled for private lane", element_id)
 
     logger.info(
