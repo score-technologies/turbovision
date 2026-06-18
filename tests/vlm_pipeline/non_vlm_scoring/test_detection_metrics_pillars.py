@@ -6,12 +6,19 @@ from scorevision.utils.pillar_metric_registry import METRIC_REGISTRY
 from scorevision.vlm_pipeline.domain_specific_schemas.football import Action
 from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
     compare_false_positive,
+    compare_object_and_team_labels,
+    compare_object_labels,
     compare_map50,
     compare_precision,
+    compare_team_labels,
     compare_recall,
 )
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
-from scorevision.vlm_pipeline.utils.response_models import BoundingBox, FrameAnnotation
+from scorevision.vlm_pipeline.utils.response_models import (
+    BoundingBox,
+    FrameAnnotation,
+    ShirtColor,
+)
 
 
 def _pgt(frame_number: int, boxes: list[BoundingBox]) -> PseudoGroundTruth:
@@ -58,6 +65,41 @@ def test_detection_metrics_perfect_match():
         == pytest.approx(1.0)
     )
     assert compare_recall(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert compare_false_positive(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+
+
+def test_detection_metrics_do_not_clip_large_bbox_coordinates_to_settings():
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(bbox_2d=(479, 530, 678, 628), label="drainage gate"),
+                BoundingBox(bbox_2d=(558, 295, 1112, 767), label="track"),
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "bboxes": [
+                BoundingBox(
+                    bbox_2d=(541, 304, 1109, 764),
+                    label="track",
+                    score=0.93505859375,
+                ),
+                BoundingBox(
+                    bbox_2d=(477, 519, 684, 632),
+                    label="drainage gate",
+                    score=0.96142578125,
+                ),
+            ]
+        }
+    }
+
+    assert compare_map50(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     ) == pytest.approx(1.0)
     assert compare_false_positive(
@@ -165,3 +207,70 @@ def test_false_positive_uses_ffpi_formula():
     assert compare_false_positive(
         pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
     ) == pytest.approx(0.5)
+
+
+def test_pseudo_gt_can_carry_polygons_without_affecting_bbox_scoring():
+    polygon = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=polygon,
+                    label="player",
+                )
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "bboxes": [
+                BoundingBox(bbox_2d=(0, 0, 10, 10), label="player"),
+            ]
+        }
+    }
+
+    assert compare_map50(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert pseudo_gt[0].annotation.bboxes[0].polygon == polygon
+
+
+def test_player_label_metrics_accept_polygon_only_predictions():
+    polygon = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    pseudo_gt = [
+        _pgt(
+            1,
+            [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=polygon,
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                )
+            ],
+        )
+    ]
+    miner_predictions = {
+        1: {
+            "polygons": [
+                BoundingBox(
+                    bbox_2d=(0, 0, 10, 10),
+                    polygon=polygon,
+                    label="player",
+                    cluster_id=ShirtColor.WHITE,
+                )
+            ]
+        }
+    }
+
+    assert compare_object_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert compare_team_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)
+    assert compare_object_and_team_labels(
+        pseudo_gt=pseudo_gt, miner_predictions=miner_predictions
+    ) == pytest.approx(1.0)

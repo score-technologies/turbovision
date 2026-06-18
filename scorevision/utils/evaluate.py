@@ -6,13 +6,14 @@ from scorevision.utils.data_models import (
     SVEvaluation,
 )
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
-from scorevision.utils.manifest import Manifest
+from scorevision.utils.manifest import Manifest, PillarName
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.video_processing import FrameStore
 from scorevision.vlm_pipeline.utils.data_models import (
     PseudoGroundTruth,
 )
+from scorevision.vlm_pipeline.utils.polygons import bbox_from_polygon
 from scorevision.vlm_pipeline.utils.response_models import (
     BoundingBox,
     TEAM1_SHIRT_COLOUR,
@@ -32,7 +33,6 @@ from scorevision.utils.rtf import (
     check_rtf_gate,
     get_service_rate_fps_for_element,
 )
-
 logger = getLogger(__name__)
 
 
@@ -96,6 +96,7 @@ def parse_miner_prediction(
     miner_annotations = {}
     for predicted_frame in predicted_frames:
         bboxes = []
+        polygons = []
         frame_number = predicted_frame.get("frame_id", -1)
         if any(object_names):
             for bbox in predicted_frame.get("boxes", []) or []:
@@ -136,8 +137,52 @@ def parse_miner_prediction(
                 except Exception as e:
                     logger.error(e)
                     continue
+            for poly in predicted_frame.get("polygons", []) or []:
+                try:
+                    raw_cls = poly.get("cls_id")
+                    try:
+                        object_id = int(raw_cls)
+                    except (TypeError, ValueError):
+                        object_id = None
+
+                    looked_up = None
+                    if object_id is not None and 0 <= object_id < len(object_names):
+                        looked_up = object_names[object_id]
+                    else:
+                        continue
+
+                    raw_cluster = None
+                    if "cluster_id" in poly:
+                        raw_cluster = poly.get("cluster_id")
+                    elif "team_id" in poly:
+                        raw_cluster = poly.get("team_id")
+
+                    cluster_id = _normalize_cluster_id(raw_cluster)
+                    points = poly.get("points") or poly.get("polygon") or poly.get("masks")
+                    if (
+                        points
+                        and isinstance(points, list)
+                        and points
+                        and isinstance(points[0], (list, tuple))
+                        and len(points[0]) == 2
+                    ):
+                        polygon_points = [(int(x), int(y)) for x, y in points]
+                        bbox = bbox_from_polygon(polygon=polygon_points)
+                        polygons.append(
+                            BoundingBox(
+                                bbox_2d=bbox,
+                                polygon=polygon_points,
+                                label=looked_up,
+                                score=poly.get("score", poly.get("conf")),
+                                cluster_id=cluster_id,
+                            )
+                        )
+                except Exception as e:
+                    logger.error(e)
+                    continue
         miner_annotations[frame_number] = {
             "bboxes": bboxes,
+            "polygons": polygons,
             "action": predicted_frame.get("action", None),
             "keypoints": predicted_frame.get("keypoints", []),
         }

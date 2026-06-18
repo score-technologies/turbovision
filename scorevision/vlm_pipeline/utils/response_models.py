@@ -18,6 +18,10 @@ class BoundingBox(BaseModel):
         ...,
         description="x_min, y_min, x_max, y_max in pixels (where x=0 is the left of the image and y=0 is the top of the image",
     )
+    polygon: list[tuple[int, int]] | None = Field(
+        None,
+        description="Optional polygon mask in pixel coordinates, ordered as [x, y] points.",
+    )
     label: str | None = Field(..., description="The type of object shown")
     score: float | None = Field(
         None,

@@ -698,15 +698,44 @@ def _cache_path_for_url(url: str) -> Path:
     return _get_cache_dir() / f"{name}.{h}.jsonl"
 
 
+def _exception_summary(exc: BaseException) -> str:
+    msg = str(exc).strip()
+    if msg:
+        return f"{type(exc).__name__}: {msg}"
+    return type(exc).__name__
+
+
 async def _cache_remote_json_array(url: str, sem: asyncio.Semaphore) -> Path:
     out = _cache_path_for_url(url)
     mod = out.with_suffix(".modified")
     async with sem:
-        etag, lm = await _http_head_meta(url)
+        try:
+            etag, lm = await _http_head_meta(url)
+        except Exception as e:
+            if out.exists():
+                logger.warning(
+                    "[dataset-multi] cache metadata refresh failed url=%s err=%s -> using stale cache",
+                    url,
+                    _exception_summary(e),
+                )
+                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="cache_head_stale").inc()
+                return out
+            raise RuntimeError(f"HEAD metadata failed ({_exception_summary(e)})") from e
         tag = (etag or lm or "").strip()
         if out.exists() and mod.exists() and mod.read_text().strip() == tag:
             return out
-        arr = await _http_get_json(url)
+        try:
+            arr = await _http_get_json(url)
+        except Exception as e:
+            if out.exists():
+                logger.warning(
+                    "[dataset-multi] cache body refresh failed url=%s err=%s -> using stale cache",
+                    url,
+                    _exception_summary(e),
+                )
+                VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="cache_get_stale").inc()
+                return out
+            raise RuntimeError(f"GET body failed ({_exception_summary(e)})") from e
         tmp = out.with_suffix(".tmp")
         with tmp.open("wb") as f:
             for line in arr if isinstance(arr, list) else []:
@@ -895,7 +924,11 @@ async def dataset_sv_multi(
                 )
                 next_i += 1
         except Exception as e:
-            logger.warning(f"[dataset-multi] cache failed {url}: {e}")
+            logger.warning(
+                "[dataset-multi] cache failed %s: %s",
+                url,
+                _exception_summary(e),
+            )
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="cache_fetch").inc()
             continue
 

@@ -56,6 +56,24 @@ def _parse_ground_truth_payload(
     if not isinstance(annotations, list):
         return []
 
+    def _parse_polygon(raw_polygon: Any) -> list[tuple[int, int]] | None:
+        if not isinstance(raw_polygon, (list, tuple)):
+            return None
+        points: list[tuple[int, int]] = []
+        for point in raw_polygon:
+            if (
+                not isinstance(point, (list, tuple))
+                or len(point) != 2
+            ):
+                return None
+            try:
+                x = int(point[0])
+                y = int(point[1])
+            except (TypeError, ValueError):
+                return None
+            points.append((x, y))
+        return points or None
+
     grouped: dict[int, list[BoundingBox]] = {}
     for ann in annotations:
         if not isinstance(ann, dict):
@@ -81,6 +99,7 @@ def _parse_ground_truth_payload(
         grouped.setdefault(frame_idx, []).append(
             BoundingBox(
                 bbox_2d=(x1, y1, x2, y2),
+                polygon=_parse_polygon(ann.get("polygon")),
                 label=str(label),
                 cluster_id=None,
             )
@@ -803,57 +822,67 @@ async def get_next_challenge_v3(
         params["challenge_type_version"] = str(challenge_type_version)
 
     session = await get_async_client()
+    max_504_retries = 1
     try:
-        async with session.get(
-            f"{settings.SCOREVISION_API}/api/tasks/next",
-            params=params,
-        ) as response:
-            try:
-                response.raise_for_status()
-            except ClientResponseError as e:
-                if e.status == 404:
-                    raise ScoreVisionChallengeError(
-                        "No active evaluation window (404 from /api/tasks/next)."
-                    )
-                if e.status == 409:
-                    raise ScoreVisionChallengeError(
-                        "Rate limited by /api/tasks/next (409). Back off before retrying."
-                    )
-                if e.status == 410:
-                    raise ScoreVisionChallengeError(
-                        "Manifest expired or rejected (410 from /api/tasks/next)."
-                    )
-                raise
+        for attempt in range(max_504_retries + 1):
+            async with session.get(
+                f"{settings.SCOREVISION_API}/api/tasks/next",
+                params=params,
+            ) as response:
+                try:
+                    response.raise_for_status()
+                except ClientResponseError as e:
+                    if e.status == 504 and attempt < max_504_retries:
+                        sleep_seconds = randint(1, 5)
+                        logger.warning(
+                            "Challenge API returned 504, retrying once in %ss",
+                            sleep_seconds,
+                        )
+                        await asyncio.sleep(sleep_seconds)
+                        continue
+                    if e.status == 404:
+                        raise ScoreVisionChallengeError(
+                            "No active evaluation window (404 from /api/tasks/next)."
+                        )
+                    if e.status == 409:
+                        raise ScoreVisionChallengeError(
+                            "Rate limited by /api/tasks/next (409). Back off before retrying."
+                        )
+                    if e.status == 410:
+                        raise ScoreVisionChallengeError(
+                            "Manifest expired or rejected (410 from /api/tasks/next)."
+                        )
+                    raise
 
-            challenge = await response.json() or None
-            if not challenge:
-                raise ScoreVisionChallengeError(
-                    "Empty challenge payload from /api/challenge/v3."
+                challenge = await response.json() or None
+                if not challenge:
+                    raise ScoreVisionChallengeError(
+                        "Empty challenge payload from /api/challenge/v3."
+                    )
+                _normalize_challenge_payload_urls(challenge)
+                logger.info("Challenge API raw response: %s", dumps(challenge, default=str))
+
+                if "id" in challenge and "task_id" not in challenge:
+                    challenge["task_id"] = challenge.pop("id")
+
+                payload = challenge.get("payload") or {}
+                has_video_url = (
+                    challenge.get("video_url")
+                    or challenge.get("asset_url")
+                    or payload.get("clip_url")
+                    or payload.get("video_url")
                 )
-            _normalize_challenge_payload_urls(challenge)
-            logger.info("Challenge API raw response: %s", dumps(challenge, default=str))
+                has_payload_frames = bool(_coerce_payload_frames(payload))
+                if not (has_video_url or has_payload_frames):
+                    raise ScoreVisionChallengeError("Challenge missing video url or payload frames.")
 
-            if "id" in challenge and "task_id" not in challenge:
-                challenge["task_id"] = challenge.pop("id")
+                challenge["challenge_type_id"] = _coerce_challenge_type_id(challenge)
 
-            payload = challenge.get("payload") or {}
-            has_video_url = (
-                challenge.get("video_url")
-                or challenge.get("asset_url")
-                or payload.get("clip_url")
-                or payload.get("video_url")
-            )
-            has_payload_frames = bool(_coerce_payload_frames(payload))
-            if not (has_video_url or has_payload_frames):
-                raise ScoreVisionChallengeError("Challenge missing video url or payload frames.")
-
-            challenge["challenge_type_id"] = _coerce_challenge_type_id(challenge)
-
-            logger.info(
-                "Fetched challenge: task_id=%s element_id=%s",
-                challenge.get("task_id"),
-                challenge.get("element_id"),
-            )
-            return challenge
+                logger.info(
+                    "Fetched challenge: task_id=%s element_id=%s",
+                    challenge.get("task_id"),
+                    challenge.get("element_id"),
+                )
+                return challenge
     except ClientResponseError as e:
         raise ScoreVisionChallengeError(f"HTTP error while fetching challenge: {e}")

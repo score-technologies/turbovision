@@ -168,3 +168,22 @@ def test_cricket_scoring_top6_fields_perfect_match():
     # Their total weight is 0.74, so a perfect match on those fields yields 0.74.
     assert score == pytest.approx(0.74)
     assert breakdown["kph"] == 1.0
+
+
+def test_cricket_scoring_uses_updated_private_track_field_weights():
+    ground_truth = CricketDeliveryPrediction(
+        kph=130.0,
+        bounce_x=6.0,
+        stump_y=0.2,
+        deviation=1.0,
+        swing_angle=-0.5,
+        stump_z=0.8,
+    )
+
+    bounce_only = CricketDeliveryPrediction(bounce_x=6.0)
+    score, _ = score_cricket_prediction_with_breakdown(bounce_only, ground_truth)
+    assert score == pytest.approx(0.22)
+
+    kph_only = CricketDeliveryPrediction(kph=130.0)
+    score, _ = score_cricket_prediction_with_breakdown(kph_only, ground_truth)
+    assert score == pytest.approx(0.03)

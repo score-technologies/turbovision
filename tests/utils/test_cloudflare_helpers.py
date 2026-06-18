@@ -1,5 +1,8 @@
+import asyncio
 from scorevision.utils.cloudflare_helpers import (
+    _cache_remote_json_array,
     _extract_element_miner_commit_tuple_from_key_or_url,
+    _exception_summary,
     _lane_index_key,
     _select_lane_specific_index_url,
     emit_shard,
@@ -63,6 +66,32 @@ def test_lane_index_key_public():
 
 def test_lane_index_key_private():
     assert _lane_index_key("private") == "manako/indexprivate.json"
+
+
+def test_exception_summary_includes_type_for_empty_message():
+    assert _exception_summary(TimeoutError()) == "TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_cache_remote_json_array_uses_stale_cache_when_head_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(cloudflare_helpers, "_get_cache_dir", lambda: tmp_path)
+
+    url = "https://example.com/manako/evaluation/000000001-a.json"
+    cached_path = cloudflare_helpers._cache_path_for_url(url)
+    cached_path.write_bytes(b'{"payload":{}}\n')
+
+    async def _fail_head(_url):
+        raise TimeoutError()
+
+    async def _fail_get(_url):
+        raise AssertionError("GET should not be called when stale cache is available")
+
+    monkeypatch.setattr(cloudflare_helpers, "_http_head_meta", _fail_head)
+    monkeypatch.setattr(cloudflare_helpers, "_http_get_json", _fail_get)
+
+    result = await _cache_remote_json_array(url, asyncio.Semaphore(1))
+
+    assert result == cached_path
 
 
 @pytest.mark.asyncio

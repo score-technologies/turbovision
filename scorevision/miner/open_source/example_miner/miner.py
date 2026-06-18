@@ -14,10 +14,17 @@ class BoundingBox(BaseModel):
     conf: float
 
 
+class Polygon(BaseModel):
+    cls_id: int
+    conf: float
+    points: list[tuple[int, int]]
+
+
 class TVFrameResult(BaseModel):
     frame_id: int
-    boxes: list[BoundingBox]
-    keypoints: list[tuple[int, int]]
+    boxes: list[BoundingBox] | None = None
+    polygons: list[Polygon] | None = None
+    keypoints: list[tuple[int, int]] | None = None
 
 
 class Miner:
@@ -84,6 +91,7 @@ class Miner:
         """
 
         bboxes: dict[int, list[BoundingBox]] = {}
+        polygons: dict[int, list[Polygon]] = {}
         bbox_model_results = self.bbox_model.predict(batch_images)
         if bbox_model_results is not None:
             for frame_number_in_batch, detection in enumerate(bbox_model_results):
@@ -104,6 +112,9 @@ class Miner:
                     )
                 bboxes[offset + frame_number_in_batch] = boxes
         print("✅ BBoxes predicted")
+
+        # Optional polygon output can be populated by future models.
+        # Keeping the field in the contract allows mixed bbox/polygon miners.
 
         keypoints: dict[int, tuple[int, int]] = {}
         keypoints_model_results = self.keypoints_model.predict(batch_images)
@@ -130,6 +141,7 @@ class Miner:
                 TVFrameResult(
                     frame_id=frame_number,
                     boxes=bboxes.get(frame_number, []),
+                    polygons=polygons.get(frame_number, []),
                     keypoints=keypoints.get(
                         frame_number, [(0, 0) for _ in range(n_keypoints)]
                     ),
