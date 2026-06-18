@@ -289,10 +289,15 @@ async def _chutes_get_json(url: str, headers: Dict[str, str]) -> Optional[dict]:
                     logger.debug("[Chutes] GET %s -> ok", url)
                     return data
                 except Exception as e:
-                    logger.debug("[Chutes] JSON decode error for %s: %s", url, e)
+                    logger.debug(
+                        "[Chutes] JSON decode error for %s: %s: %r",
+                        url,
+                        type(e).__name__,
+                        e,
+                    )
                     return None
     except Exception as e:
-        logger.info("[Chutes] GET %s failed: %s", url, e)
+        logger.info("[Chutes] GET %s failed: %s: %r", url, type(e).__name__, e)
         return None
 
 
