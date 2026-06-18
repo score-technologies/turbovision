@@ -14,6 +14,9 @@ from typing import Any
 from types import SimpleNamespace
 import os
 
+import cv2
+import numpy as np
+
 from scorevision.utils.bittensor_helpers import get_subtensor
 from scorevision.utils.r2 import (
     add_index_key_if_new,
@@ -249,6 +252,108 @@ def _iou(a: dict[str, Any], b: dict[str, Any]) -> float:
     return inter / denom if denom > 0 else 0.0
 
 
+def _polygon_points(raw: Any) -> list[tuple[int, int]]:
+    if not raw or not isinstance(raw, list):
+        return []
+    points: list[tuple[int, int]] = []
+    for point in raw:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            return []
+        try:
+            points.append((int(point[0]), int(point[1])))
+        except Exception:
+            return []
+    return points
+
+
+def _box_from_polygon(points: list[tuple[int, int]]) -> dict[str, int]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return {"x1": min(xs), "y1": min(ys), "x2": max(xs), "y2": max(ys)}
+
+
+def _normalize_detection(raw: Any, *, kind: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        cls_id = int(raw.get("cls_id"))
+    except Exception:
+        return None
+
+    points = _polygon_points(raw.get("points") or raw.get("polygon") or raw.get("masks"))
+    if kind == "polygon" and not points:
+        return None
+
+    if points:
+        box = _box_from_polygon(points)
+    else:
+        try:
+            box = {
+                "x1": int(raw["x1"]),
+                "y1": int(raw["y1"]),
+                "x2": int(raw["x2"]),
+                "y2": int(raw["y2"]),
+            }
+        except Exception:
+            return None
+
+    return {
+        "cls_id": cls_id,
+        "x1": box["x1"],
+        "y1": box["y1"],
+        "x2": box["x2"],
+        "y2": box["y2"],
+        "polygon": points,
+        "kind": kind,
+    }
+
+
+def _frame_detections(frame: dict[str, Any]) -> list[dict[str, Any]]:
+    detections: list[dict[str, Any]] = []
+    for box in frame.get("boxes") or []:
+        det = _normalize_detection(box, kind="box")
+        if det is not None:
+            detections.append(det)
+    for polygon in frame.get("polygons") or []:
+        det = _normalize_detection(polygon, kind="polygon")
+        if det is not None:
+            detections.append(det)
+    return detections
+
+
+def _polygon_iou(a: dict[str, Any], b: dict[str, Any]) -> float:
+    points_a = a.get("polygon") or []
+    points_b = b.get("polygon") or []
+    if not points_a and not points_b:
+        return _iou(a, b)
+    if not points_a:
+        points_a = [
+            (int(a["x1"]), int(a["y1"])),
+            (int(a["x2"]), int(a["y1"])),
+            (int(a["x2"]), int(a["y2"])),
+            (int(a["x1"]), int(a["y2"])),
+        ]
+    if not points_b:
+        points_b = [
+            (int(b["x1"]), int(b["y1"])),
+            (int(b["x2"]), int(b["y1"])),
+            (int(b["x2"]), int(b["y2"])),
+            (int(b["x1"]), int(b["y2"])),
+        ]
+
+    max_x = max([p[0] for p in points_a] + [p[0] for p in points_b] + [0])
+    max_y = max([p[1] for p in points_a] + [p[1] for p in points_b] + [0])
+    width = max(1, int(max_x) + 2)
+    height = max(1, int(max_y) + 2)
+    mask_a = np.zeros((height, width), dtype=np.uint8)
+    mask_b = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(mask_a, [np.array(points_a, dtype=np.int32)], 1)
+    cv2.fillPoly(mask_b, [np.array(points_b, dtype=np.int32)], 1)
+    intersection = int(np.logical_and(mask_a, mask_b).sum())
+    union = int(np.logical_or(mask_a, mask_b).sum())
+    return float(intersection / union) if union else 0.0
+
+
 def _compare_predictions_iou(
     expected: dict[str, Any],
     actual: dict[str, Any],
@@ -264,22 +369,22 @@ def _compare_predictions_iou(
     extra_total = 0
     missing_total = 0
     for fid in common_ids:
-        exp_boxes = exp_frames[fid].get("boxes") or []
-        act_boxes = act_frames[fid].get("boxes") or []
-        if not exp_boxes and not act_boxes:
+        exp_detections = _frame_detections(exp_frames[fid])
+        act_detections = _frame_detections(act_frames[fid])
+        if not exp_detections and not act_detections:
             per_frame_scores.append(1.0)
             continue
         used_act: set[int] = set()
         ious: list[float] = []
-        for ebox in exp_boxes:
+        for expected_detection in exp_detections:
             best = 0.0
             best_idx = None
-            for i, abox in enumerate(act_boxes):
+            for i, actual_detection in enumerate(act_detections):
                 if i in used_act:
                     continue
-                if int(abox.get("cls_id", -1)) != int(ebox.get("cls_id", -1)):
+                if int(actual_detection.get("cls_id", -1)) != int(expected_detection.get("cls_id", -1)):
                     continue
-                v = _iou(ebox, abox)
+                v = _polygon_iou(expected_detection, actual_detection)
                 if v > best:
                     best = v
                     best_idx = i
@@ -287,11 +392,11 @@ def _compare_predictions_iou(
                 used_act.add(best_idx)
             ious.append(best)
         matched = len(used_act)
-        missing = max(0, len(exp_boxes) - matched)
-        extra = max(0, len(act_boxes) - matched)
+        missing = max(0, len(exp_detections) - matched)
+        extra = max(0, len(act_detections) - matched)
         missing_total += missing
         extra_total += extra
-        frame_score = (sum(ious) / len(exp_boxes)) if exp_boxes else 0.0
+        frame_score = (sum(ious) / len(exp_detections)) if exp_detections else 0.0
         per_frame_scores.append(frame_score)
 
     mean_iou = sum(per_frame_scores) / len(per_frame_scores)
@@ -301,6 +406,8 @@ def _compare_predictions_iou(
         "threshold": threshold,
         "extra_boxes": extra_total,
         "missing_boxes": missing_total,
+        "extra_detections": extra_total,
+        "missing_detections": missing_total,
         "frames_compared": len(common_ids),
     }
 

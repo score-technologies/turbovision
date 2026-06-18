@@ -216,13 +216,25 @@ def _validate_prediction_output(rows: list[dict[str, Any]]) -> None:
     for idx, row in enumerate(rows):
         if "frame_id" not in row:
             raise ValueError(f"output_missing_frame_id_at_{idx}")
-        boxes = row.get("boxes")
-        if boxes is None or not isinstance(boxes, list):
+        boxes = row.get("boxes") or []
+        polygons = row.get("polygons") or []
+        if not isinstance(boxes, list):
             raise ValueError(f"output_boxes_invalid_at_{idx}")
+        if not isinstance(polygons, list):
+            raise ValueError(f"output_polygons_invalid_at_{idx}")
         for j, box in enumerate(boxes):
             for key in ("x1", "y1", "x2", "y2", "cls_id"):
                 if key not in box:
                     raise ValueError(f"output_box_missing_{key}_at_{idx}_{j}")
+        for j, polygon in enumerate(polygons):
+            if "cls_id" not in polygon:
+                raise ValueError(f"output_polygon_missing_cls_id_at_{idx}_{j}")
+            points = polygon.get("points") or polygon.get("polygon") or polygon.get("masks")
+            if not isinstance(points, list) or not points:
+                raise ValueError(f"output_polygon_points_invalid_at_{idx}_{j}")
+            for k, point in enumerate(points):
+                if not isinstance(point, (list, tuple)) or len(point) != 2:
+                    raise ValueError(f"output_polygon_point_invalid_at_{idx}_{j}_{k}")
 
 
 def _safe_setrlimit(which: int, soft: int, hard: int | None = None) -> None:
