@@ -654,6 +654,46 @@ def _p95(values: list[float]) -> float:
     return float(ordered[idx])
 
 
+def _latency_threshold_ms_for_element(manifest: Any, element_id: str, fallback_ms: float) -> float:
+    element = None
+    get_element = getattr(manifest, "get_element", None)
+    if callable(get_element):
+        try:
+            element = get_element(id=element_id)
+        except TypeError:
+            element = get_element(element_id)
+        except Exception:
+            element = None
+
+    if element is None:
+        elems = getattr(manifest, "elements", None)
+        if isinstance(elems, dict):
+            element = elems.get(element_id)
+        elif isinstance(elems, (list, tuple)):
+            for candidate in elems:
+                if isinstance(candidate, dict):
+                    candidate_id = candidate.get("element_id") or candidate.get("id")
+                else:
+                    candidate_id = getattr(candidate, "element_id", None) or getattr(candidate, "id", None)
+                if str(candidate_id) == str(element_id):
+                    element = candidate
+                    break
+
+    if isinstance(element, dict):
+        raw = element.get("latency_p95_ms")
+    else:
+        raw = getattr(element, "latency_p95_ms", None)
+
+    try:
+        threshold = float(raw)
+    except Exception:
+        threshold = 0.0
+
+    if threshold > 0:
+        return threshold
+    return float(fallback_ms)
+
+
 async def run_public_compliance_once() -> dict[str, Any]:
     settings = get_settings()
     run_local_inference_from_hf = _get_security_runner()
@@ -700,6 +740,11 @@ async def run_public_compliance_once() -> dict[str, Any]:
     for target_row in targets:
         element_id = str(target_row["element_id"])
         hotkey = str(target_row["hotkey"])
+        latency_threshold_ms = _latency_threshold_ms_for_element(
+            manifest,
+            element_id,
+            settings.CHECKER_LATENCY_P95_MS,
+        )
         target = await _resolve_target_commit(target_row, commits_by_hotkey, hotkey_to_uid)
         if not target:
             run_results.append(
@@ -948,7 +993,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
             )
 
         p95_ms = _p95(latencies)
-        latency_ok = p95_ms <= settings.CHECKER_LATENCY_P95_MS
+        latency_ok = p95_ms <= latency_threshold_ms
         status = "PASS" if all_ok and latency_ok else ("FAIL_OUTPUT" if not all_ok else "FAIL_LATENCY")
         result_row = {
             "element_id": element_id,
@@ -958,7 +1003,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
             "revision": target["revision"],
             "status": status,
             "p95_latency_ms": p95_ms,
-            "latency_threshold_ms": settings.CHECKER_LATENCY_P95_MS,
+            "latency_threshold_ms": latency_threshold_ms,
             "details": details,
         }
         run_results.append(result_row)

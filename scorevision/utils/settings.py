@@ -415,7 +415,7 @@ def get_settings() -> Settings:
         CHECKER_R2_WRITE_SECRET_ACCESS_KEY=getenv("CHECKER_R2_WRITE_SECRET_ACCESS_KEY", ""),
         CHECKER_R2_CONCURRENCY=int(getenv("CHECKER_R2_CONCURRENCY", shared_r2_concurrency)),
         CHECKER_R2_BUCKET_PUBLIC_URL=getenv("CHECKER_R2_BUCKET_PUBLIC_URL", ""),
-        CHECKER_R2_RESULTS_PREFIX=getenv("CHECKER_R2_RESULTS_PREFIX", "manako/compliance"),
+        CHECKER_R2_RESULTS_PREFIX=getenv("CHECKER_R2_RESULTS_PREFIX", "manako/compliances"),
         CHECKER_R2_FAILS_KEY=getenv("CHECKER_R2_FAILS_KEY", ""),
         CHECKER_INTERVAL_BLOCKS=int(getenv("CHECKER_INTERVAL_BLOCKS", 360)),
         CHECKER_POLL_INTERVAL_S=int(getenv("CHECKER_POLL_INTERVAL_S", 60)),

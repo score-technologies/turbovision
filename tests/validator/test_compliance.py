@@ -30,6 +30,38 @@ def test_p95_uses_sorted_index_percentile():
     assert compliance_mod._p95(values) == 40.0
 
 
+def test_latency_threshold_uses_manifest_element_value():
+    manifest = SimpleNamespace(
+        elements=[
+            SimpleNamespace(id="PlayerDetect_v1@1.0", latency_p95_ms=250),
+        ]
+    )
+
+    threshold = compliance_mod._latency_threshold_ms_for_element(
+        manifest,
+        "PlayerDetect_v1@1.0",
+        fallback_ms=100.0,
+    )
+
+    assert threshold == 250.0
+
+
+def test_latency_threshold_falls_back_when_manifest_value_missing():
+    manifest = SimpleNamespace(
+        elements=[
+            SimpleNamespace(id="PlayerDetect_v1@1.0", latency_p95_ms=None),
+        ]
+    )
+
+    threshold = compliance_mod._latency_threshold_ms_for_element(
+        manifest,
+        "PlayerDetect_v1@1.0",
+        fallback_ms=100.0,
+    )
+
+    assert threshold == 100.0
+
+
 def test_compare_predictions_iou_success_when_boxes_match():
     expected = {
         "frames": [
