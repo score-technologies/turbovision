@@ -25,7 +25,7 @@ for arg in "$@"; do
 done
 
 echo "[preflight] Building test image: ${IMAGE_TAG}"
-docker build "${BUILD_ARGS[@]}" -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${CONTEXT_DIR}"
+docker build ${BUILD_ARGS+"${BUILD_ARGS[@]}"} -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${CONTEXT_DIR}"
 
 echo "[preflight] Running pip dependency integrity check"
 set +e
@@ -88,6 +88,7 @@ keys = [
     "bt-decode",
     "torch",
     "numpy",
+    "scipy",
     "opencv-python",
     "pydantic",
     "fastapi",
@@ -99,6 +100,21 @@ for name in keys:
         print(f"{name}=={md.version(name)}")
     except md.PackageNotFoundError:
         print(f"{name}==<missing>")
+PY
+
+echo "[preflight] Running import smoke tests"
+docker run --rm --entrypoint python "${IMAGE_TAG}" - <<'PY'
+imports = [
+    "scorevision",
+    "scorevision.utils.evaluate",
+    "scorevision.vlm_pipeline.non_vlm_scoring.objects",
+    "scipy",
+    "scipy.optimize",
+]
+
+for module in imports:
+    __import__(module)
+    print(f"import OK: {module}")
 PY
 
 echo "[preflight] SUCCESS: no dependency conflict detected"
