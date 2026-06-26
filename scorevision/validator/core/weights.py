@@ -52,6 +52,8 @@ from scorevision.validator.winner import get_winner_for_element
 logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
 
+PRIVATE_TRACK_RANKED_WEIGHT_SHARES = (0.80, 0.15, 0.05)
+
 HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
     "5CMaFwgm2rPka66iUcgAa2SpBPskk6KqAGWZeKVx8APLnqTZ",
@@ -87,8 +89,55 @@ def _top_rows(
         if max_samples is not None and n > max_samples:
             continue
         selected.append(row)
-    selected.sort(key=lambda r: (float(r["avg_score"]), int(r["n_challenges"])), reverse=True)
+    selected.sort(
+        key=lambda r: (
+            -float(r["avg_score"]),
+            -int(r["n_challenges"]),
+            int(r.get("uid", 0)),
+        )
+    )
     return selected[: max(0, int(top_k))]
+
+
+def _ranked_private_rows(
+    rows: list[dict[str, float | int | str]],
+    *,
+    min_samples: int,
+) -> list[dict[str, float | int | str]]:
+    positive_rows = [
+        row
+        for row in rows
+        if abs(float(row.get("avg_score", 0.0) or 0.0)) > 1e-12
+    ]
+    top_rows = _top_rows(
+        positive_rows,
+        min_samples=min_samples,
+        top_k=len(PRIVATE_TRACK_RANKED_WEIGHT_SHARES),
+    )
+    ranked_rows: list[dict[str, float | int | str]] = []
+    for idx, row in enumerate(top_rows):
+        ranked = dict(row)
+        ranked["rank"] = idx + 1
+        ranked["weight_share"] = PRIVATE_TRACK_RANKED_WEIGHT_SHARES[idx]
+        ranked_rows.append(ranked)
+    return ranked_rows
+
+
+def _private_ranked_weight_allocations(
+    rows: list[dict[str, float | int | str]],
+    *,
+    elem_weight: float,
+    min_samples: int,
+) -> list[tuple[int, float, dict[str, float | int | str]]]:
+    allocations: list[tuple[int, float, dict[str, float | int | str]]] = []
+    for idx, row in enumerate(_ranked_private_rows(rows, min_samples=min_samples)):
+        try:
+            uid = int(row["uid"])
+        except Exception:
+            continue
+        share = float(elem_weight) * PRIVATE_TRACK_RANKED_WEIGHT_SHARES[idx]
+        allocations.append((uid, share, row))
+    return allocations
 
 
 @lru_cache(maxsize=1)
@@ -407,7 +456,7 @@ async def weights_loop(
 
                         lane = "private" if is_private else "public"
                         min_samples = private_min_samples if is_private else public_min_samples
-                        winner_uid, winner_scores_by_uid, winner_meta, sample_rows_all = await get_winner_for_element(
+                        winner_uid, _winner_scores_by_uid, winner_meta, sample_rows_all = await get_winner_for_element(
                             element_id=element_id,
                             current_window_id=current_window_id,
                             tail=tail_for_element,
@@ -423,41 +472,46 @@ async def weights_loop(
                             logger.warning("[weights] No winner for element_id=%s", element_id)
                             continue
 
-                        share = float(elem_weight)
-                        raw_groundtruth_type = getattr(elem, "groundtruth_type", None) if elem is not None else None
-                        if hasattr(raw_groundtruth_type, "value"):
-                            groundtruth_type = str(raw_groundtruth_type.value or "").strip().lower()
+                        private_ranked_rows: list[dict[str, float | int | str]] = []
+                        if is_private:
+                            ranked_allocations = _private_ranked_weight_allocations(
+                                sample_rows_all,
+                                elem_weight=float(elem_weight),
+                                min_samples=min_samples,
+                            )
+                            private_ranked_rows = [row for _uid, _share, row in ranked_allocations]
+                            if ranked_allocations:
+                                for ranked_uid, ranked_share, ranked_row in ranked_allocations:
+                                    weights_by_uid[ranked_uid] = weights_by_uid.get(ranked_uid, 0.0) + ranked_share
+                                    logger.info(
+                                        "[weights] Private element=%s rank=%d uid=%d elem_weight=%.6f rank_share=%.2f share=%.6f",
+                                        element_id,
+                                        int(ranked_row["rank"]),
+                                        ranked_uid,
+                                        elem_weight,
+                                        float(ranked_row["weight_share"]),
+                                        ranked_share,
+                                    )
+                            else:
+                                share = float(elem_weight)
+                                weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
+                                logger.warning(
+                                    "[weights] Private element=%s has no ranked eligible rows; assigning full elem_weight=%.6f to winner_uid=%d",
+                                    element_id,
+                                    elem_weight,
+                                    winner_uid,
+                                )
                         else:
-                            groundtruth_type = str(raw_groundtruth_type or "").strip().lower()
-                        if is_private and groundtruth_type == "cricket_delivery":
-                            winner_score_raw = float(winner_scores_by_uid.get(winner_uid, 0.0) or 0.0)
-                            winner_score = max(0.0, min(1.0, winner_score_raw))
-                            share = share * winner_score
+                            share = float(elem_weight)
+                            weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
                             logger.info(
-                                "[weights] Cricket private weighting enabled element=%s winner_uid=%d elem_weight=%.6f winner_score=%.6f share=%.6f",
+                                "[weights] Element=%s winner_uid=%d elem_weight=%.6f share=%.6f",
                                 element_id,
                                 winner_uid,
                                 elem_weight,
-                                winner_score,
                                 share,
                             )
-                        elif is_private:
-                            logger.info(
-                                "[weights] Private element=%s not in cricket weighting mode (groundtruth_type=%s)",
-                                element_id,
-                                groundtruth_type or "<empty>",
-                            )
-
-                        weights_by_uid[winner_uid] = weights_by_uid.get(winner_uid, 0.0) + share
-
-                        logger.info(
-                            "[weights] Element=%s winner_uid=%d elem_weight=%.6f share=%.6f",
-                            element_id,
-                            winner_uid,
-                            elem_weight,
-                            share,
-                        )
-                        if winner_meta and winner_meta.get("hotkey"):
+                        if (winner_meta and winner_meta.get("hotkey")) or private_ranked_rows:
                             top_3_official = _top_rows(
                                 sample_rows_all,
                                 min_samples=min_samples,
@@ -469,13 +523,30 @@ async def weights_loop(
                                 max_samples=29,
                                 top_k=3,
                             )
-                            winners_by_element[element_id] = {
-                                "winner_hotkey": winner_meta.get("hotkey"),
-                                "chute_id": winner_meta.get("chute_id"),
-                                "slug": winner_meta.get("slug"),
+                            if is_private and private_ranked_rows:
+                                snapshot_winner_hotkey = str(private_ranked_rows[0].get("hotkey") or "").strip()
+                                snapshot_chute_id = None
+                                snapshot_slug = None
+                                if winner_meta and winner_meta.get("hotkey") == snapshot_winner_hotkey:
+                                    snapshot_chute_id = winner_meta.get("chute_id")
+                                    snapshot_slug = winner_meta.get("slug")
+                            else:
+                                snapshot_winner_hotkey = winner_meta.get("hotkey") if winner_meta else None
+                                snapshot_chute_id = winner_meta.get("chute_id") if winner_meta else None
+                                snapshot_slug = winner_meta.get("slug") if winner_meta else None
+                            winner_entry = {
+                                "winner_hotkey": snapshot_winner_hotkey,
+                                "chute_id": snapshot_chute_id,
+                                "slug": snapshot_slug,
                                 "top_3_official": top_3_official,
                                 "top_3_watchlist": top_3_watchlist,
                             }
+                            if is_private:
+                                for idx in range(len(PRIVATE_TRACK_RANKED_WEIGHT_SHARES)):
+                                    winner_entry[f"winner_{idx + 1}"] = (
+                                        private_ranked_rows[idx] if idx < len(private_ranked_rows) else None
+                                    )
+                            winners_by_element[element_id] = winner_entry
 
                 if blacklisted_hotkeys:
                     try:
