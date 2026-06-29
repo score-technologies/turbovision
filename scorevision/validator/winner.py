@@ -8,6 +8,10 @@ from scorevision.utils.bittensor_helpers import (
     get_validator_indexes_from_chain,
 )
 from scorevision.utils.cloudflare_helpers import dataset_sv, dataset_sv_multi
+from scorevision.utils.compliance_failures import (
+    ComplianceFailureTuple,
+    is_compliance_tuple_failed,
+)
 from scorevision.utils.prometheus import (
     CURRENT_WINNER,
     VALIDATOR_MINERS_CONSIDERED,
@@ -15,6 +19,7 @@ from scorevision.utils.prometheus import (
     VALIDATOR_WINNER_SCORE,
 )
 from scorevision.utils.settings import get_settings
+from scorevision.utils.r2_public import extract_element_miner_commit_from_key
 from scorevision.validator.models import OpenSourceMinerMeta
 from scorevision.validator.payload import (
     build_winner_meta,
@@ -53,6 +58,20 @@ def _extract_sample_block(line: dict, payload: dict, telemetry: dict) -> int | N
             return int(block_value)
         except Exception:
             continue
+    return None
+
+
+def _extract_sample_commit_block(line: dict) -> int | None:
+    for key_name in ("_key", "key", "path", "url"):
+        key = line.get(key_name)
+        if not key:
+            continue
+        try:
+            _element, _miner, commit_block = extract_element_miner_commit_from_key(str(key))
+        except Exception:
+            continue
+        if commit_block >= 0:
+            return int(commit_block)
     return None
 
 
@@ -120,6 +139,7 @@ async def get_local_fallback_winner_for_element(
     m_min: int,
     hk_to_uid: dict[str, int],
     lane: str = "public",
+    compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
 ) -> tuple[int | None, dict[int, float], dict[str, str | None] | None]:
     settings = get_settings()
     fallback_uid = settings.VALIDATOR_FALLBACK_UID
@@ -137,6 +157,17 @@ async def get_local_fallback_winner_for_element(
                 continue
             miner_uid, score = extract_miner_and_score(payload, hk_to_uid)
             if miner_uid is None:
+                continue
+            telemetry = payload.get("telemetry") or {}
+            miner_info = telemetry.get("miner") or {}
+            miner_hk = (miner_info.get("hotkey") or "").strip()
+            commit_block = _extract_sample_commit_block(line)
+            if is_compliance_tuple_failed(
+                compliance_failure_tuples,
+                hotkey=miner_hk,
+                element_id=element_id,
+                commit_block=commit_block,
+            ):
                 continue
             miner_meta = extract_miner_meta(payload)
             if miner_meta:
@@ -195,12 +226,24 @@ async def collect_recent_challenge_scores_by_validator_miner(
     K: int = 25,
     eligible_uids: set[int] | None = None,
     excluded_uids: set[int] | None = None,
+    compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
 ) -> dict[tuple[str, int], deque]:
     challenge_scores: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=K))
     async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id, lane=lane):
         try:
             payload = line.get("payload") or {}
             if payload.get("element_id") != element_id:
+                continue
+            telemetry = payload.get("telemetry") or {}
+            miner_info = telemetry.get("miner") or {}
+            miner_hk = (miner_info.get("hotkey") or "").strip()
+            commit_block = _extract_sample_commit_block(line)
+            if is_compliance_tuple_failed(
+                compliance_failure_tuples,
+                hotkey=miner_hk,
+                element_id=element_id,
+                commit_block=commit_block,
+            ):
                 continue
             miner_uid, score = extract_miner_and_score(payload, hk_to_uid)
             if miner_uid is None:
@@ -233,6 +276,7 @@ async def get_winner_for_element(
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
     lane: str = "public",
+    compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
 ) -> tuple[
     int | None,
     dict[int, float],
@@ -265,6 +309,7 @@ async def get_winner_for_element(
             m_min=m_min,
             hk_to_uid=hk_to_uid,
             lane=lane,
+            compliance_failure_tuples=compliance_failure_tuples,
         )
         return winner_uid, scores_by_uid, winner_meta, []
 
@@ -296,6 +341,15 @@ async def get_winner_for_element(
             miner_hk = (miner_info.get("hotkey") or "").strip()
             if not miner_hk:
                 diagnostics["skip_missing_miner_hotkey"] += 1
+                continue
+            commit_block = _extract_sample_commit_block(line)
+            if is_compliance_tuple_failed(
+                compliance_failure_tuples,
+                hotkey=miner_hk,
+                element_id=element_id,
+                commit_block=commit_block,
+            ):
+                diagnostics["skip_compliance_failed_tuple"] += 1
                 continue
             if miner_hk not in hk_to_uid:
                 diagnostics["skip_unknown_miner_hotkey"] += 1
@@ -512,6 +566,7 @@ async def get_winner_for_element(
                 K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
                 eligible_uids=None,
                 excluded_uids=excluded_uids_for_tiebreak,
+                compliance_failure_tuples=compliance_failure_tuples,
             )
             challenge_scores_by_miner = aggregate_challenge_scores_by_miner(challenge_scores_by_validator_miner)
 

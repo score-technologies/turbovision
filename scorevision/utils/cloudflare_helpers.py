@@ -939,6 +939,7 @@ async def dataset_sv_multi(
                 try:
                     line = _loads(raw.rstrip(b"\n"))
                     line["_src_index"] = iurl
+                    line["_key"] = url
                     payload_str = dumps(
                         line.get("payload") or {}, sort_keys=True, separators=(",", ":")
                     )

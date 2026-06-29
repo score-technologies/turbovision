@@ -34,6 +34,7 @@ from scorevision.utils.bittensor_helpers import (
     _already_committed_same_index,
 )
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
+from scorevision.utils.compliance_failures import fetch_compliance_failure_tuples
 from scorevision.utils.cloudflare_helpers import (
     ensure_index_exists,
     build_public_index_url_from_public_base,
@@ -78,6 +79,7 @@ def _top_rows(
     min_samples: int,
     max_samples: int | None = None,
     top_k: int = 3,
+    min_avg_score: float = 1e-12,
 ) -> list[dict[str, float | int | str]]:
     selected: list[dict[str, float | int | str]] = []
     for row in rows:
@@ -85,6 +87,8 @@ def _top_rows(
         if n < min_samples:
             continue
         if max_samples is not None and n > max_samples:
+            continue
+        if float(row.get("avg_score", 0.0) or 0.0) <= min_avg_score:
             continue
         selected.append(row)
     selected.sort(key=lambda r: (float(r["avg_score"]), int(r["n_challenges"])), reverse=True)
@@ -288,6 +292,12 @@ async def weights_loop(
             blacklisted_hotkeys = await fetch_blacklisted_hotkeys(blacklist_api)
             if blacklisted_hotkeys:
                 logger.info("[weights] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
+            compliance_failure_tuples = await fetch_compliance_failure_tuples()
+            if compliance_failure_tuples:
+                logger.info(
+                    "[weights] loaded %d compliance failing tuple(s)",
+                    len(compliance_failure_tuples),
+                )
 
             if subtensor is None:
                 subtensor = await get_subtensor()
@@ -415,6 +425,7 @@ async def weights_loop(
                             baseline_theta=baseline_theta,
                             first_block=first_block,
                             blacklisted_hotkeys=blacklisted_hotkeys,
+                            compliance_failure_tuples=None if is_private else compliance_failure_tuples,
                             validator_hotkey_ss58=validator_hotkey_ss58,
                             lane=lane,
                         )

@@ -180,6 +180,53 @@ def _checker_fails_key() -> str:
     return f"{_checker_prefix()}failing_tuples.json"
 
 
+def _checker_public_url_for_key(key: str) -> str | None:
+    base = (get_settings().CHECKER_R2_BUCKET_PUBLIC_URL or "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/{str(key).strip().lstrip('/')}"
+
+
+def _merge_failed_tuples(
+    existing: Any,
+    failed_tuples: list[dict[str, Any]],
+    *,
+    run_key: str,
+    now: float,
+) -> dict[tuple[str, str, int], dict[str, Any]]:
+    merged: dict[tuple[str, str, int], dict[str, Any]] = {}
+    if isinstance(existing, list):
+        for row in existing:
+            try:
+                key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
+                merged[key] = row
+            except Exception:
+                continue
+
+    run_url = _checker_public_url_for_key(run_key)
+    for row in failed_tuples:
+        cb = row.get("commit_block")
+        if cb is None:
+            continue
+        key = (str(row["hotkey"]), str(row["element_id"]), int(cb))
+        latest_status = row.get("status") or "FAIL_RUNTIME"
+        prev = merged.get(key)
+        if prev is None:
+            prev = {
+                "hotkey": key[0],
+                "element_id": key[1],
+                "commit_block": key[2],
+                "first_seen": now,
+            }
+            merged[key] = prev
+        prev["last_seen"] = now
+        prev["latest_status"] = latest_status
+        prev["latest_run_key"] = run_key
+        if run_url is not None:
+            prev["latest_run_url"] = run_url
+    return merged
+
+
 def _get_checker_client():
     cfg = checker_r2_config()
     return create_s3_client(cfg, error_message="Checker R2 credentials not set")
@@ -1091,33 +1138,8 @@ async def run_public_compliance_once() -> dict[str, Any]:
         existing is not None,
         type(existing).__name__ if existing is not None else "None",
     )
-    merged: dict[tuple[str, str, int], dict[str, Any]] = {}
-    if isinstance(existing, list):
-        for row in existing:
-            try:
-                key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
-                merged[key] = row
-            except Exception:
-                continue
     now = time()
-    for row in failed_tuples:
-        cb = row.get("commit_block")
-        if cb is None:
-            continue
-        key = (str(row["hotkey"]), str(row["element_id"]), int(cb))
-        prev = merged.get(key)
-        if prev is None:
-            merged[key] = {
-                "hotkey": key[0],
-                "element_id": key[1],
-                "commit_block": key[2],
-                "first_seen": now,
-                "last_seen": now,
-                "latest_status": row.get("status"),
-            }
-        else:
-            prev["last_seen"] = now
-            prev["latest_status"] = row.get("status")
+    merged = _merge_failed_tuples(existing, failed_tuples, run_key=run_key, now=now)
 
     try:
         logger.info(

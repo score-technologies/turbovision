@@ -110,6 +110,7 @@ class Settings(BaseModel):
     SCOREVISION_CENTRAL_VALIDATOR_HOTKEY: str
     SCOREVISION_PUBLIC_MIN_CHALLENGES: int
     SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS: float
+    SCOREVISION_FAILING_TUPLES_URL: str
 
     # Runner
     RUNNER_GET_BLOCK_TIMEOUT_S: float
@@ -357,6 +358,10 @@ def get_settings() -> Settings:
         ),
         SCOREVISION_PUBLIC_MIN_CHALLENGES=int(getenv("SCOREVISION_PUBLIC_MIN_CHALLENGES", 30)),
         SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS=float(getenv("SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS", 3.0)),
+        SCOREVISION_FAILING_TUPLES_URL=getenv(
+            "SCOREVISION_FAILING_TUPLES_URL",
+            "https://manako.scoredata.me/manako/compliances/failing_tuples.json",
+        ),
         # Runner
         RUNNER_GET_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", 15.0)),
         RUNNER_WAIT_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", 15.0)),

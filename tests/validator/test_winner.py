@@ -1,6 +1,7 @@
 from scorevision.validator.winner import (
     _apply_recent_commit_initial_zero_filter,
     _drop_initial_zero_scores,
+    _extract_sample_commit_block,
     _extract_sample_block,
     compute_adaptive_delta_rel,
 )
@@ -53,6 +54,17 @@ def test_extract_sample_block_uses_telemetry_block():
 
 def test_extract_sample_block_falls_back_to_line_block():
     assert _extract_sample_block({"block": "102"}, {}, {}) == 102
+
+
+def test_extract_sample_commit_block_from_shard_key():
+    line = {
+        "_key": (
+            "https://example.com/manako/manak0_Detect-fire/hk1/"
+            "000000123/evaluation/456-result.jsonl"
+        )
+    }
+
+    assert _extract_sample_commit_block(line) == 123
 
 
 def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits():

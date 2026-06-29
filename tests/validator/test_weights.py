@@ -1,4 +1,5 @@
 import pytest
+from scorevision.validator.core.weights import _top_rows
 from scorevision.validator.payload import (
     extract_miner_and_score,
     extract_miner_meta,
@@ -89,6 +90,19 @@ def test_stake_of_not_found():
 def test_stake_of_negative():
     stake_by_hk = {"hk123": -100.0}
     assert stake_of("hk123", stake_by_hk) == 0.0
+
+
+def test_top_rows_excludes_zero_average_scores():
+    rows = [
+        {"hotkey": "zero-many", "uid": 1, "avg_score": 0.0, "n_challenges": 50},
+        {"hotkey": "positive-low", "uid": 2, "avg_score": 0.2, "n_challenges": 20},
+        {"hotkey": "positive-high", "uid": 3, "avg_score": 0.8, "n_challenges": 10},
+        {"hotkey": "insufficient", "uid": 4, "avg_score": 1.0, "n_challenges": 2},
+    ]
+
+    selected = _top_rows(rows, min_samples=10, top_k=3)
+
+    assert [row["hotkey"] for row in selected] == ["positive-high", "positive-low"]
 
 
 def test_extract_challenge_id_from_payload_task_id():

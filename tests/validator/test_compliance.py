@@ -62,6 +62,58 @@ def test_latency_threshold_falls_back_when_manifest_value_missing():
     assert threshold == 100.0
 
 
+def test_merge_failed_tuples_defaults_status_and_links_run(monkeypatch):
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(CHECKER_R2_BUCKET_PUBLIC_URL="https://checker.example"),
+    )
+
+    merged = compliance_mod._merge_failed_tuples(
+        [
+            {
+                "hotkey": "hk-old",
+                "element_id": "E-old",
+                "commit_block": 99,
+                "first_seen": 1.0,
+                "last_seen": 1.0,
+                "latest_status": None,
+            }
+        ],
+        [
+            {
+                "hotkey": "hk1",
+                "element_id": "E1",
+                "commit_block": 123,
+            },
+            {
+                "hotkey": "hk2",
+                "element_id": "E2",
+                "commit_block": 124,
+                "status": "FAIL_OUTPUT",
+            },
+            {
+                "hotkey": "hk3",
+                "element_id": "E3",
+                "commit_block": None,
+                "status": "FAIL_RUNTIME",
+            },
+        ],
+        run_key="manako/compliances/runs/000000555.json",
+        now=10.0,
+    )
+
+    runtime_row = merged[("hk1", "E1", 123)]
+    assert runtime_row["latest_status"] == "FAIL_RUNTIME"
+    assert runtime_row["latest_run_key"] == "manako/compliances/runs/000000555.json"
+    assert runtime_row["latest_run_url"] == (
+        "https://checker.example/manako/compliances/runs/000000555.json"
+    )
+    assert merged[("hk2", "E2", 124)]["latest_status"] == "FAIL_OUTPUT"
+    assert ("hk3", "E3", 0) not in merged
+    assert merged[("hk-old", "E-old", 99)]["latest_status"] is None
+
+
 def test_compare_predictions_iou_success_when_boxes_match():
     expected = {
         "frames": [

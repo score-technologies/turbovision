@@ -15,6 +15,11 @@ from scorevision.utils.bittensor_helpers import (
     reset_subtensor,
     get_validator_indexes_from_chain,
 )
+from scorevision.utils.compliance_failures import (
+    ComplianceFailureTuple,
+    fetch_compliance_failure_tuples,
+    is_compliance_tuple_failed,
+)
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -529,6 +534,7 @@ async def get_miners_from_registry(
     max_model_size_mb: float | None = None,
     onnx_only: bool | None = None,
     blacklisted_hotkeys: set[str] | None = None,
+    compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision, optional HF repo size
@@ -542,6 +548,13 @@ async def get_miners_from_registry(
         blacklisted_hotkeys = set()
     if blacklisted_hotkeys:
         logger.info("[Registry] loaded %d blacklisted hotkeys", len(blacklisted_hotkeys))
+    if compliance_failure_tuples is None and element_id is not None:
+        compliance_failure_tuples = await fetch_compliance_failure_tuples()
+    if compliance_failure_tuples:
+        logger.info(
+            "[Registry] loaded %d compliance failing tuple(s)",
+            len(compliance_failure_tuples),
+        )
 
     try:
         st = await get_subtensor()
@@ -572,6 +585,7 @@ async def get_miners_from_registry(
 
     # 1) Extract candidates (uid -> Miner)
     candidates: Dict[int, Miner] = {}
+    skipped: Dict[int, Miner] = {}
     wanted = str(element_id).strip() if element_id is not None else None
     resolved_first_block = (
         int(first_block)
@@ -598,6 +612,22 @@ async def get_miners_from_registry(
 
         cand = _build_miner_candidate(uid, hk, obj, int(best_blk or 0))
         if cand is not None:
+            if is_compliance_tuple_failed(
+                compliance_failure_tuples,
+                hotkey=cand.hotkey,
+                element_id=cand.element_id,
+                commit_block=cand.block,
+            ):
+                cand.registry_skip_reason = "compliance_failed_tuple"
+                skipped[uid] = cand
+                logger.info(
+                    "[Registry] uid=%s hotkey=%s element_id=%s commit_block=%s skipped: compliance failed tuple",
+                    uid,
+                    cand.hotkey,
+                    cand.element_id,
+                    cand.block,
+                )
+                continue
             candidates[uid] = cand
 
     if (
@@ -668,6 +698,22 @@ async def get_miners_from_registry(
 
                     cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
                     if cand is not None:
+                        if is_compliance_tuple_failed(
+                            compliance_failure_tuples,
+                            hotkey=cand.hotkey,
+                            element_id=cand.element_id,
+                            commit_block=cand.block,
+                        ):
+                            cand.registry_skip_reason = "compliance_failed_tuple"
+                            skipped[uid_i] = cand
+                            logger.info(
+                                "[Registry] uid=%s hotkey=%s element_id=%s commit_block=%s skipped: compliance failed tuple",
+                                uid_i,
+                                cand.hotkey,
+                                cand.element_id,
+                                cand.block,
+                            )
+                            continue
                         candidates[uid_i] = cand
                         added += 1
                 logger.info("[Registry] archive backfill added %d candidate(s)", added)
@@ -683,7 +729,7 @@ async def get_miners_from_registry(
     logger.info("[Registry] %d on-chain candidates", len(candidates))
     if not candidates:
         logger.warning("[Registry] No on-chain candidates")
-        return {}, {}
+        return {}, skipped
 
     def _mark_skipped(uid: int, miner: Miner, reason: str) -> None:
         miner.registry_skip_reason = reason
@@ -691,7 +737,6 @@ async def get_miners_from_registry(
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
     filtered: Dict[int, Miner] = {}
-    skipped: Dict[int, Miner] = {}
     for uid, m in candidates.items():
         if is_registry_bypass(uid, m.hotkey):
             logger.info("[Registry] uid=%s hotkey=%s bypassed registry filters", uid, m.hotkey)

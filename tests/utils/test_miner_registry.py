@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from scorevision.utils import miner_registry as registry
+from scorevision.utils.compliance_failures import ComplianceFailureTuple
 
 
 class _FakeHfApi:
@@ -129,4 +130,86 @@ async def test_get_miners_from_registry_keeps_when_onnx_only_disabled(monkeypatc
     )
 
     assert 0 in kept
+    assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_skips_exact_compliance_failed_tuple(monkeypatch):
+    async def fake_get_subtensor():
+        return _FakeSubtensor()
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="PlayerDetect_v1@1.0",
+        compliance_failure_tuples={
+            ComplianceFailureTuple("hk1", "PlayerDetect_v1@1.0", 10),
+        },
+    )
+
+    assert kept == {}
+    assert skipped[0].registry_skip_reason == "compliance_failed_tuple"
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_keeps_new_commit_after_failed_tuple(monkeypatch):
+    class NewCommitSubtensor(_FakeSubtensor):
+        async def get_all_revealed_commitments(self, netuid):
+            return {
+                "hk1": [
+                    (
+                        10,
+                        json.dumps(
+                            {
+                                "role": "miner",
+                                "model": "org/model",
+                                "revision": "rev1",
+                                "slug": "slug1",
+                                "chute_id": "chute1",
+                                "element_id": "PlayerDetect_v1@1.0",
+                            }
+                        ),
+                    ),
+                    (
+                        11,
+                        json.dumps(
+                            {
+                                "role": "miner",
+                                "model": "org/model",
+                                "revision": "rev2",
+                                "slug": "slug1",
+                                "chute_id": "chute1",
+                                "element_id": "PlayerDetect_v1@1.0",
+                            }
+                        ),
+                    ),
+                ]
+            }
+
+    async def fake_get_subtensor():
+        return NewCommitSubtensor()
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev2"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="PlayerDetect_v1@1.0",
+        compliance_failure_tuples={
+            ComplianceFailureTuple("hk1", "PlayerDetect_v1@1.0", 10),
+        },
+    )
+
+    assert 0 in kept
+    assert kept[0].block == 11
     assert skipped == {}
