@@ -19,6 +19,7 @@ dependencies = [
   "aiohttp>=3.9",
   "Pillow>=10.0",
   "opencv-python>=4.8",
+  "scipy",
   "click>=8.0.0",
   "huggingface_hub>=0.24",
   "bittensor==9.12.0",

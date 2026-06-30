@@ -158,7 +158,12 @@ async def get_subtensor():
             logger.info("Initializing subtensor on %s", endpoint)
             _SUBTENSOR = await _init(endpoint)
         except Exception as e:
-            logger.error("Subtensor init failed for %s: %s", endpoint, e)
+            logger.error(
+                "Subtensor init failed for %s: %s: %r",
+                endpoint,
+                type(e).__name__,
+                e,
+            )
             raise
     return _SUBTENSOR
 

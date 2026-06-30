@@ -749,7 +749,12 @@ async def runner_loop(path_manifest: Path | None = None):
                 try:
                     subtensor = await get_subtensor()
                 except Exception as e:
-                    logger.warning("[RunnerLoop] subtensor connect failed: %s → retrying in %.1fs", e, reconnect_delay)
+                    logger.warning(
+                        "[RunnerLoop] subtensor connect failed: %s: %r → retrying in %.1fs",
+                        type(e).__name__,
+                        e,
+                        reconnect_delay,
+                    )
                     reset_subtensor()
                     subtensor = None
                     await asyncio.sleep(reconnect_delay)
@@ -764,7 +769,11 @@ async def runner_loop(path_manifest: Path | None = None):
                 await asyncio.sleep(2.0)
                 continue
             except (KeyError, ConnectionError, RuntimeError) as err:
-                logger.warning("[RunnerLoop] get_current_block error (%s) → resetting subtensor", err)
+                logger.warning(
+                    "[RunnerLoop] get_current_block error (%s: %r) → resetting subtensor",
+                    type(err).__name__,
+                    err,
+                )
                 reset_subtensor()
                 subtensor = None
                 await asyncio.sleep(2.0)
@@ -775,13 +784,22 @@ async def runner_loop(path_manifest: Path | None = None):
             try:
                 new_manifest = await load_manifest(path_manifest, settings, block)
             except Exception as e:
-                logger.error("[RunnerLoop] Failed to load Manifest at block %s: %s", block, e)
+                logger.error(
+                    "[RunnerLoop] Failed to load Manifest at block %s: %s: %r",
+                    block,
+                    type(e).__name__,
+                    e,
+                )
                 try:
                     await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
                 except asyncio.TimeoutError:
                     continue
                 except (KeyError, ConnectionError, RuntimeError) as err:
-                    logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
+                    logger.warning(
+                        "[RunnerLoop] wait_for_block error (%s: %r); resetting subtensor",
+                        type(err).__name__,
+                        err,
+                    )
                     reset_subtensor()
                     subtensor = None
                     await asyncio.sleep(2.0)
@@ -808,7 +826,11 @@ async def runner_loop(path_manifest: Path | None = None):
             except asyncio.TimeoutError:
                 continue
             except (KeyError, ConnectionError, RuntimeError) as err:
-                logger.warning("[RunnerLoop] wait_for_block error (%s); resetting subtensor", err)
+                logger.warning(
+                    "[RunnerLoop] wait_for_block error (%s: %r); resetting subtensor",
+                    type(err).__name__,
+                    err,
+                )
                 reset_subtensor()
                 subtensor = None
                 await asyncio.sleep(2.0)
@@ -818,7 +840,11 @@ async def runner_loop(path_manifest: Path | None = None):
             break
 
         except Exception as e:
-            logger.warning("[RunnerLoop] Error: %s; resetting subtensor and retrying...", e)
+            logger.warning(
+                "[RunnerLoop] Error: %s: %r; resetting subtensor and retrying...",
+                type(e).__name__,
+                e,
+            )
             reset_subtensor()
             subtensor = None
             try:

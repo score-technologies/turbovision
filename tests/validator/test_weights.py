@@ -13,6 +13,11 @@ from scorevision.validator.scoring import (
     stake_of,
     are_similar_by_challenges,
 )
+from scorevision.validator.core.weights import (
+    _private_ranked_weight_allocations,
+    _ranked_private_rows,
+    _top_rows,
+)
 from scorevision.validator.models import WeightsResult, OpenSourceMinerMeta
 
 
@@ -164,3 +169,56 @@ def test_weights_result_dataclass():
     assert result.element_id == "soccer_detect"
     assert result.winner_uid == 7
     assert result.scores_by_uid[7] == 0.9
+
+
+def test_top_rows_orders_by_score_samples_then_uid():
+    rows = [
+        {"hotkey": "hk3", "uid": 3, "avg_score": 0.8, "n_challenges": 30},
+        {"hotkey": "hk2", "uid": 2, "avg_score": 0.9, "n_challenges": 20},
+        {"hotkey": "hk1", "uid": 1, "avg_score": 0.9, "n_challenges": 20},
+        {"hotkey": "hk4", "uid": 4, "avg_score": 0.7, "n_challenges": 10},
+    ]
+
+    top = _top_rows(rows, min_samples=20, top_k=3)
+
+    assert [row["uid"] for row in top] == [1, 2, 3]
+
+
+def test_ranked_private_rows_adds_rank_and_weight_share():
+    rows = [
+        {"hotkey": "hk10", "uid": 10, "avg_score": 0.95, "n_challenges": 30},
+        {"hotkey": "hk11", "uid": 11, "avg_score": 0.90, "n_challenges": 30},
+        {"hotkey": "hk12", "uid": 12, "avg_score": 0.85, "n_challenges": 30},
+    ]
+
+    ranked = _ranked_private_rows(rows, min_samples=20)
+
+    assert [row["rank"] for row in ranked] == [1, 2, 3]
+    assert [row["weight_share"] for row in ranked] == [0.80, 0.15, 0.05]
+
+
+def test_private_ranked_weight_allocations_uses_80_15_5_of_element_weight():
+    rows = [
+        {"hotkey": "winner", "uid": 5, "avg_score": 0.95, "n_challenges": 30},
+        {"hotkey": "second", "uid": 6, "avg_score": 0.90, "n_challenges": 30},
+        {"hotkey": "third", "uid": 7, "avg_score": 0.85, "n_challenges": 30},
+    ]
+
+    allocations = _private_ranked_weight_allocations(rows, elem_weight=0.5, min_samples=20)
+
+    assert [(uid, share) for uid, share, _row in allocations] == [
+        (5, 0.4),
+        (6, 0.075),
+        (7, 0.025),
+    ]
+
+
+def test_private_ranked_weight_allocations_ignores_zero_score_rows():
+    rows = [
+        {"hotkey": "zero", "uid": 5, "avg_score": 0.0, "n_challenges": 30},
+        {"hotkey": "winner", "uid": 6, "avg_score": 0.7, "n_challenges": 30},
+    ]
+
+    allocations = _private_ranked_weight_allocations(rows, elem_weight=1.0, min_samples=20)
+
+    assert [(uid, share) for uid, share, _row in allocations] == [(6, 0.8)]
