@@ -10,6 +10,7 @@ import os
 import resource
 import shutil
 import socket
+import sys
 import tempfile
 from base64 import b64decode
 from dataclasses import dataclass
@@ -86,6 +87,7 @@ class LocalRunResult:
     predictions: dict[str, Any] | None
     latency_ms: float
     error: str | None = None
+    memory_mb_peak: float | None = None
 
 
 def _load_miner_from_hf_repo(
@@ -248,6 +250,13 @@ def _safe_setrlimit(which: int, soft: int, hard: int | None = None) -> None:
         pass
 
 
+def _peak_rss_mb() -> float:
+    peak_rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if sys.platform == "darwin":
+        return peak_rss / (1024.0 * 1024.0)
+    return peak_rss / 1024.0
+
+
 def _sandbox_limits(*, memory_bytes: int, max_processes: int) -> None:
     # Keep memory/process/file protections.
     # CPU hard limit disabled for persistent worker mode to avoid SIGXCPU (-24)
@@ -329,6 +338,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                         n_keypoints=n_keypoints,
                     )
                     infer_ms = (monotonic() - t_infer0) * 1000.0
+                    memory_mb_peak = _peak_rss_mb()
 
                     rows = []
                     for frame_id, frame_result in zip(frame_ids, frame_results, strict=True):
@@ -345,6 +355,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                             "decode_ms": decode_ms,
                             "infer_ms": infer_ms,
                             "latency_ms": infer_ms,
+                            "memory_mb_peak": memory_mb_peak,
                             "predictions": {"frames": rows},
                         }
                     )
@@ -498,13 +509,21 @@ class PersistentInferenceWorker:
 
         decode_ms = float(out.get("decode_ms", 0.0))
         infer_ms = float(out.get("infer_ms", 0.0))
+        memory_mb_peak = float(out.get("memory_mb_peak", 0.0))
         logger.info(
-            "[worker] infer done challenge_id=%s decode_ms=%.1f infer_ms=%.1f",
+            "[worker] infer done challenge_id=%s decode_ms=%.1f infer_ms=%.1f memory_mb_peak=%.1f",
             challenge_id,
             decode_ms,
             infer_ms,
+            memory_mb_peak,
         )
-        return LocalRunResult(True, out.get("predictions"), float(out.get("latency_ms", 0.0)), None)
+        return LocalRunResult(
+            True,
+            out.get("predictions"),
+            float(out.get("latency_ms", 0.0)),
+            None,
+            memory_mb_peak,
+        )
 
     def close(self) -> None:
         if self._proc is None or self._parent_conn is None:

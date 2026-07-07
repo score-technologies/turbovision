@@ -1018,6 +1018,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     "challenge_id": challenge_id,
                     "ok": ok_iou,
                     "latency_ms": local.latency_ms,
+                    "memory_mb_peak": getattr(local, "memory_mb_peak", None),
                     "compare": info,
                 }
             )
