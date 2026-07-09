@@ -319,6 +319,7 @@ async def get_winner_for_element(
     miner_meta_by_hk: dict[str, OpenSourceMinerMeta] = {}
     diagnostics = Counter()
     unknown_miner_hotkeys: set[str] = set()
+    compliance_failed_hotkeys: set[str] = set()
     source_indexes: set[str] = set()
     max_observed_block: int | None = None
 
@@ -350,6 +351,7 @@ async def get_winner_for_element(
                 commit_block=commit_block,
             ):
                 diagnostics["skip_compliance_failed_tuple"] += 1
+                compliance_failed_hotkeys.add(miner_hk)
                 continue
             if miner_hk not in hk_to_uid:
                 diagnostics["skip_unknown_miner_hotkey"] += 1
@@ -371,6 +373,17 @@ async def get_winner_for_element(
         samples_by_miner[miner_uid].append((block_int or 0, float(score)))
         if block_int is not None and (max_observed_block is None or block_int > max_observed_block):
             max_observed_block = block_int
+
+    if compliance_failure_tuples or diagnostics["skip_compliance_failed_tuple"]:
+        logger.info(
+            "[winner:compliance] element_id=%s window_id=%s loaded_failing_tuples=%d "
+            "skipped_samples=%d skipped_hotkeys=%d",
+            element_id,
+            current_window_id,
+            len(compliance_failure_tuples or ()),
+            diagnostics["skip_compliance_failed_tuple"],
+            len(compliance_failed_hotkeys),
+        )
 
     first_commit_block_by_hk = await _first_commit_block_by_miner(
         netuid,
