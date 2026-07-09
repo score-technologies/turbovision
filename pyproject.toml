@@ -58,3 +58,6 @@ packages = ["scorevision"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "deployment: tests that hit deployed public services",
+]

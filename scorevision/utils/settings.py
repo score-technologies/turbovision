@@ -360,7 +360,7 @@ def get_settings() -> Settings:
         SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS=float(getenv("SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS", 3.0)),
         SCOREVISION_FAILING_TUPLES_URL=getenv(
             "SCOREVISION_FAILING_TUPLES_URL",
-            "https://manako.scoredata.me/manako/compliances/failing_tuples.json",
+            "https://conformity.scoredata.me/compliance/failing_tuples.json",
         ),
         # Runner
         RUNNER_GET_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", 15.0)),
