@@ -3,6 +3,7 @@ from scorevision.validator.winner import (
     _drop_initial_zero_scores,
     _extract_sample_commit_block,
     _extract_sample_block,
+    _select_representative_commit_block,
     compute_adaptive_delta_rel,
 )
 
@@ -65,6 +66,10 @@ def test_extract_sample_commit_block_from_shard_key():
     }
 
     assert _extract_sample_commit_block(line) == 123
+
+
+def test_select_representative_commit_block_prefers_count_then_latest():
+    assert _select_representative_commit_block({100: 2, 120: 2, 130: 1}) == 120
 
 
 def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits():

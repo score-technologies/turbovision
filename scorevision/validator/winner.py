@@ -75,6 +75,12 @@ def _extract_sample_commit_block(line: dict) -> int | None:
     return None
 
 
+def _select_representative_commit_block(commit_counts: Counter[int]) -> int | None:
+    if not commit_counts:
+        return None
+    return max(commit_counts.items(), key=lambda item: (int(item[1]), int(item[0])))[0]
+
+
 def _apply_recent_commit_initial_zero_filter(
     *,
     samples_by_uid: dict[int, list[tuple[int, float]]],
@@ -322,6 +328,7 @@ async def get_winner_for_element(
     compliance_failed_hotkeys: set[str] = set()
     source_indexes: set[str] = set()
     max_observed_block: int | None = None
+    commit_blocks_by_uid: dict[int, Counter[int]] = defaultdict(Counter)
 
     async for line in dataset_sv_multi(tail, validator_indexes, element_id=element_id, lane=lane):
         diagnostics["lines_total"] += 1
@@ -371,6 +378,8 @@ async def get_winner_for_element(
             continue
         diagnostics["accepted_lines"] += 1
         samples_by_miner[miner_uid].append((block_int or 0, float(score)))
+        if commit_block is not None:
+            commit_blocks_by_uid[miner_uid][int(commit_block)] += 1
         if block_int is not None and (max_observed_block is None or block_int > max_observed_block):
             max_observed_block = block_int
 
@@ -461,14 +470,16 @@ async def get_winner_for_element(
         hk = uid_to_hk.get(uid)
         if not hk:
             continue
-        sample_rows_all.append(
-            {
-                "hotkey": hk,
-                "uid": int(uid),
-                "avg_score": float(sums_by_miner[uid] / n),
-                "n_challenges": int(n),
-            }
-        )
+        row = {
+            "hotkey": hk,
+            "uid": int(uid),
+            "avg_score": float(sums_by_miner[uid] / n),
+            "n_challenges": int(n),
+        }
+        commit_block = _select_representative_commit_block(commit_blocks_by_uid.get(uid, Counter()))
+        if commit_block is not None:
+            row["commit_block"] = int(commit_block)
+        sample_rows_all.append(row)
 
     elig = [uid for uid, n in cnt_by_miner.items() if n >= m_min and uid in sums_by_miner]
     if not elig:

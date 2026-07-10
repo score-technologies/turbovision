@@ -496,11 +496,17 @@ def _compare_predictions_iou(
         return False, {"reason": "no_common_frames"}
 
     per_frame_scores: list[float] = []
+    matched_ious: list[float] = []
     extra_total = 0
     missing_total = 0
+    expected_total = 0
+    actual_total = 0
+    matched_total = 0
     for fid in common_ids:
         exp_detections = _frame_detections(exp_frames[fid])
         act_detections = _frame_detections(act_frames[fid])
+        expected_total += len(exp_detections)
+        actual_total += len(act_detections)
         if not exp_detections and not act_detections:
             per_frame_scores.append(1.0)
             continue
@@ -520,8 +526,10 @@ def _compare_predictions_iou(
                     best_idx = i
             if best_idx is not None:
                 used_act.add(best_idx)
+                matched_ious.append(best)
             ious.append(best)
         matched = len(used_act)
+        matched_total += matched
         missing = max(0, len(exp_detections) - matched)
         extra = max(0, len(act_detections) - matched)
         missing_total += missing
@@ -530,6 +538,7 @@ def _compare_predictions_iou(
         per_frame_scores.append(frame_score)
 
     mean_iou = sum(per_frame_scores) / len(per_frame_scores)
+    matched_mean_iou = sum(matched_ious) / len(matched_ious) if matched_ious else 0.0
     ok = mean_iou >= threshold
     return ok, {
         "mean_iou": mean_iou,
@@ -538,8 +547,29 @@ def _compare_predictions_iou(
         "missing_boxes": missing_total,
         "extra_detections": extra_total,
         "missing_detections": missing_total,
+        "expected_detections": expected_total,
+        "actual_detections": actual_total,
+        "matched_detections": matched_total,
+        "matched_mean_iou": matched_mean_iou,
+        "missing_ratio": missing_total / max(1, expected_total),
+        "extra_ratio": extra_total / max(1, actual_total),
         "frames_compared": len(common_ids),
     }
+
+
+def _is_soft_output_drift(info: dict[str, Any], settings: Any) -> bool:
+    if info.get("reason"):
+        return False
+    if int(info.get("matched_detections", 0)) <= 0:
+        return False
+    missing = int(info.get("missing_boxes", info.get("missing_detections", 0)) or 0)
+    extra = int(info.get("extra_boxes", info.get("extra_detections", 0)) or 0)
+    matched_mean_iou = float(info.get("matched_mean_iou", 0.0) or 0.0)
+    return (
+        missing <= max(0, int(settings.CHECKER_OUTPUT_DRIFT_MAX_MISSING))
+        and extra <= max(0, int(settings.CHECKER_OUTPUT_DRIFT_MAX_EXTRA))
+        and matched_mean_iou >= float(settings.CHECKER_OUTPUT_DRIFT_MIN_MATCHED_IOU)
+    )
 
 
 async def _load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
@@ -599,6 +629,8 @@ def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
                     continue
                 seen.add(dedup_key)
                 commit_block = row.get("commit_block", row.get("block"))
+                if commit_block is None and hk == str(entry.get("winner_hotkey") or "").strip():
+                    commit_block = entry.get("winner_commit_block")
                 try:
                     commit_block = int(commit_block) if commit_block is not None else None
                 except Exception:
@@ -658,36 +690,78 @@ async def _resolve_target_commit(
     hotkey = str(target["hotkey"])
     model = target.get("model")
     revision = target.get("revision")
-    commit_block = target.get("commit_block")
+    raw_commit_block = target.get("commit_block")
+    try:
+        snapshot_commit_block = int(raw_commit_block) if raw_commit_block is not None else None
+    except Exception:
+        snapshot_commit_block = None
 
-    if model and revision and commit_block is not None:
+    commits = commits_by_hotkey.get(hotkey)
+    chain_block, chain_obj = _pick_latest_miner_commit_for_element(commits, element_id)
+
+    if snapshot_commit_block is None:
         logger.info(
-            "[compliance] target element=%s hotkey=%s resolved from winners snapshot block=%s",
+            "[compliance] target element=%s hotkey=%s skipped: winners snapshot missing commit_block",
             element_id,
             hotkey,
-            commit_block,
         )
         return {
             "element_id": element_id,
             "hotkey": hotkey,
-            "commit_block": int(commit_block),
+            "skip_reason": "winner_commit_block_missing",
+            "uid": hotkey_to_uid.get(hotkey),
+        }
+
+    if chain_block is None or chain_obj is None:
+        logger.info(
+            "[compliance] target element=%s hotkey=%s skipped: no matching on-chain miner commitment for snapshot block=%s",
+            element_id,
+            hotkey,
+            snapshot_commit_block,
+        )
+        return {
+            "element_id": element_id,
+            "hotkey": hotkey,
+            "commit_block": snapshot_commit_block,
+            "skip_reason": "current_commitment_missing",
+            "uid": hotkey_to_uid.get(hotkey),
+        }
+
+    if int(chain_block) != int(snapshot_commit_block):
+        logger.info(
+            "[compliance] target element=%s hotkey=%s skipped: current commit block=%s differs from winners commit block=%s",
+            element_id,
+            hotkey,
+            chain_block,
+            snapshot_commit_block,
+        )
+        return {
+            "element_id": element_id,
+            "hotkey": hotkey,
+            "commit_block": snapshot_commit_block,
+            "current_commit_block": int(chain_block),
+            "skip_reason": "new_commit_block",
+            "uid": hotkey_to_uid.get(hotkey),
+        }
+
+    if model and revision:
+        logger.info(
+            "[compliance] target element=%s hotkey=%s resolved from winners snapshot block=%s",
+            element_id,
+            hotkey,
+            snapshot_commit_block,
+        )
+        return {
+            "element_id": element_id,
+            "hotkey": hotkey,
+            "commit_block": snapshot_commit_block,
             "model": str(model),
             "revision": str(revision),
             "uid": hotkey_to_uid.get(hotkey),
         }
 
-    commits = commits_by_hotkey.get(hotkey)
-    block, obj = _pick_latest_miner_commit_for_element(commits, element_id)
-    if obj is None or block is None:
-        logger.warning(
-            "[compliance] target element=%s hotkey=%s no matching on-chain miner commitment",
-            element_id,
-            hotkey,
-        )
-        return None
-
-    model = obj.get("model")
-    revision = obj.get("revision")
+    model = chain_obj.get("model")
+    revision = chain_obj.get("revision")
     if not model or not revision:
         logger.warning(
             "[compliance] target element=%s hotkey=%s commitment missing model/revision",
@@ -700,14 +774,14 @@ async def _resolve_target_commit(
         element_id,
         hotkey,
         hotkey_to_uid.get(hotkey),
-        block,
+        chain_block,
         model,
         revision,
     )
     return {
         "element_id": element_id,
         "hotkey": hotkey,
-        "commit_block": int(block),
+        "commit_block": int(chain_block),
         "model": str(model),
         "revision": str(revision),
         "uid": hotkey_to_uid.get(hotkey),
@@ -883,6 +957,18 @@ async def run_public_compliance_once() -> dict[str, Any]:
             settings.CHECKER_LATENCY_P95_MS,
         )
         target = await _resolve_target_commit(target_row, commits_by_hotkey, hotkey_to_uid)
+        if target and target.get("skip_reason"):
+            run_results.append(
+                {
+                    "element_id": element_id,
+                    "hotkey": hotkey,
+                    "commit_block": target.get("commit_block"),
+                    "current_commit_block": target.get("current_commit_block"),
+                    "status": "SKIP",
+                    "reason": target.get("skip_reason"),
+                }
+            )
+            continue
         if not target:
             run_results.append(
                 {
@@ -934,6 +1020,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
         missing_blob_count = 0
         local_error_count = 0
         iou_fail_count = 0
+        output_drift_count = 0
         ok_count = 0
         network_blocked_count = 0
         broken_pipe_count = 0
@@ -993,7 +1080,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 )
                 details.append({"challenge_id": challenge_id, "ok": False, "reason": "missing_response_blob"})
                 continue
-            accepted += 1
             try:
                 if worker is not None:
                     local = worker.infer(payload_frames=payload_frames, challenge_id=challenge_id)
@@ -1091,22 +1177,64 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 threshold=settings.CHECKER_IOU_MATCH_THRESHOLD,
             )
             if not ok_iou:
+                is_soft_drift = _is_soft_output_drift(info, settings)
+                if is_soft_drift:
+                    output_drift_count += 1
+                    logger.info(
+                        "[compliance] soft output drift element=%s hotkey=%s challenge_id=%s drift_count=%d/%d mean_iou=%.4f matched_mean_iou=%.4f missing=%d extra=%d",
+                        element_id,
+                        hotkey,
+                        challenge_id,
+                        output_drift_count,
+                        int(settings.CHECKER_OUTPUT_DRIFT_MAX_PER_TARGET),
+                        float(info.get("mean_iou", 0.0)),
+                        float(info.get("matched_mean_iou", 0.0)),
+                        int(info.get("missing_boxes", 0)),
+                        int(info.get("extra_boxes", 0)),
+                    )
+                    if output_drift_count <= max(0, int(settings.CHECKER_OUTPUT_DRIFT_MAX_PER_TARGET)):
+                        details.append(
+                            {
+                                "challenge_id": challenge_id,
+                                "ok": False,
+                                "soft_output_drift": True,
+                                "latency_ms": local.latency_ms,
+                                "memory_mb_peak": getattr(local, "memory_mb_peak", None),
+                                "compare": info,
+                            }
+                        )
+                        continue
+                    info["soft_output_drift_exceeded"] = True
+
                 all_ok = False
                 iou_fail_count += 1
                 logger.warning(
-                    "[compliance] iou mismatch element=%s hotkey=%s challenge_id=%s mean_iou=%.4f threshold=%.4f",
+                    "[compliance] iou mismatch element=%s hotkey=%s challenge_id=%s mean_iou=%.4f threshold=%.4f soft_drift=%s drift_count=%d",
                     element_id,
                     hotkey,
                     challenge_id,
                     float(info.get("mean_iou", 0.0)),
                     float(info.get("threshold", settings.CHECKER_IOU_MATCH_THRESHOLD)),
+                    is_soft_drift,
+                    output_drift_count,
                 )
             else:
+                accepted += 1
                 ok_count += 1
+                details.append(
+                    {
+                        "challenge_id": challenge_id,
+                        "ok": True,
+                        "latency_ms": local.latency_ms,
+                        "memory_mb_peak": getattr(local, "memory_mb_peak", None),
+                        "compare": info,
+                    }
+                )
+                continue
             details.append(
                 {
                     "challenge_id": challenge_id,
-                    "ok": ok_iou,
+                    "ok": False,
                     "latency_ms": local.latency_ms,
                     "memory_mb_peak": getattr(local, "memory_mb_peak", None),
                     "compare": info,
@@ -1176,7 +1304,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
         }
         run_results.append(result_row)
         logger.info(
-            "[compliance] target done element=%s hotkey=%s status=%s sampled=%d ok=%d local_errors=%d missing_blob=%d iou_fail=%d network_blocked=%d worker_fatal=%d broken_pipe=%d p95=%.2fms",
+            "[compliance] target done element=%s hotkey=%s status=%s sampled=%d ok=%d local_errors=%d missing_blob=%d iou_fail=%d output_drift=%d network_blocked=%d worker_fatal=%d broken_pipe=%d p95=%.2fms",
             element_id,
             hotkey,
             status,
@@ -1185,6 +1313,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
             local_error_count,
             missing_blob_count,
             iou_fail_count,
+            output_drift_count,
             network_blocked_count,
             worker_fatal_count,
             broken_pipe_count,

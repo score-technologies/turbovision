@@ -545,8 +545,18 @@ async def weights_loop(
                                 snapshot_winner_hotkey = winner_meta.get("hotkey") if winner_meta else None
                                 snapshot_chute_id = winner_meta.get("chute_id") if winner_meta else None
                                 snapshot_slug = winner_meta.get("slug") if winner_meta else None
+                            snapshot_commit_block = None
+                            for row in [*top_3_official, *top_3_watchlist]:
+                                if row.get("hotkey") != snapshot_winner_hotkey:
+                                    continue
+                                try:
+                                    snapshot_commit_block = int(row["commit_block"])
+                                except Exception:
+                                    snapshot_commit_block = None
+                                break
                             winner_entry = {
                                 "winner_hotkey": snapshot_winner_hotkey,
+                                "winner_commit_block": snapshot_commit_block,
                                 "chute_id": snapshot_chute_id,
                                 "slug": snapshot_slug,
                                 "top_3_official": top_3_official,

@@ -184,6 +184,92 @@ def test_latency_state_tracks_streak_and_pass_clears(monkeypatch):
     assert key not in state
 
 
+def test_targets_from_winners_uses_entry_winner_commit_block_fallback():
+    targets = compliance_mod._targets_from_winners(
+        {
+            "winners": {
+                "E1": {
+                    "winner_hotkey": "hk1",
+                    "winner_commit_block": 321,
+                    "top_3_official": [{"hotkey": "hk1", "avg_score": 1.0}],
+                    "top_3_watchlist": [],
+                }
+            }
+        }
+    )
+
+    assert targets[0]["commit_block"] == 321
+
+
+def test_resolve_target_commit_skips_when_winner_commit_block_is_missing():
+    target = {"element_id": "E1", "hotkey": "hk1"}
+
+    resolved = asyncio.run(
+        compliance_mod._resolve_target_commit(
+            target,
+            commits_by_hotkey={
+                "hk1": [
+                    (
+                        200,
+                        '{"role":"miner","element_id":"E1","model":"repo/model","revision":"rev2"}',
+                    )
+                ]
+            },
+            hotkey_to_uid={"hk1": 1},
+        )
+    )
+
+    assert resolved["skip_reason"] == "winner_commit_block_missing"
+
+
+def test_resolve_target_commit_skips_when_current_commit_block_changed():
+    target = {"element_id": "E1", "hotkey": "hk1", "commit_block": 100}
+
+    resolved = asyncio.run(
+        compliance_mod._resolve_target_commit(
+            target,
+            commits_by_hotkey={
+                "hk1": [
+                    (
+                        200,
+                        '{"role":"miner","element_id":"E1","model":"repo/model","revision":"rev2"}',
+                    )
+                ]
+            },
+            hotkey_to_uid={"hk1": 1},
+        )
+    )
+
+    assert resolved["skip_reason"] == "new_commit_block"
+    assert resolved["commit_block"] == 100
+    assert resolved["current_commit_block"] == 200
+
+
+def test_resolve_target_commit_uses_chain_model_when_commit_block_matches():
+    target = {"element_id": "E1", "hotkey": "hk1", "commit_block": 200}
+
+    resolved = asyncio.run(
+        compliance_mod._resolve_target_commit(
+            target,
+            commits_by_hotkey={
+                "hk1": [
+                    (
+                        200,
+                        '{"role":"miner","element_id":"E1","model":"repo/model","revision":"rev2"}',
+                    )
+                ]
+            },
+            hotkey_to_uid={"hk1": 1},
+        )
+    )
+
+    assert resolved is not None
+    assert "skip_reason" not in resolved
+    assert resolved["commit_block"] == 200
+    assert resolved["model"] == "repo/model"
+    assert resolved["revision"] == "rev2"
+
+
 def test_compare_predictions_iou_success_when_boxes_match():
     expected = {
         "frames": [
@@ -213,6 +299,10 @@ def test_compare_predictions_iou_success_when_boxes_match():
     assert info["frames_compared"] == 1
     assert info["extra_boxes"] == 0
     assert info["missing_boxes"] == 0
+    assert info["expected_detections"] == 1
+    assert info["actual_detections"] == 1
+    assert info["matched_detections"] == 1
+    assert info["matched_mean_iou"] == 1.0
 
 
 def test_compare_predictions_iou_success_when_polygons_match():
@@ -280,6 +370,91 @@ def test_compare_predictions_iou_accepts_box_against_polygon():
 
     assert ok is True
     assert info["mean_iou"] == 1.0
+
+
+def test_compare_predictions_iou_reports_soft_drift_metrics_for_one_missing_box():
+    expected = {
+        "frames": [
+            {
+                "frame_id": 1,
+                "boxes": [
+                    {"cls_id": 0, "x1": 10, "y1": 10, "x2": 20, "y2": 20},
+                    {"cls_id": 0, "x1": 40, "y1": 40, "x2": 50, "y2": 50},
+                ],
+            }
+        ]
+    }
+    actual = {
+        "frames": [
+            {
+                "frame_id": 1,
+                "boxes": [
+                    {"cls_id": 0, "x1": 10, "y1": 10, "x2": 20, "y2": 20},
+                ],
+            }
+        ]
+    }
+
+    ok, info = compliance_mod._compare_predictions_iou(expected, actual, threshold=0.9)
+
+    assert ok is False
+    assert info["mean_iou"] == 0.5
+    assert info["matched_mean_iou"] == 1.0
+    assert info["expected_detections"] == 2
+    assert info["actual_detections"] == 1
+    assert info["matched_detections"] == 1
+    assert info["missing_boxes"] == 1
+    assert info["extra_boxes"] == 0
+    assert info["missing_ratio"] == 0.5
+
+
+def test_is_soft_output_drift_accepts_small_count_delta_with_strong_matches():
+    settings = SimpleNamespace(
+        CHECKER_OUTPUT_DRIFT_MAX_MISSING=1,
+        CHECKER_OUTPUT_DRIFT_MAX_EXTRA=1,
+        CHECKER_OUTPUT_DRIFT_MIN_MATCHED_IOU=0.95,
+    )
+    info = {
+        "missing_boxes": 1,
+        "extra_boxes": 0,
+        "matched_detections": 3,
+        "matched_mean_iou": 0.98,
+    }
+
+    assert compliance_mod._is_soft_output_drift(info, settings) is True
+
+
+def test_is_soft_output_drift_rejects_weak_matches_or_no_matches():
+    settings = SimpleNamespace(
+        CHECKER_OUTPUT_DRIFT_MAX_MISSING=1,
+        CHECKER_OUTPUT_DRIFT_MAX_EXTRA=1,
+        CHECKER_OUTPUT_DRIFT_MIN_MATCHED_IOU=0.95,
+    )
+
+    assert (
+        compliance_mod._is_soft_output_drift(
+            {
+                "missing_boxes": 1,
+                "extra_boxes": 0,
+                "matched_detections": 3,
+                "matched_mean_iou": 0.80,
+            },
+            settings,
+        )
+        is False
+    )
+    assert (
+        compliance_mod._is_soft_output_drift(
+            {
+                "missing_boxes": 1,
+                "extra_boxes": 0,
+                "matched_detections": 0,
+                "matched_mean_iou": 1.0,
+            },
+            settings,
+        )
+        is False
+    )
 
 
 def test_security_output_validation_accepts_polygon_only_frames():
