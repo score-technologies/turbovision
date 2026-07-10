@@ -180,6 +180,13 @@ def _checker_fails_key() -> str:
     return f"{_checker_prefix()}failing_tuples.json"
 
 
+def _checker_latency_state_key() -> str:
+    custom = (get_settings().CHECKER_R2_LATENCY_STATE_KEY or "").strip()
+    if custom:
+        return custom
+    return f"{_checker_prefix()}latency_state.json"
+
+
 def _checker_public_url_for_key(key: str) -> str | None:
     base = (get_settings().CHECKER_R2_BUCKET_PUBLIC_URL or "").strip().rstrip("/")
     if not base:
@@ -193,12 +200,16 @@ def _merge_failed_tuples(
     *,
     run_key: str,
     now: float,
+    clear_latency_tuples: set[tuple[str, str, int]] | None = None,
 ) -> dict[tuple[str, str, int], dict[str, Any]]:
     merged: dict[tuple[str, str, int], dict[str, Any]] = {}
+    clear_latency_tuples = clear_latency_tuples or set()
     if isinstance(existing, list):
         for row in existing:
             try:
                 key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
+                if key in clear_latency_tuples and row.get("latest_status") == "FAIL_LATENCY":
+                    continue
                 merged[key] = row
             except Exception:
                 continue
@@ -225,6 +236,78 @@ def _merge_failed_tuples(
         if run_url is not None:
             prev["latest_run_url"] = run_url
     return merged
+
+
+def _normalize_latency_state(existing: Any) -> dict[tuple[str, str, int], dict[str, Any]]:
+    rows: list[Any]
+    if isinstance(existing, list):
+        rows = existing
+    elif isinstance(existing, dict):
+        raw_rows = existing.get("entries") or existing.get("tuples") or existing.get("state") or []
+        rows = raw_rows if isinstance(raw_rows, list) else []
+    else:
+        rows = []
+
+    state: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
+        except Exception:
+            continue
+        if not key[0] or not key[1] or key[2] < 0:
+            continue
+        normalized = dict(row)
+        normalized["hotkey"] = key[0]
+        normalized["element_id"] = key[1]
+        normalized["commit_block"] = key[2]
+        try:
+            streak = int(normalized.get("consecutive_latency_failures", 0))
+        except Exception:
+            streak = 0
+        normalized["consecutive_latency_failures"] = max(0, streak)
+        state[key] = normalized
+    return state
+
+
+def _record_latency_pass(
+    state: dict[tuple[str, str, int], dict[str, Any]],
+    key: tuple[str, str, int],
+) -> bool:
+    return state.pop(key, None) is not None
+
+
+def _record_latency_failure(
+    state: dict[tuple[str, str, int], dict[str, Any]],
+    key: tuple[str, str, int],
+    *,
+    run_key: str,
+    now: float,
+    p95_ms: float,
+    latency_threshold_ms: float,
+    effective_latency_threshold_ms: float,
+) -> int:
+    run_url = _checker_public_url_for_key(run_key)
+    row = state.get(key)
+    if row is None:
+        row = {
+            "hotkey": key[0],
+            "element_id": key[1],
+            "commit_block": key[2],
+            "first_seen": now,
+            "consecutive_latency_failures": 0,
+        }
+        state[key] = row
+    row["consecutive_latency_failures"] = int(row.get("consecutive_latency_failures", 0)) + 1
+    row["last_seen"] = now
+    row["latest_p95_latency_ms"] = float(p95_ms)
+    row["latency_threshold_ms"] = float(latency_threshold_ms)
+    row["effective_latency_threshold_ms"] = float(effective_latency_threshold_ms)
+    row["latest_run_key"] = run_key
+    if run_url is not None:
+        row["latest_run_url"] = run_url
+    return int(row["consecutive_latency_failures"])
 
 
 def _get_checker_client():
@@ -781,6 +864,13 @@ async def run_public_compliance_once() -> dict[str, Any]:
     index_keys = await fetch_index_keys(settings.SCOREVISION_PUBLIC_RESULTS_URL)
     logger.info("[compliance] loaded public index keys=%d", len(index_keys))
 
+    run_key = _checker_runs_key(winners_block)
+    latency_state_key = _checker_latency_state_key()
+    latency_state = _normalize_latency_state(await _get_json(latency_state_key))
+    latency_fail_streak_threshold = max(1, int(settings.CHECKER_LATENCY_FAIL_STREAK_THRESHOLD))
+    latency_tolerance_ms = max(0.0, float(settings.CHECKER_LATENCY_TOLERANCE_MS))
+    latency_state_changed = False
+    clear_latency_tuples: set[tuple[str, str, int]] = set()
     run_results: list[dict[str, Any]] = []
     failed_tuples: list[dict[str, Any]] = []
 
@@ -1041,8 +1131,33 @@ async def run_public_compliance_once() -> dict[str, Any]:
             )
 
         p95_ms = _p95(latencies)
-        latency_ok = p95_ms <= latency_threshold_ms
-        status = "PASS" if all_ok and latency_ok else ("FAIL_OUTPUT" if not all_ok else "FAIL_LATENCY")
+        effective_latency_threshold_ms = latency_threshold_ms + latency_tolerance_ms
+        latency_ok = p95_ms <= effective_latency_threshold_ms
+        latency_failure_streak = 0
+        latency_promoted = False
+        tuple_key = (hotkey, element_id, int(target["commit_block"]))
+        if all_ok and latency_ok:
+            clear_latency_tuples.add(tuple_key)
+            if _record_latency_pass(latency_state, tuple_key):
+                latency_state_changed = True
+            status = "PASS"
+        elif all_ok:
+            latency_failure_streak = _record_latency_failure(
+                latency_state,
+                tuple_key,
+                run_key=run_key,
+                now=time(),
+                p95_ms=p95_ms,
+                latency_threshold_ms=latency_threshold_ms,
+                effective_latency_threshold_ms=effective_latency_threshold_ms,
+            )
+            latency_state_changed = True
+            latency_promoted = latency_failure_streak >= latency_fail_streak_threshold
+            status = "FAIL_LATENCY" if latency_promoted else "PENDING_LATENCY"
+            if not latency_promoted:
+                clear_latency_tuples.add(tuple_key)
+        else:
+            status = "FAIL_OUTPUT"
         result_row = {
             "element_id": element_id,
             "hotkey": hotkey,
@@ -1052,6 +1167,11 @@ async def run_public_compliance_once() -> dict[str, Any]:
             "status": status,
             "p95_latency_ms": p95_ms,
             "latency_threshold_ms": latency_threshold_ms,
+            "effective_latency_threshold_ms": effective_latency_threshold_ms,
+            "latency_tolerance_ms": latency_tolerance_ms,
+            "latency_failure_streak": latency_failure_streak,
+            "latency_fail_streak_threshold": latency_fail_streak_threshold,
+            "latency_promoted": latency_promoted,
             "details": details,
         }
         run_results.append(result_row)
@@ -1076,7 +1196,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 element_id,
                 hotkey,
             )
-        if status != "PASS":
+        if status not in ("PASS", "PENDING_LATENCY"):
             failed_tuples.append(
                 {
                     "element_id": element_id,
@@ -1094,7 +1214,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
         "results": run_results,
     }
 
-    run_key = _checker_runs_key(winners_block)
     logger.info(
         "[compliance:r2] begin write bucket=%s runs_index=%s run_key=%s",
         cfg.bucket,
@@ -1130,6 +1249,27 @@ async def run_public_compliance_once() -> dict[str, Any]:
         )
         raise
 
+    if latency_state_changed:
+        logger.info(
+            "[compliance:r2] write latency state start key=%s rows=%d",
+            latency_state_key,
+            len(latency_state),
+        )
+        try:
+            await _put_json(latency_state_key, list(latency_state.values()))
+            logger.info(
+                "[compliance:r2] write latency state done key=%s rows=%d",
+                latency_state_key,
+                len(latency_state),
+            )
+        except Exception:
+            logger.exception(
+                "[compliance:r2] failed while writing latency state key=%s rows=%d",
+                latency_state_key,
+                len(latency_state),
+            )
+            raise
+
     fails_key = _checker_fails_key()
     logger.info("[compliance:r2] load fails list start key=%s", fails_key)
     existing = await _get_json(fails_key)
@@ -1140,7 +1280,13 @@ async def run_public_compliance_once() -> dict[str, Any]:
         type(existing).__name__ if existing is not None else "None",
     )
     now = time()
-    merged = _merge_failed_tuples(existing, failed_tuples, run_key=run_key, now=now)
+    merged = _merge_failed_tuples(
+        existing,
+        failed_tuples,
+        run_key=run_key,
+        now=now,
+        clear_latency_tuples=clear_latency_tuples,
+    )
 
     try:
         logger.info(

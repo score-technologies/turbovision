@@ -114,6 +114,76 @@ def test_merge_failed_tuples_defaults_status_and_links_run(monkeypatch):
     assert merged[("hk-old", "E-old", 99)]["latest_status"] is None
 
 
+def test_merge_failed_tuples_clears_only_latency_failures(monkeypatch):
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(CHECKER_R2_BUCKET_PUBLIC_URL="https://checker.example"),
+    )
+
+    merged = compliance_mod._merge_failed_tuples(
+        [
+            {
+                "hotkey": "hk1",
+                "element_id": "E1",
+                "commit_block": 123,
+                "latest_status": "FAIL_LATENCY",
+            },
+            {
+                "hotkey": "hk2",
+                "element_id": "E2",
+                "commit_block": 124,
+                "latest_status": "FAIL_OUTPUT",
+            },
+        ],
+        [],
+        run_key="manako/compliances/runs/000000555.json",
+        now=10.0,
+        clear_latency_tuples={("hk1", "E1", 123), ("hk2", "E2", 124)},
+    )
+
+    assert ("hk1", "E1", 123) not in merged
+    assert merged[("hk2", "E2", 124)]["latest_status"] == "FAIL_OUTPUT"
+
+
+def test_latency_state_tracks_streak_and_pass_clears(monkeypatch):
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(CHECKER_R2_BUCKET_PUBLIC_URL="https://checker.example"),
+    )
+
+    state = compliance_mod._normalize_latency_state(
+        [
+            {
+                "hotkey": "hk1",
+                "element_id": "E1",
+                "commit_block": "123",
+                "consecutive_latency_failures": "1",
+            }
+        ]
+    )
+    key = ("hk1", "E1", 123)
+
+    streak = compliance_mod._record_latency_failure(
+        state,
+        key,
+        run_key="manako/compliances/runs/000000555.json",
+        now=10.0,
+        p95_ms=112.0,
+        latency_threshold_ms=100.0,
+        effective_latency_threshold_ms=110.0,
+    )
+
+    assert streak == 2
+    assert state[key]["latest_p95_latency_ms"] == 112.0
+    assert state[key]["latest_run_url"] == (
+        "https://checker.example/manako/compliances/runs/000000555.json"
+    )
+    assert compliance_mod._record_latency_pass(state, key) is True
+    assert key not in state
+
+
 def test_compare_predictions_iou_success_when_boxes_match():
     expected = {
         "frames": [
