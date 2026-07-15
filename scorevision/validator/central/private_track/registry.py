@@ -2,6 +2,11 @@ import json
 import logging
 from dataclasses import dataclass
 import bittensor as bt
+from scorevision.utils.inactive_miners import (
+    InactiveMinerTuple,
+    fetch_inactive_miner_tuples,
+    is_inactive_miner_tuple,
+)
 from scorevision.utils.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -62,9 +67,13 @@ async def get_registered_miners(
     metagraph,
     blacklist: set[str],
     element_id: str | None = None,
+    inactive_miner_tuples: set[InactiveMinerTuple] | None = None,
 ) -> list[RegisteredMiner]:
     settings = get_settings()
     netuid = settings.SCOREVISION_NETUID
+
+    if inactive_miner_tuples is None and element_id is not None:
+        inactive_miner_tuples = await fetch_inactive_miner_tuples()
 
     miners = []
 
@@ -88,6 +97,19 @@ async def get_registered_miners(
 
         block, obj = _pick_latest_private_commit_for_element(commitment, element_id)
         if obj is None or block is None:
+            continue
+        if is_inactive_miner_tuple(
+            inactive_miner_tuples,
+            hotkey=hotkey,
+            element_id=element_id,
+            commit_block=block,
+        ):
+            logger.info(
+                "Private registry ignored hotkey=%s element_id=%s commit_block=%s: inactive miner tuple",
+                hotkey,
+                element_id,
+                block,
+            )
             continue
 
         image_repo = obj.get("image_repo")

@@ -20,6 +20,11 @@ from scorevision.utils.compliance_failures import (
     fetch_compliance_failure_tuples,
     is_compliance_tuple_failed,
 )
+from scorevision.utils.inactive_miners import (
+    InactiveMinerTuple,
+    fetch_inactive_miner_tuples,
+    is_inactive_miner_tuple,
+)
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -540,6 +545,7 @@ async def get_miners_from_registry(
     onnx_only: bool | None = None,
     blacklisted_hotkeys: set[str] | None = None,
     compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
+    inactive_miner_tuples: set[InactiveMinerTuple] | None = None,
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision, optional HF repo size
@@ -560,6 +566,10 @@ async def get_miners_from_registry(
             "[Registry] loaded %d compliance failing tuple(s)",
             len(compliance_failure_tuples),
         )
+    if inactive_miner_tuples is None and element_id is not None:
+        inactive_miner_tuples = await fetch_inactive_miner_tuples()
+    if inactive_miner_tuples:
+        logger.info("[Registry] loaded %d inactive miner tuple(s)", len(inactive_miner_tuples))
 
     try:
         st = await get_subtensor()
@@ -617,6 +627,21 @@ async def get_miners_from_registry(
 
         cand = _build_miner_candidate(uid, hk, obj, int(best_blk or 0))
         if cand is not None:
+            if is_inactive_miner_tuple(
+                inactive_miner_tuples,
+                hotkey=cand.hotkey,
+                element_id=cand.element_id,
+                commit_block=cand.block,
+            ):
+                logger.info(
+                    "[Registry] uid=%s hotkey=%s element_id=%s "
+                    "commit_block=%s ignored: inactive miner tuple",
+                    uid,
+                    cand.hotkey,
+                    cand.element_id,
+                    cand.block,
+                )
+                continue
             if is_compliance_tuple_failed(
                 compliance_failure_tuples,
                 hotkey=cand.hotkey,
@@ -703,6 +728,21 @@ async def get_miners_from_registry(
 
                     cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
                     if cand is not None:
+                        if is_inactive_miner_tuple(
+                            inactive_miner_tuples,
+                            hotkey=cand.hotkey,
+                            element_id=cand.element_id,
+                            commit_block=cand.block,
+                        ):
+                            logger.info(
+                                "[Registry] uid=%s hotkey=%s element_id=%s "
+                                "commit_block=%s ignored: inactive miner tuple",
+                                uid_i,
+                                cand.hotkey,
+                                cand.element_id,
+                                cand.block,
+                            )
+                            continue
                         if is_compliance_tuple_failed(
                             compliance_failure_tuples,
                             hotkey=cand.hotkey,

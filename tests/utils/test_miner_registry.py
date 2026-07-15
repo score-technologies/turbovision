@@ -5,6 +5,7 @@ import pytest
 
 from scorevision.utils import miner_registry as registry
 from scorevision.utils.compliance_failures import ComplianceFailureTuple
+from scorevision.utils.inactive_miners import InactiveMinerTuple
 
 
 class _FakeHfApi:
@@ -212,4 +213,54 @@ async def test_get_miners_from_registry_keeps_new_commit_after_failed_tuple(monk
 
     assert 0 in kept
     assert kept[0].block == 11
+    assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_completely_ignores_exact_inactive_tuple(monkeypatch):
+    async def fake_get_subtensor():
+        return _FakeSubtensor()
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="PlayerDetect_v1@1.0",
+        compliance_failure_tuples=set(),
+        inactive_miner_tuples={
+            InactiveMinerTuple("hk1", "PlayerDetect_v1@1.0", 10),
+        },
+    )
+
+    assert kept == {}
+    assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_keeps_different_inactive_commit(monkeypatch):
+    async def fake_get_subtensor():
+        return _FakeSubtensor()
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev1"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="PlayerDetect_v1@1.0",
+        compliance_failure_tuples=set(),
+        inactive_miner_tuples={
+            InactiveMinerTuple("hk1", "PlayerDetect_v1@1.0", 9),
+        },
+    )
+
+    assert kept[0].block == 10
     assert skipped == {}

@@ -14,6 +14,7 @@ from scorevision.validator.scoring import (
     are_similar_by_challenges,
 )
 from scorevision.validator.core.weights import (
+    _inactive_miners_for_element,
     _private_ranked_weight_allocations,
     _ranked_private_rows,
     _top_rows,
@@ -108,6 +109,37 @@ def test_top_rows_excludes_zero_average_scores():
     selected = _top_rows(rows, min_samples=10, top_k=3)
 
     assert [row["hotkey"] for row in selected] == ["positive-high", "positive-low"]
+
+
+def test_inactive_miners_requires_strictly_more_than_lane_threshold():
+    rows = [
+        {"hotkey": "at-threshold", "avg_score": 0.0, "n_challenges": 30, "commit_block": 100},
+        {"hotkey": "inactive", "avg_score": 0.0, "n_challenges": 31, "commit_block": 101},
+        {"hotkey": "active", "avg_score": 0.1, "n_challenges": 50, "commit_block": 102},
+    ]
+
+    result = _inactive_miners_for_element(rows, element_id="element-a", min_shards=30)
+
+    assert result == [
+        {"hotkey": "inactive", "element_id": "element-a", "commit_block": 101}
+    ]
+
+
+def test_inactive_miners_uses_private_threshold_and_requires_commit_block():
+    rows = [
+        {"hotkey": "private-inactive", "avg_score": 0.0, "n_challenges": 21, "commit_block": 200},
+        {"hotkey": "missing-commit", "avg_score": 0.0, "n_challenges": 21},
+    ]
+
+    result = _inactive_miners_for_element(rows, element_id="element-private", min_shards=20)
+
+    assert result == [
+        {
+            "hotkey": "private-inactive",
+            "element_id": "element-private",
+            "commit_block": 200,
+        }
+    ]
 
 
 def test_extract_challenge_id_from_payload_task_id():

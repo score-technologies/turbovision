@@ -25,6 +25,7 @@ from scorevision.utils.r2 import (
     is_configured,
     is_not_found_error,
 )
+from scorevision.utils.inactive_miners import parse_inactive_miner_tuples
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
 
@@ -114,6 +115,10 @@ def _winners_index_key(ns: str | None = None) -> str:
 
 def _lane_index_key(lane: str = "public") -> str:
     return "manako/indexprivate.json" if str(lane or "public").strip() == "private" else "manako/index.json"
+
+
+def _inactive_miners_key() -> str:
+    return "manako/inactive_miners.json"
 
 
 async def _index_list(*, index_key: str | None = None) -> list[str]:
@@ -1056,4 +1061,38 @@ async def put_winners_snapshot(
             ContentType="application/json",
         )
     await _winners_index_add_if_new(index_key, key)
+    return key
+
+
+async def put_inactive_miners(inactive_miners: list[dict[str, str | int]]) -> str:
+    s = get_settings()
+    key = _inactive_miners_key()
+    async with get_s3_client() as c:
+        try:
+            response = await c.get_object(Bucket=s.SCOREVISION_BUCKET, Key=key)
+            existing = loads(await response["Body"].read())
+        except Exception as e:
+            if not is_not_found_error(e):
+                raise
+            existing = []
+
+        merged = parse_inactive_miner_tuples(existing)
+        merged.update(parse_inactive_miner_tuples(inactive_miners))
+        payload = [
+            {
+                "hotkey": item.hotkey,
+                "element_id": item.element_id,
+                "commit_block": item.commit_block,
+            }
+            for item in sorted(
+                merged,
+                key=lambda item: (item.hotkey, item.element_id, item.commit_block),
+            )
+        ]
+        await c.put_object(
+            Bucket=s.SCOREVISION_BUCKET,
+            Key=key,
+            Body=dumps(payload, separators=(",", ":")),
+            ContentType="application/json",
+        )
     return key

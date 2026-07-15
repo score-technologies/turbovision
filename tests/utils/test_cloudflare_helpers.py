@@ -3,9 +3,11 @@ from scorevision.utils.cloudflare_helpers import (
     _cache_remote_json_array,
     _extract_element_miner_commit_tuple_from_key_or_url,
     _exception_summary,
+    _inactive_miners_key,
     _lane_index_key,
     _select_lane_specific_index_url,
     emit_shard,
+    put_inactive_miners,
 )
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -66,6 +68,54 @@ def test_lane_index_key_public():
 
 def test_lane_index_key_private():
     assert _lane_index_key("private") == "manako/indexprivate.json"
+
+
+def test_inactive_miners_key_is_next_to_public_index():
+    assert _inactive_miners_key() == "manako/inactive_miners.json"
+
+
+@pytest.mark.asyncio
+async def test_put_inactive_miners_merges_with_existing_list(monkeypatch):
+    put_object = AsyncMock()
+    existing_body = AsyncMock()
+    existing_body.read.return_value = (
+        b'[{"hotkey":"hk-old","element_id":"element-old","commit_block":100}]'
+    )
+    get_object = AsyncMock(return_value={"Body": existing_body})
+
+    class FakeClientContext:
+        async def __aenter__(self):
+            return SimpleNamespace(get_object=get_object, put_object=put_object)
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(
+        cloudflare_helpers,
+        "get_settings",
+        lambda: SimpleNamespace(SCOREVISION_BUCKET="central-bucket"),
+    )
+    monkeypatch.setattr(
+        cloudflare_helpers,
+        "get_s3_client",
+        lambda: FakeClientContext(),
+    )
+    inactive_miners = [
+        {"hotkey": "hk1", "element_id": "element-a", "commit_block": 123}
+    ]
+
+    key = await put_inactive_miners(inactive_miners)
+
+    assert key == "manako/inactive_miners.json"
+    put_object.assert_awaited_once_with(
+        Bucket="central-bucket",
+        Key="manako/inactive_miners.json",
+        Body=(
+            '[{"hotkey":"hk-old","element_id":"element-old","commit_block":100},'
+            '{"hotkey":"hk1","element_id":"element-a","commit_block":123}]'
+        ),
+        ContentType="application/json",
+    )
 
 
 def test_exception_summary_includes_type_for_empty_message():

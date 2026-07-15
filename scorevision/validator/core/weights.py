@@ -39,6 +39,7 @@ from scorevision.utils.cloudflare_helpers import (
     ensure_index_exists,
     build_public_index_url_from_public_base,
     prune_sv,
+    put_inactive_miners,
     put_winners_snapshot,
 )
 from scorevision.utils.manifest import (
@@ -54,6 +55,8 @@ logger = getLogger(__name__)
 shutdown_event = asyncio.Event()
 
 PRIVATE_TRACK_RANKED_WEIGHT_SHARES = (0.80, 0.15, 0.05)
+PUBLIC_INACTIVE_MIN_SHARDS = 30
+PRIVATE_INACTIVE_MIN_SHARDS = 20
 
 HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5DvY7cxtAvUeA2Goq26LNyzqSfPyjfY9SUsD4bgJa5PMnVNa",
@@ -73,6 +76,35 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5GNvBDx7qBcUUM3EwLTD2a5qVyFcjKs7Nf2zk2qxL1xPsXCw",
     "5DvuNyrQQuDmzBMUDVNsRJSXBMxuBKAuKiJQUiTMAgTJoDoF",
 }
+
+
+def _inactive_miners_for_element(
+    rows: list[dict[str, float | int | str]],
+    *,
+    element_id: str,
+    min_shards: int,
+) -> list[dict[str, str | int]]:
+    inactive_miners: list[dict[str, str | int]] = []
+    for row in rows:
+        try:
+            if int(row.get("n_challenges", 0)) <= int(min_shards):
+                continue
+            if float(row.get("avg_score", 0.0) or 0.0) != 0.0:
+                continue
+            hotkey = str(row["hotkey"]).strip()
+            commit_block = int(row["commit_block"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not hotkey:
+            continue
+        inactive_miners.append(
+            {
+                "hotkey": hotkey,
+                "element_id": element_id,
+                "commit_block": commit_block,
+            }
+        )
+    return inactive_miners
 
 
 def _top_rows(
@@ -421,6 +453,9 @@ async def weights_loop(
 
                 weights_by_uid: dict[int, float] = {}
                 winners_by_element: dict[str, dict[str, str | None]] = {}
+                inactive_miners_by_tuple: dict[
+                    tuple[str, str, int], dict[str, str | int]
+                ] = {}
                 max_tail_used = effective_tail
 
                 total_elem_weight = sum(max(0.0, w) for _eid, w, _ew, _t in elements)
@@ -478,6 +513,22 @@ async def weights_loop(
                             validator_hotkey_ss58=validator_hotkey_ss58,
                             lane=lane,
                         )
+
+                        for inactive_miner in _inactive_miners_for_element(
+                            sample_rows_all,
+                            element_id=element_id,
+                            min_shards=(
+                                PRIVATE_INACTIVE_MIN_SHARDS
+                                if is_private
+                                else PUBLIC_INACTIVE_MIN_SHARDS
+                            ),
+                        ):
+                            inactive_key = (
+                                str(inactive_miner["hotkey"]),
+                                str(inactive_miner["element_id"]),
+                                int(inactive_miner["commit_block"]),
+                            )
+                            inactive_miners_by_tuple[inactive_key] = inactive_miner
 
                         if winner_uid is None:
                             logger.warning("[weights] No winner for element_id=%s", element_id)
@@ -616,22 +667,42 @@ async def weights_loop(
                     VALIDATOR_LOOP_TOTAL.labels(outcome="success").inc()
                     VALIDATOR_LAST_BLOCK_SUCCESS.set(block)
                     logger.info("set_weights OK at block %d", block)
-                    if is_central_validator and winners_by_element:
-                        payload = {
-                            "block": block,
-                            "window_id": current_window_id,
-                            "netuid": settings.SCOREVISION_NETUID,
-                            "mechid": settings.SCOREVISION_MECHID,
-                            "winners": winners_by_element,
-                        }
-                        timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+                    timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+                    if is_central_validator:
+                        if winners_by_element:
+                            payload = {
+                                "block": block,
+                                "window_id": current_window_id,
+                                "netuid": settings.SCOREVISION_NETUID,
+                                "mechid": settings.SCOREVISION_MECHID,
+                                "winners": winners_by_element,
+                            }
+                            try:
+                                key = await asyncio.wait_for(put_winners_snapshot(block, payload), timeout=timeout_s)
+                                logger.info("[weights] winners snapshot stored: %s", key)
+                            except asyncio.TimeoutError:
+                                logger.warning("[weights] winners snapshot timed out")
+                            except Exception as e:
+                                logger.warning("[weights] winners snapshot failed: %s", e)
+
+                        inactive_miners = [
+                            inactive_miners_by_tuple[key]
+                            for key in sorted(inactive_miners_by_tuple)
+                        ]
                         try:
-                            key = await asyncio.wait_for(put_winners_snapshot(block, payload), timeout=timeout_s)
-                            logger.info("[weights] winners snapshot stored: %s", key)
+                            key = await asyncio.wait_for(
+                                put_inactive_miners(inactive_miners),
+                                timeout=timeout_s,
+                            )
+                            logger.info(
+                                "[weights] inactive miners stored: %s (count=%d)",
+                                key,
+                                len(inactive_miners),
+                            )
                         except asyncio.TimeoutError:
-                            logger.warning("[weights] winners snapshot timed out")
+                            logger.warning("[weights] inactive miners upload timed out")
                         except Exception as e:
-                            logger.warning("[weights] winners snapshot failed: %s", e)
+                            logger.warning("[weights] inactive miners upload failed: %s", e)
                 else:
                     logger.warning("set_weights failed at block %d", block)
                     VALIDATOR_LOOP_TOTAL.labels(outcome="set_weights_failed").inc()
