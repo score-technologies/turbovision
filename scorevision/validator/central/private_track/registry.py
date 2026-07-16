@@ -8,6 +8,7 @@ from scorevision.utils.inactive_miners import (
     is_inactive_miner_tuple,
 )
 from scorevision.utils.settings import get_settings
+from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ async def get_registered_miners(
     miners = []
 
     try:
-        commits = await subtensor.get_all_revealed_commitments(netuid)
+        commits = await get_all_revealed_commitments(subtensor, netuid)
     except Exception as e:
         logger.error("Failed to fetch commitments: %s", e)
         return []

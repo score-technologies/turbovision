@@ -7,11 +7,12 @@ from logging import getLogger
 from traceback import print_exc
 from typing import Optional
 
-from substrateinterface import Keypair
-from bittensor import wallet, async_subtensor
+from bittensor_wallet import Keypair
+from bittensor import AsyncSubtensor, Wallet
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
+from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 
 logger = getLogger(__name__)
 
@@ -149,7 +150,7 @@ async def get_subtensor():
     init_timeout = float(os.getenv("SUBTENSOR_INIT_TIMEOUT_S", "15.0"))
 
     async def _init(ep: str):
-        st = async_subtensor(ep)
+        st = AsyncSubtensor(network=ep)
         await asyncio.wait_for(st.initialize(), timeout=init_timeout)
         return st
 
@@ -182,7 +183,7 @@ async def on_chain_commit(
 ) -> None:
     settings = get_settings()
     repo_name = get_huggingface_repo_name()
-    w = wallet(
+    w = Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
@@ -238,8 +239,8 @@ async def _set_weights_with_confirmation(
             st = await get_subtensor()
             ref = await st.get_current_block()
             # soumission (sync) via client non-async
-            success, message = bt.subtensor(
-                os.getenv("BITTENSOR_SUBTENSOR_ENDPOINT", "finney")
+            success, message = bt.Subtensor(
+                network=os.getenv("BITTENSOR_SUBTENSOR_ENDPOINT", "finney")
             ).set_weights(
                 wallet=wallet,
                 netuid=netuid,
@@ -320,7 +321,7 @@ async def _set_weights_with_confirmation(
 async def on_chain_commit_validator(index_url: str) -> None:
     """ """
     settings = get_settings()
-    w = wallet(
+    w = Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
@@ -351,7 +352,7 @@ async def get_validator_indexes_from_chain(netuid: int | None = None) -> dict[st
     netuid = netuid if netuid is not None else settings.SCOREVISION_NETUID
     st = await get_subtensor()
     meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
-    commits = await st.get_all_revealed_commitments(netuid)
+    commits = await get_all_revealed_commitments(st, netuid)
 
     target_hotkey = (settings.SCOREVISION_CENTRAL_VALIDATOR_HOTKEY or "").strip()
     if not target_hotkey:
@@ -391,9 +392,9 @@ async def _already_committed_same_index(netuid: int, index_url: str) -> bool:
     settings = get_settings()
     st = await get_subtensor()
     meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
-    commits = await st.get_all_revealed_commitments(netuid)
+    commits = await get_all_revealed_commitments(st, netuid)
 
-    w = wallet(
+    w = Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
@@ -430,7 +431,7 @@ async def _first_commit_block_by_miner(
             settings = get_settings()
 
             meta = await st.metagraph(netuid, mechid=settings.SCOREVISION_MECHID)
-            commits = await st.get_all_revealed_commitments(netuid)
+            commits = await get_all_revealed_commitments(st, netuid)
 
             wanted_element_id = str(element_id).strip() if element_id is not None else None
             wanted_hotkeys = set(candidate_hotkeys or [])
@@ -491,7 +492,9 @@ async def _first_commit_block_by_miner(
             ):
                 st_archive = None
                 try:
-                    st_archive = async_subtensor(_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
+                    st_archive = AsyncSubtensor(
+                        network=_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
+                    )
                     await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
                     sem = asyncio.Semaphore(_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY)
 
@@ -637,7 +640,7 @@ async def on_chain_commit_validator_retry(
 ) -> bool:
     """ """
     settings = get_settings()
-    w = wallet(
+    w = Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )

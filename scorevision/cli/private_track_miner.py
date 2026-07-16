@@ -119,11 +119,11 @@ async def _resolve_private_element_id_from_manifest(
 
 
 async def commit_on_chain(image: DockerImage, element_id: str, image_digest: str = "") -> None:
-    from bittensor import wallet, async_subtensor
+    from bittensor import AsyncSubtensor, Wallet
 
     console.info("Committing on-chain")
     settings = get_settings()
-    w = wallet(
+    w = Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
@@ -138,7 +138,7 @@ async def commit_on_chain(image: DockerImage, element_id: str, image_digest: str
     }
     logger.info("Commit payload: %s", payload)
     try:
-        sub = async_subtensor(settings.BITTENSOR_SUBTENSOR_ENDPOINT)
+        sub = AsyncSubtensor(network=settings.BITTENSOR_SUBTENSOR_ENDPOINT)
         await sub.initialize()
         await sub.set_reveal_commitment(
             wallet=w,

@@ -33,7 +33,7 @@ async def _get_async_subtensor():
         fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
         for endpoint in (ep, fb):
             try:
-                st = bt.async_subtensor(endpoint)
+                st = bt.AsyncSubtensor(network=endpoint)
                 await st.initialize()
                 _ASYNC_SUBTENSOR = st
                 if endpoint != ep:
@@ -57,7 +57,7 @@ def _get_sync_subtensor() -> bt.Subtensor:
         fb = settings.BITTENSOR_SUBTENSOR_FALLBACK
         for endpoint in (ep, fb):
             try:
-                st = bt.subtensor(endpoint)
+                st = bt.Subtensor(network=endpoint)
                 _SYNC_SUBTENSOR = st
                 if endpoint != ep:
                     logger.warning("Sync subtensor init fell back to %s", endpoint)
@@ -94,7 +94,7 @@ def _reset_sync_subtensor():
 
 def _set_weights(
     *,
-    wallet: "bt.wallet",
+    wallet: "bt.Wallet",
     netuid: int,
     mechid: int,
     uids: list[int],
@@ -145,6 +145,11 @@ def _set_weights_serialized(**kwargs) -> bool:
         return _set_weights(**kwargs)
 
 
+def _sign_payloads(wallet: "bt.Wallet", payloads: list[str]) -> list[str]:
+    """Sign UTF-8 payloads with the Bittensor v10 wallet hotkey."""
+    return [wallet.hotkey.sign(data=item.encode("utf-8")).hex() for item in payloads]
+
+
 async def run_signer() -> None:
     settings = get_settings()
     host = settings.SIGNER_HOST
@@ -159,7 +164,7 @@ async def run_signer() -> None:
 
     cold = settings.BITTENSOR_WALLET_COLD
     hot = settings.BITTENSOR_WALLET_HOT
-    wallet = bt.wallet(name=cold, hotkey=hot)
+    wallet = bt.Wallet(name=cold, hotkey=hot)
 
     @web.middleware
     async def access_log(request: web.Request, handler):
@@ -186,7 +191,7 @@ async def run_signer() -> None:
             data = payload.get("payloads") or payload.get("data") or []
             if isinstance(data, str):
                 data = [data]
-            sigs = [(wallet.hotkey.sign(data=d.encode("utf-8"))).hex() for d in data]
+            sigs = _sign_payloads(wallet, data)
             return web.json_response(
                 {
                     "success": True,

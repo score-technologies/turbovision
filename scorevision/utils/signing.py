@@ -3,7 +3,7 @@ from json import loads
 from time import time_ns
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
-from substrateinterface import Keypair
+from bittensor_wallet import Keypair
 
 from scorevision.utils.settings import get_settings
 

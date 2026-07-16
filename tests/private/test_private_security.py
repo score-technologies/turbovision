@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from fiber import utils
 from fiber.chain import signatures
-from substrateinterface import Keypair
+from bittensor_wallet import Keypair
 from starlette.requests import Request
 
 from scorevision.miner.private_track.security import verify_request

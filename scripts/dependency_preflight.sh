@@ -52,10 +52,9 @@ import importlib.metadata as md
 import sys
 
 expected = {
-    "bittensor": "9.12.0",
-    "async-substrate-interface": "1.6.4",
-    "scalecodec": "1.2.11",
-    "bt-decode": "0.8.0",
+    "bittensor": "10.3.0",
+    "async-substrate-interface": "2.0.2",
+    "bittensor-wallet": "4.0.1",
 }
 
 errors = []
@@ -83,9 +82,9 @@ import importlib.metadata as md
 
 keys = [
     "bittensor",
+    "bittensor-wallet",
     "async-substrate-interface",
-    "scalecodec",
-    "bt-decode",
+    "cyscale",
     "torch",
     "numpy",
     "scipy",

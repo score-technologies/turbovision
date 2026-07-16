@@ -179,7 +179,7 @@ def _private_ranked_weight_allocations(
 @lru_cache(maxsize=1)
 def get_validator_hotkey_ss58() -> str:
     settings = get_settings()
-    wallet = bt.wallet(
+    wallet = bt.Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )
@@ -343,7 +343,7 @@ async def weights_loop(
     if commit_on_start:
         await commit_validator_on_start(netuid)
 
-    wallet = bt.wallet(
+    wallet = bt.Wallet(
         name=settings.BITTENSOR_WALLET_COLD,
         hotkey=settings.BITTENSOR_WALLET_HOT,
     )

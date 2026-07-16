@@ -2,6 +2,8 @@ from scorevision.utils.settings import get_settings
 
 
 def test_legacy_r2_env_names_are_accepted(monkeypatch):
+    monkeypatch.setattr("scorevision.utils.settings.load_dotenv", lambda: None)
+    monkeypatch.delenv("SCOREVISION_PUBLIC_RESULTS_URL", raising=False)
     monkeypatch.setenv("R2_BUCKET", "legacy-bucket")
     monkeypatch.setenv("R2_BUCKET_PUBLIC_URL", "https://pub-legacy.r2.dev")
     monkeypatch.setenv("R2_ACCOUNT_ID", "legacy-account")

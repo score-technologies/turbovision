@@ -2,6 +2,7 @@ import json
 import logging
 from dataclasses import dataclass
 import bittensor as bt
+from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ async def fetch_registered_miners(
     metagraph = await subtensor.metagraph(netuid)
 
     try:
-        commitments = await subtensor.get_all_revealed_commitments(netuid)
+        commitments = await get_all_revealed_commitments(subtensor, netuid)
     except Exception as e:
         logger.error("Failed to fetch commitments: %s", e)
         return {}

@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 from scorevision.utils.r2 import (
     add_index_key_if_new,
     create_s3_client,
@@ -676,7 +677,7 @@ async def _fetch_commitment_context(
 ) -> tuple[dict[str, list[tuple[int, str]]], dict[str, int]]:
     st = await get_subtensor()
     meta = await st.metagraph(netuid, mechid=get_settings().SCOREVISION_MECHID)
-    commits = await st.get_all_revealed_commitments(netuid)
+    commits = await get_all_revealed_commitments(st, netuid)
     hotkey_to_uid = {hk: uid for uid, hk in enumerate(meta.hotkeys)}
     return commits, hotkey_to_uid
 

@@ -8,13 +8,14 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from huggingface_hub import HfApi
-from bittensor import async_subtensor
+from bittensor import AsyncSubtensor
 
 from scorevision.utils.bittensor_helpers import (
     get_subtensor,
     reset_subtensor,
     get_validator_indexes_from_chain,
 )
+from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 from scorevision.utils.compliance_failures import (
     ComplianceFailureTuple,
     fetch_compliance_failure_tuples,
@@ -592,7 +593,7 @@ async def get_miners_from_registry(
 
     try:
         meta = await st.metagraph(netuid, mechid=mechid)
-        commits = await st.get_all_revealed_commitments(netuid)
+        commits = await get_all_revealed_commitments(st, netuid)
     except Exception as e:
         logger.warning("[Registry] error while fetching metagraph/commitments: %s", e)
         reset_subtensor()
@@ -694,7 +695,9 @@ async def get_miners_from_registry(
             )
             st_archive = None
             try:
-                st_archive = async_subtensor(_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT)
+                st_archive = AsyncSubtensor(
+                    network=_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
+                )
                 await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
                 sem = asyncio.Semaphore(_REGISTRY_COMMIT_BACKFILL_CONCURRENCY)
 

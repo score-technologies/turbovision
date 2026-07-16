@@ -9,7 +9,7 @@ from time import time
 from urllib.parse import urljoin, urlparse
 import aiohttp
 from async_substrate_interface.errors import SubstrateRequestException
-from substrateinterface import Keypair
+from bittensor_wallet import Keypair
 from scorevision.utils.bittensor_helpers import get_subtensor, reset_subtensor
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.prometheus import (

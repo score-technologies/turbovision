@@ -12,7 +12,6 @@ authors = [{ name = "Score Vision" }]
 
 # Core runtime deps
 dependencies = [
-  "substrate-interface",
   "pydantic>=2",
   "httpx",
   "python-dotenv>=0.21.0",
@@ -22,9 +21,8 @@ dependencies = [
   "scipy",
   "click>=8.0.0",
   "huggingface_hub>=0.24",
-  "bittensor==9.12.0",
+  "bittensor==10.3.0",
   "jinja2>=3.1.6",
-  "chutes>=0.3.61",
   "torch",
   "aiobotocore==2.13.1",
   "numpy>=1.24",
@@ -32,6 +30,8 @@ dependencies = [
   "fastapi",
   "uvicorn",
   "petname",
+  "prometheus-client>=0.21",
+  "rich>=13",
   "ultralytics",
   "pytest",
   "ruamel.yaml",

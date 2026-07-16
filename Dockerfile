@@ -26,7 +26,8 @@ COPY scorevision ./scorevision
 
 # Build wheels for dependencies
 RUN pip install --upgrade pip wheel setuptools hatchling && \
-    pip wheel --wheel-dir /wheels .
+    pip wheel --wheel-dir /wheels . && \
+    pip wheel --wheel-dir /chutes-wheels "chutes==0.4.8"
 
 # ---- Runtime Stage ----
 FROM python:3.12-slim-bookworm
@@ -34,7 +35,7 @@ FROM python:3.12-slim-bookworm
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
-    PATH="/root/.local/bin:$PATH"
+    PATH="/opt/chutes/bin:/root/.local/bin:$PATH"
 
 # Install only runtime dependencies (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,14 +49,11 @@ WORKDIR /app
 
 # Install prebuilt wheels (fast, no compilation)
 COPY --from=builder /wheels /wheels
+COPY --from=builder /chutes-wheels /chutes-wheels
 RUN pip install --no-index --find-links=/wheels scorevision && \
-    pip uninstall -y cyscale || true && \
-    pip install --no-cache-dir --force-reinstall \
-      "async-substrate-interface==1.6.4" \
-      "scalecodec==1.2.11" \
-      "bt-decode==0.8.0" && \
-    pip install --no-cache-dir --force-reinstall --no-deps "bittensor==9.12.0" && \
-    rm -rf /wheels
+    python -m venv /opt/chutes && \
+    /opt/chutes/bin/pip install --no-index --find-links=/chutes-wheels chutes==0.4.8 && \
+    rm -rf /wheels /chutes-wheels
 
 # Copy application code (separate layer for better caching)
 COPY . /app
