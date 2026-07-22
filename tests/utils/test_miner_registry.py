@@ -264,3 +264,105 @@ async def test_get_miners_from_registry_keeps_different_inactive_commit(monkeypa
 
     assert kept[0].block == 10
     assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_keeps_different_revisions_of_same_model(monkeypatch):
+    class TwoRevisionSubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1", "hk2"])
+
+        async def get_all_revealed_commitments(self, netuid):
+            return {
+                "hk1": [
+                    (
+                        10,
+                        json.dumps(
+                            {
+                                "role": "miner",
+                                "model": "org/model",
+                                "revision": "rev1",
+                                "slug": "slug1",
+                                "chute_id": "chute1",
+                            }
+                        ),
+                    )
+                ],
+                "hk2": [
+                    (
+                        20,
+                        json.dumps(
+                            {
+                                "role": "miner",
+                                "model": "org/model",
+                                "revision": "rev2",
+                                "slug": "slug2",
+                                "chute_id": "chute2",
+                            }
+                        ),
+                    )
+                ],
+            }
+
+    async def fake_get_subtensor():
+        return TwoRevisionSubtensor()
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(chute_id):
+        suffix = chute_id[-1]
+        return {"slug": f"slug{suffix}", "revision": f"rev{suffix}"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(18)
+
+    assert set(kept) == {0, 1}
+    assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_deduplicates_same_model_revision(monkeypatch):
+    class DuplicateRevisionSubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1", "hk2"])
+
+        async def get_all_revealed_commitments(self, netuid):
+            commitment = {
+                "role": "miner",
+                "model": "org/model",
+                "revision": "rev1",
+                "slug": "slug1",
+                "chute_id": "chute1",
+            }
+            return {
+                "hk1": [(10, json.dumps(commitment))],
+                "hk2": [(20, json.dumps(commitment))],
+            }
+
+    async def fake_get_subtensor():
+        return DuplicateRevisionSubtensor()
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev1"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(18)
+
+    assert set(kept) == {0}
+    assert set(skipped) == {1}
+    assert (
+        skipped[1].registry_skip_reason
+        == "dedup_by_model_revision_kept_uid:0_block:10"
+    )

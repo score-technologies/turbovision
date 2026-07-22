@@ -551,8 +551,8 @@ async def get_miners_from_registry(
 ) -> tuple[Dict[int, Miner], Dict[int, Miner]]:
     """
     Reads on-chain commitments, verifies HF gating/revision, optional HF repo size
-    cap, optional ONNX-only model artifact policy, and Chutes slug; then returns at most one miner per model
-    (earliest block wins).
+    cap, optional ONNX-only model artifact policy, and Chutes slug; then returns
+    at most one miner per model revision (earliest block wins).
     """
     settings = get_settings()
     mechid = settings.SCOREVISION_MECHID
@@ -893,36 +893,37 @@ async def get_miners_from_registry(
         logger.warning("[Registry] Filter produced no eligible miners")
         return {}, skipped
 
-    # 3) De-duplicate by model: keep earliest block per model (stable)
-    best_by_model: Dict[str, Tuple[int, int]] = {}
+    # 3) De-duplicate by model revision: keep earliest block per pair (stable)
+    best_by_model_revision: Dict[Tuple[str, str], Tuple[int, int]] = {}
     for uid, m in filtered.items():
-        dedup_key = m.model
-        if not dedup_key and is_registry_bypass(uid, m.hotkey):
-            dedup_key = f"__bypass_uid_{uid}"
-        if not dedup_key:
+        if not m.model and is_registry_bypass(uid, m.hotkey):
+            dedup_key = (f"__bypass_uid_{uid}", "")
+        elif m.model:
+            dedup_key = (m.model, m.revision or "")
+        else:
             continue
         blk = m.block if isinstance(m.block, int) else (int(m.block) if m.block is not None else (2**63 - 1))
-        prev = best_by_model.get(dedup_key)
+        prev = best_by_model_revision.get(dedup_key)
         if prev is None or blk < prev[0]:
-            best_by_model[dedup_key] = (blk, uid)
+            best_by_model_revision[dedup_key] = (blk, uid)
 
-    keep_uids = {uid for _, uid in best_by_model.values()}
+    keep_uids = {uid for _, uid in best_by_model_revision.values()}
     kept = {uid: filtered[uid] for uid in keep_uids if uid in filtered}
     dedup_skipped = {}
     for uid, miner in filtered.items():
         if uid in keep_uids:
             continue
-        winner = best_by_model.get(miner.model or "")
+        winner = best_by_model_revision.get((miner.model or "", miner.revision or ""))
         if winner is not None:
             winner_blk, winner_uid = winner
             miner.registry_skip_reason = (
-                f"dedup_by_model_kept_uid:{winner_uid}_block:{winner_blk}"
+                f"dedup_by_model_revision_kept_uid:{winner_uid}_block:{winner_blk}"
             )
         else:
-            miner.registry_skip_reason = "dedup_by_model"
+            miner.registry_skip_reason = "dedup_by_model_revision"
         dedup_skipped[uid] = miner
     skipped.update(dedup_skipped)
-    logger.info("[Registry] %d miners kept after de-dup by model", len(kept))
+    logger.info("[Registry] %d miners kept after de-dup by model revision", len(kept))
     logger.info("[Registry] %d miners skipped", len(skipped))
 
     return kept, skipped
