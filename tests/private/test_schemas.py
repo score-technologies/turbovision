@@ -6,6 +6,7 @@ from scorevision.utils.schemas import (
     ChallengeRequest,
     ChallengeResponse,
     FramePrediction,
+    TCGGradingPrediction,
 )
 
 
@@ -35,6 +36,15 @@ def test_challenge_request_valid_with_frames_only():
     assert req.frames is not None
 
 
+def test_challenge_request_valid_with_image_only():
+    req = ChallengeRequest(
+        challenge_id="abc",
+        image_url="https://example.com/card.png",
+    )
+    assert req.image_url == "https://example.com/card.png"
+    assert req.video_url is None
+
+
 def test_challenge_request_rejects_empty_payload():
     with pytest.raises(ValidationError):
         ChallengeRequest(challenge_id="abc")
@@ -57,6 +67,61 @@ def test_challenge_response_cricket_valid():
     )
     assert resp.prediction is not None
     assert resp.prediction_count == 1
+
+
+def test_challenge_response_tcg_grading_uses_public_schema():
+    resp = ChallengeResponse(
+        challenge_id="abc",
+        prediction={
+            "Header": {"card_grade": 7},
+            "Grading_Features": {
+                "subgrade_surface": 6,
+                "subgrade_centering": 10,
+                "subgrade_edges": 10,
+                "subgrade_corners": 10,
+            },
+        },
+        processing_time=2.5,
+    )
+
+    assert isinstance(resp.prediction, TCGGradingPrediction)
+    assert resp.prediction_count == 5
+    assert resp.model_dump(mode="json") == {
+        "challenge_id": "abc",
+        "prediction": {
+            "Header": {"card_grade": 7},
+            "Grading_Features": {
+                "subgrade_surface": 6,
+                "subgrade_centering": 10,
+                "subgrade_edges": 10,
+                "subgrade_corners": 10,
+            },
+        },
+        "processing_time": 2.5,
+    }
+
+
+def test_tcg_grading_response_rounds_all_grades_down():
+    resp = ChallengeResponse(
+        challenge_id="abc",
+        prediction={
+            "Header": {"card_grade": 8.9},
+            "Grading_Features": {
+                "subgrade_surface": 8.5,
+                "subgrade_centering": 9.99,
+                "subgrade_edges": 7.1,
+                "subgrade_corners": 10,
+            },
+        },
+        processing_time=1.0,
+    )
+
+    assert isinstance(resp.prediction, TCGGradingPrediction)
+    assert resp.prediction.Header.card_grade == 8
+    assert resp.prediction.Grading_Features.subgrade_surface == 8
+    assert resp.prediction.Grading_Features.subgrade_centering == 9
+    assert resp.prediction.Grading_Features.subgrade_edges == 7
+    assert resp.prediction.Grading_Features.subgrade_corners == 10
 
 
 def test_challenge_response_requires_exactly_one_payload():

@@ -28,12 +28,14 @@ async def send_challenge(
     request = ChallengeRequest(
         challenge_id=challenge.challenge_id,
         video_url=challenge.video_url,
+        image_url=challenge.image_url,
         frames=challenge.payload_frames,
     )
+    excluded_fields = {"image_url"} if request.image_url is None else set()
     start = perf_counter()
 
     try:
-        payload_bytes = request.model_dump_json().encode()
+        payload_bytes = request.model_dump_json(exclude=excluded_fields).encode()
         headers = build_signed_headers(
             hotkey,
             payload_bytes,
@@ -45,7 +47,7 @@ async def send_challenge(
             response = await asyncio.wait_for(
                 client.post(
                     url,
-                    json=request.model_dump(),
+                    json=request.model_dump(exclude=excluded_fields),
                     headers=headers,
                 ),
                 timeout=timeout,

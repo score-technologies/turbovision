@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from scorevision.miner.private_track.routes import handle_challenge
-from scorevision.utils.schemas import ChallengeRequest, CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeRequest,
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 
 
 @pytest.mark.asyncio
@@ -47,3 +52,42 @@ async def test_handle_challenge_cricket_mode_returns_prediction():
     assert response.prediction.type == "cricket_delivery"
     assert response.prediction.item is not None
     assert response.prediction.item.kph == 130.0
+
+
+@pytest.mark.asyncio
+async def test_handle_challenge_tcg_mode_downloads_and_deletes_image():
+    request = ChallengeRequest(
+        challenge_id="tcg-1",
+        image_url="https://example.com/card.png",
+    )
+    fake_image_path = Path("/tmp/fake-card.png")
+    prediction = TCGGradingPrediction(
+        Header={"card_grade": 8},
+        Grading_Features={
+            "subgrade_surface": 7,
+            "subgrade_centering": 9,
+            "subgrade_edges": 8,
+            "subgrade_corners": 8,
+        },
+    )
+
+    with (
+        patch("scorevision.miner.private_track.routes.MINER_MODE", "soccer_action"),
+        patch(
+            "scorevision.miner.private_track.routes.download_image",
+            new=AsyncMock(return_value=fake_image_path),
+        ) as download_mock,
+        patch(
+            "scorevision.miner.private_track.routes.predict_tcg_grading",
+            return_value=prediction,
+        ) as predict_mock,
+        patch("scorevision.miner.private_track.routes.delete_image") as delete_mock,
+    ):
+        response = await handle_challenge(request)
+
+    download_mock.assert_awaited_once_with(request.image_url)
+    predict_mock.assert_called_once_with(fake_image_path)
+    delete_mock.assert_called_once_with(fake_image_path)
+    assert response.is_tcg_grading
+    assert response.prediction == prediction
+    assert response.prediction_count == 5

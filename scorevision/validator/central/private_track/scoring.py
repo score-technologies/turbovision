@@ -2,7 +2,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable
 
 from scorevision.utils.actions import ACTION_CONFIGS, Action
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 from scorevision.utils.settings import get_settings
 
 PRIVATE_SCORING_VERSION = 2
@@ -181,6 +185,16 @@ _EXACT_MATCH_FIELDS = {
     "wickets",
 }
 
+TCG_GRADE_TOLERANCE = 2.0
+
+_TCG_FIELD_WEIGHTS: dict[str, float] = {
+    "subgrade_surface": 0.25,
+    "subgrade_edges": 0.25,
+    "subgrade_corners": 0.25,
+    "subgrade_centering": 0.10,
+    "card_grade": 0.15,
+}
+
 
 def register_pillar_scorer(pillar: str, scorer: PillarScorer) -> None:
     key = _normalize_pillar_key(pillar)
@@ -241,6 +255,47 @@ def score_cricket_prediction_with_breakdown(
                 actual_value,
                 _CRICKET_FIELD_TOLERANCES[field_name],
             )
+        breakdown[field_name] = field_score
+        weighted_score += weight * field_score
+
+    return max(0.0, min(1.0, weighted_score)), breakdown
+
+
+def score_tcg_grading_with_breakdown(
+    prediction: TCGGradingPrediction | None,
+    ground_truth: TCGGradingPrediction,
+) -> tuple[float, dict[str, float]]:
+    predicted_values = {
+        "subgrade_surface": (
+            prediction.Grading_Features.subgrade_surface if prediction else None
+        ),
+        "subgrade_edges": (
+            prediction.Grading_Features.subgrade_edges if prediction else None
+        ),
+        "subgrade_corners": (
+            prediction.Grading_Features.subgrade_corners if prediction else None
+        ),
+        "subgrade_centering": (
+            prediction.Grading_Features.subgrade_centering if prediction else None
+        ),
+        "card_grade": prediction.Header.card_grade if prediction else None,
+    }
+    actual_values = {
+        "subgrade_surface": ground_truth.Grading_Features.subgrade_surface,
+        "subgrade_edges": ground_truth.Grading_Features.subgrade_edges,
+        "subgrade_corners": ground_truth.Grading_Features.subgrade_corners,
+        "subgrade_centering": ground_truth.Grading_Features.subgrade_centering,
+        "card_grade": ground_truth.Header.card_grade,
+    }
+
+    weighted_score = 0.0
+    breakdown: dict[str, float] = {}
+    for field_name, weight in _TCG_FIELD_WEIGHTS.items():
+        field_score = _score_numeric_match(
+            predicted_values[field_name],
+            actual_values[field_name],
+            TCG_GRADE_TOLERANCE,
+        )
         breakdown[field_name] = field_score
         weighted_score += weight * field_score
 

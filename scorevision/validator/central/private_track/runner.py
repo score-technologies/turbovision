@@ -32,6 +32,7 @@ from scorevision.validator.central.private_track.scoring import (
     PRIVATE_SCORING_VERSION,
     score_cricket_prediction_with_breakdown,
     score_predictions_with_breakdown,
+    score_tcg_grading_with_breakdown,
 )
 from scorevision.validator.central.private_track.spotcheck import PendingSpotcheck
 from scorevision.validator.central.scheduling import (
@@ -159,6 +160,8 @@ async def _upload_private_response_blob(
         "miner_uid": miner.uid,
         "predictions": response_predictions,
     }
+    if challenge.image_url:
+        payload["image_url"] = challenge.image_url
     return await _upload_to_private_r2(key, f"{prefix}/index.json", payload, f"response blob for miner {miner.hotkey}")
 
 
@@ -200,7 +203,11 @@ _PUBLIC_SHARD_FIELDS = {
 
 
 def _strip_for_public_shard(result: dict) -> dict:
-    return {k: v for k, v in result.items() if k in _PUBLIC_SHARD_FIELDS}
+    public_result = {k: v for k, v in result.items() if k in _PUBLIC_SHARD_FIELDS}
+    if result.get("groundtruth_type") == "tcg_grading":
+        public_result["element_id"] = result.get("element_id")
+        public_result["groundtruth_type"] = "tcg_grading"
+    return public_result
 
 
 async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> str | None:
@@ -318,7 +325,19 @@ async def _challenge_miner(
         benchmark_result = None
 
         if is_scored:
-            if challenge.groundtruth_type == "cricket_delivery":
+            if challenge.groundtruth_type == "tcg_grading":
+                tcg_prediction = response.prediction if response.is_tcg_grading else None
+                score, field_breakdown = score_tcg_grading_with_breakdown(
+                    tcg_prediction,
+                    challenge.ground_truth,
+                )
+                score_breakdown = {"tcg_grading": score, **field_breakdown}
+                pred_count = response.prediction_count if tcg_prediction else 0
+                response_predictions = (
+                    [tcg_prediction.model_dump(mode="json")] if tcg_prediction else []
+                )
+                benchmark_result = None
+            elif challenge.groundtruth_type == "cricket_delivery":
                 cricket_prediction = None
                 if response.prediction is not None and hasattr(response.prediction, "item"):
                     cricket_prediction = response.prediction.item
@@ -381,7 +400,7 @@ async def _challenge_miner(
             processing_time=attempt.elapsed_s,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
-            video_url=challenge.video_url or "",
+            video_url=challenge.video_url or challenge.image_url or "",
             response_time_s=attempt.elapsed_s,
             timed_out=attempt.timed_out,
             image_repo=miner.image_repo,
@@ -389,6 +408,7 @@ async def _challenge_miner(
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
             score_breakdown=score_breakdown,
+            groundtruth_type=challenge.groundtruth_type,
         )), response_predictions, benchmark_result
     except Exception as e:
         logger.error("Miner %s challenge processing failed: %s", miner.hotkey, e)
@@ -403,13 +423,14 @@ async def _challenge_miner(
             processing_time=0.0,
             timestamp=datetime.now(timezone.utc).isoformat(),
             block=block,
-            video_url=challenge.video_url or "",
+            video_url=challenge.video_url or challenge.image_url or "",
             timed_out=True,
             image_repo=miner.image_repo,
             image_tag=miner.image_tag,
             image_digest=image_digest,
             scoring_version=PRIVATE_SCORING_VERSION,
             score_breakdown={},
+            groundtruth_type=challenge.groundtruth_type,
         )), None, None
 
 
@@ -430,7 +451,7 @@ async def _emit_private_score_to_public_db(
     challenge_obj = SVChallenge(
         env="private-track",
         payload=TVPredictInput(
-            url=challenge.video_url,
+            url=challenge.video_url or challenge.image_url,
             frames=payload_frames,
             meta={"track": "private"},
         ),

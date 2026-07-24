@@ -3,7 +3,12 @@ from logging import getLogger
 import httpx
 from scorevision.utils.challenges import get_next_challenge_v3, _coerce_payload_frames
 from scorevision.utils.signing import build_validator_query_params
-from scorevision.utils.schemas import ChallengeFrame, CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    ChallengeFrame,
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
@@ -12,14 +17,18 @@ logger = getLogger(__name__)
 @dataclass
 class Challenge:
     challenge_id: str
-    ground_truth: list[FramePrediction] | CricketDeliveryPrediction
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction | TCGGradingPrediction
     groundtruth_type: str = "soccer_action"
     video_url: str | None = None
+    image_url: str | None = None
     payload_frames: list[ChallengeFrame] | None = None
 
 
-def has_sufficient_actions(ground_truth: list[FramePrediction] | CricketDeliveryPrediction, groundtruth_type: str) -> bool:
-    if groundtruth_type == "cricket_delivery":
+def has_sufficient_actions(
+    ground_truth: list[FramePrediction] | CricketDeliveryPrediction | TCGGradingPrediction,
+    groundtruth_type: str,
+) -> bool:
+    if groundtruth_type in {"cricket_delivery", "tcg_grading"}:
         return True
     return len(ground_truth) >= get_settings().PRIVATE_MIN_ACTIONS_FOR_CHALLENGE
 
@@ -36,7 +45,7 @@ async def fetch_ground_truth(
     keypair,
     element_id: str | None = None,
     groundtruth_type: str = "soccer_action",
-) -> list[FramePrediction] | CricketDeliveryPrediction:
+) -> list[FramePrediction] | CricketDeliveryPrediction | TCGGradingPrediction:
     settings = get_settings()
     api_url = settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API
     if not api_url:
@@ -62,6 +71,20 @@ async def fetch_ground_truth(
         if not isinstance(meta, dict):
             raise ValueError("Cricket ground truth missing meta payload")
         return CricketDeliveryPrediction(**meta)
+
+    if groundtruth_type == "tcg_grading":
+        raw = data.get("ground_truth")
+        if isinstance(raw, list):
+            if not raw:
+                raise ValueError("Empty TCG grading ground truth")
+            raw = raw[0]
+        if isinstance(raw, dict) and isinstance(raw.get("meta"), dict):
+            meta = raw["meta"]
+            if "Header" in meta or "Grading_Features" in meta:
+                raw = meta
+        if not isinstance(raw, dict):
+            raise ValueError("TCG grading ground truth must be an object")
+        return TCGGradingPrediction(**raw)
 
     ground_truth: list[FramePrediction] = []
     for gt in data.get("ground_truth", []):
@@ -114,15 +137,25 @@ async def get_challenge_with_ground_truth(
         challenge_id = chal.get("task_id") or chal.get("id")
         video_url = (
             chal.get("video_url")
-            or chal.get("asset_url")
+            or (chal.get("asset_url") if groundtruth_type != "tcg_grading" else None)
             or payload.get("video_url")
             or payload.get("clip_url")
+        )
+        image_url = (
+            chal.get("image_url")
+            or payload.get("image_url")
+            or (chal.get("asset_url") if groundtruth_type == "tcg_grading" else None)
+            or (chal.get("url") if groundtruth_type == "tcg_grading" else None)
+            or (payload.get("asset_url") if groundtruth_type == "tcg_grading" else None)
+            or (payload.get("url") if groundtruth_type == "tcg_grading" else None)
         )
         payload_frames_raw = _coerce_payload_frames(payload)
         payload_frames = [ChallengeFrame(**frame) for frame in payload_frames_raw] or None
 
-        if not challenge_id or (not video_url and not payload_frames):
-            logger.warning("Challenge missing task_id or challenge asset (video_url/frames), retrying")
+        if not challenge_id or (not video_url and not image_url and not payload_frames):
+            logger.warning(
+                "Challenge missing task_id or challenge asset (video_url/image_url/frames), retrying"
+            )
             continue
 
         try:
@@ -152,6 +185,7 @@ async def get_challenge_with_ground_truth(
         return Challenge(
             challenge_id=str(challenge_id),
             video_url=video_url,
+            image_url=image_url,
             payload_frames=payload_frames,
             ground_truth=ground_truth,
             groundtruth_type=groundtruth_type,

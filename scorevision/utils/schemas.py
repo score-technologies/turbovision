@@ -1,4 +1,14 @@
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
+from math import floor
+
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class FramePrediction(BaseModel):
@@ -52,6 +62,49 @@ class CricketDeliveryPrediction(BaseModel):
     wickets: int | None = Field(default=None, validation_alias=AliasChoices("wickets", "wkts"))
 
 
+def _floor_tcg_grade(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("TCG grades must be numeric")
+    try:
+        return floor(float(value))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("TCG grades must be finite numeric values") from exc
+
+
+class TCGGradingHeader(BaseModel):
+    card_grade: int = Field(ge=1, le=10)
+
+    @field_validator("card_grade", mode="before")
+    @classmethod
+    def normalize_card_grade(cls, value: object) -> int:
+        return _floor_tcg_grade(value)
+
+
+class TCGGradingFeatures(BaseModel):
+    subgrade_surface: int = Field(ge=1, le=10)
+    subgrade_centering: int = Field(ge=1, le=10)
+    subgrade_edges: int = Field(ge=1, le=10)
+    subgrade_corners: int = Field(ge=1, le=10)
+
+    @field_validator(
+        "subgrade_surface",
+        "subgrade_centering",
+        "subgrade_edges",
+        "subgrade_corners",
+        mode="before",
+    )
+    @classmethod
+    def normalize_subgrade(cls, value: object) -> int:
+        return _floor_tcg_grade(value)
+
+
+class TCGGradingPrediction(BaseModel):
+    """Scored subset of the ACE trading-card grading payload."""
+
+    Header: TCGGradingHeader
+    Grading_Features: TCGGradingFeatures
+
+
 class PredictionPayload(BaseModel):
     type: str
     items: list[FramePrediction] | None = None
@@ -89,22 +142,39 @@ class ChallengeFrame(BaseModel):
 class ChallengeRequest(BaseModel):
     challenge_id: str
     video_url: str | None = None
+    image_url: str | None = None
     frames: list[ChallengeFrame] | None = None
 
     @model_validator(mode="after")
     def validate_payload(self):
         if self.video_url:
             return self
+        if self.image_url:
+            return self
         if self.frames:
             return self
-        raise ValueError("ChallengeRequest requires video_url or frames")
+        raise ValueError("ChallengeRequest requires video_url, image_url, or frames")
 
 
 class ChallengeResponse(BaseModel):
     challenge_id: str
     predictions: list[FramePrediction] | None = None
-    prediction: PredictionPayload | CricketDeliveryPrediction | None = None
+    prediction: PredictionPayload | CricketDeliveryPrediction | TCGGradingPrediction | None = None
     processing_time: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_tcg_prediction(cls, data):
+        if isinstance(data, dict):
+            prediction = data.get("prediction")
+            if (
+                isinstance(prediction, dict)
+                and "Header" in prediction
+                and "Grading_Features" in prediction
+            ):
+                data = dict(data)
+                data["prediction"] = TCGGradingPrediction(**prediction)
+        return data
 
     @model_validator(mode="after")
     def validate_payload(self):
@@ -126,6 +196,8 @@ class ChallengeResponse(BaseModel):
 
     @property
     def prediction_count(self) -> int:
+        if isinstance(self.prediction, TCGGradingPrediction):
+            return 5
         if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery":
             return 1
         if isinstance(self.prediction, PredictionPayload) and self.prediction.type == "soccer_action":
@@ -136,9 +208,19 @@ class ChallengeResponse(BaseModel):
     def is_cricket(self) -> bool:
         return isinstance(self.prediction, PredictionPayload) and self.prediction.type == "cricket_delivery"
 
+    @property
+    def is_tcg_grading(self) -> bool:
+        return isinstance(self.prediction, TCGGradingPrediction)
+
     @model_serializer(mode="wrap")
     def serialize_model(self, handler):
         data = handler(self)
+        if isinstance(self.prediction, TCGGradingPrediction):
+            return {
+                "challenge_id": data["challenge_id"],
+                "prediction": data["prediction"],
+                "processing_time": data["processing_time"],
+            }
         if isinstance(self.prediction, PredictionPayload):
             return {
                 "challenge_id": data["challenge_id"],

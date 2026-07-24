@@ -4,7 +4,11 @@ from types import SimpleNamespace
 from scorevision.validator.central.private_track.challenges import (
     get_challenge_with_ground_truth,
 )
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 
 
 _FAKE_SETTINGS = SimpleNamespace(
@@ -116,3 +120,36 @@ async def test_get_challenge_accepts_single_cricket_ground_truth():
 
     assert challenge is not None
     assert challenge.groundtruth_type == "cricket_delivery"
+
+
+@pytest.mark.asyncio
+async def test_get_challenge_accepts_tcg_image_and_ground_truth():
+    fake_chal = {
+        "task_id": "76738",
+        "payload": {"image_url": "https://example.com/card.png"},
+    }
+    tcg_gt = TCGGradingPrediction(
+        Header={"card_grade": 6.0},
+        Grading_Features={
+            "subgrade_surface": 5.0,
+            "subgrade_centering": 10.0,
+            "subgrade_edges": 9.0,
+            "subgrade_corners": 9.0,
+        },
+    )
+
+    with _patch_settings(), \
+         patch(f"{_MODULE}.fetch_next_challenge", new_callable=AsyncMock, return_value=fake_chal), \
+         patch(f"{_MODULE}.complete_task_assignment", new_callable=AsyncMock), \
+         patch(f"{_MODULE}.fetch_ground_truth", new_callable=AsyncMock, return_value=tcg_gt):
+        challenge = await get_challenge_with_ground_truth(
+            manifest_hash="abc123",
+            element_id="manako/TCGGrading",
+            keypair=None,
+            groundtruth_type="tcg_grading",
+            max_retries=1,
+        )
+
+    assert challenge is not None
+    assert challenge.image_url == "https://example.com/card.png"
+    assert challenge.groundtruth_type == "tcg_grading"

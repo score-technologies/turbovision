@@ -9,7 +9,11 @@ from scorevision.utils.bittensor_helpers import load_hotkey_keypair
 from scorevision.utils.r2 import audit_r2_config, create_s3_client, ensure_index_exists, add_index_key_if_new, is_configured
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.request_signing import build_signed_headers
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import _sign_batch
 from scorevision.validator.audit.open_source.spotcheck import calculate_match_percentage
@@ -17,6 +21,7 @@ from scorevision.validator.central.private_track.challenges import fetch_ground_
 from scorevision.validator.central.private_track.scoring import (
     score_cricket_prediction_with_breakdown,
     score_predictions,
+    score_tcg_grading_with_breakdown,
 )
 from scorevision.validator.models import SpotcheckResult
 
@@ -107,19 +112,25 @@ def _prediction_looks_cricket(prediction: dict) -> bool:
     return bool(keys & _CRICKET_HINT_FIELDS)
 
 
+def _prediction_looks_tcg(prediction: dict) -> bool:
+    return "Header" in prediction and "Grading_Features" in prediction
+
+
 def _infer_groundtruth_type(
     challenge_results: list[dict],
     miner_responses: dict[str, list[dict]],
 ) -> str:
     for entry in challenge_results:
         gt = str(entry.get("groundtruth_type") or "").strip()
-        if gt in {"soccer_action", "cricket_delivery"}:
+        if gt in {"soccer_action", "cricket_delivery", "tcg_grading"}:
             return gt
 
     for predictions_raw in miner_responses.values():
         if not predictions_raw:
             continue
         first = predictions_raw[0]
+        if isinstance(first, dict) and _prediction_looks_tcg(first):
+            return "tcg_grading"
         if isinstance(first, dict) and _prediction_looks_cricket(first):
             return "cricket_delivery"
 
@@ -156,6 +167,17 @@ def rescore_miner_cricket(
     return score
 
 
+def rescore_miner_tcg(
+    predictions_raw: list[dict],
+    ground_truth: TCGGradingPrediction,
+) -> float:
+    prediction_obj = None
+    if predictions_raw and isinstance(predictions_raw[0], dict):
+        prediction_obj = TCGGradingPrediction(**predictions_raw[0])
+    score, _ = score_tcg_grading_with_breakdown(prediction_obj, ground_truth)
+    return score
+
+
 async def run_private_spotcheck(
     challenge_id: str,
     challenge_results: list[dict],
@@ -182,7 +204,9 @@ async def run_private_spotcheck(
             logger.warning("%sNo response data for miner %s", LOG_PREFIX, miner_hotkey)
             continue
 
-        if groundtruth_type == "cricket_delivery":
+        if groundtruth_type == "tcg_grading":
+            audit_score = rescore_miner_tcg(predictions_raw, ground_truth)
+        elif groundtruth_type == "cricket_delivery":
             audit_score = rescore_miner_cricket(predictions_raw, ground_truth)
         else:
             audit_score = rescore_miner_soccer(predictions_raw, ground_truth)

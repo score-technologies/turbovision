@@ -11,8 +11,13 @@ from scorevision.validator.central.private_track.scoring import (
     score_predictions,
     score_predictions_for_pillar,
     score_predictions_with_breakdown,
+    score_tcg_grading_with_breakdown,
 )
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 
 
 _FAKE_SETTINGS = SimpleNamespace(PRIVATE_FRAME_RATE=25)
@@ -187,3 +192,47 @@ def test_cricket_scoring_uses_updated_private_track_field_weights():
     kph_only = CricketDeliveryPrediction(kph=130.0)
     score, _ = score_cricket_prediction_with_breakdown(kph_only, ground_truth)
     assert score == pytest.approx(0.03)
+
+
+def _tcg_prediction(
+    *,
+    surface: float = 6.0,
+    centering: float = 10.0,
+    edges: float = 9.0,
+    corners: float = 8.0,
+    card_grade: float = 7.0,
+) -> TCGGradingPrediction:
+    return TCGGradingPrediction(
+        Header={"card_grade": card_grade},
+        Grading_Features={
+            "subgrade_surface": surface,
+            "subgrade_centering": centering,
+            "subgrade_edges": edges,
+            "subgrade_corners": corners,
+        },
+    )
+
+
+def test_tcg_grading_perfect_prediction_scores_one():
+    ground_truth = _tcg_prediction()
+    score, breakdown = score_tcg_grading_with_breakdown(ground_truth, ground_truth)
+
+    assert score == 1.0
+    assert all(field_score == 1.0 for field_score in breakdown.values())
+
+
+def test_tcg_grading_uses_requested_weights_and_linear_distance():
+    ground_truth = _tcg_prediction()
+    prediction = _tcg_prediction(surface=7.0)
+
+    score, breakdown = score_tcg_grading_with_breakdown(prediction, ground_truth)
+
+    assert breakdown["subgrade_surface"] == 0.5
+    assert score == pytest.approx(0.875)
+
+
+def test_tcg_grading_missing_prediction_scores_zero():
+    score, breakdown = score_tcg_grading_with_breakdown(None, _tcg_prediction())
+
+    assert score == 0.0
+    assert all(field_score == 0.0 for field_score in breakdown.values())

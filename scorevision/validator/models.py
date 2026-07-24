@@ -74,6 +74,7 @@ class PrivateEvaluationResult:
     scoring_version: int = 0
     score_breakdown: dict[str, float] | None = None
     private_responses_key: str | None = None
+    groundtruth_type: str = "soccer_action"
 
 
 @dataclass

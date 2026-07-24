@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from scorevision.utils.schemas import CricketDeliveryPrediction, FramePrediction
+from scorevision.utils.schemas import (
+    CricketDeliveryPrediction,
+    FramePrediction,
+    TCGGradingPrediction,
+)
 from scorevision.validator.audit.private_track import spotcheck as spotcheck_mod
 
 
@@ -25,6 +29,26 @@ def test_infer_groundtruth_type_from_prediction_shape():
     )
 
 
+def test_infer_tcg_groundtruth_type_from_prediction_shape():
+    miner_responses = {
+        "hk1": [
+            {
+                "Header": {"card_grade": 7},
+                "Grading_Features": {
+                    "subgrade_surface": 6,
+                    "subgrade_centering": 10,
+                    "subgrade_edges": 10,
+                    "subgrade_corners": 10,
+                },
+            }
+        ]
+    }
+    assert (
+        spotcheck_mod._infer_groundtruth_type([], miner_responses)
+        == "tcg_grading"
+    )
+
+
 def test_rescore_miner_soccer():
     predictions = [{"frame": 25, "action": "pass"}]
     gt = [FramePrediction(frame=25, action="pass")]
@@ -37,6 +61,20 @@ def test_rescore_miner_cricket():
     gt = CricketDeliveryPrediction(kph=128.0, bounce_x=6.0, stump_y=0.1)
     score = spotcheck_mod.rescore_miner_cricket(predictions, gt)
     assert 0.0 <= score <= 1.0
+
+
+def test_rescore_miner_tcg():
+    prediction = {
+        "Header": {"card_grade": 7},
+        "Grading_Features": {
+            "subgrade_surface": 6,
+            "subgrade_centering": 10,
+            "subgrade_edges": 10,
+            "subgrade_corners": 10,
+        },
+    }
+    gt = TCGGradingPrediction(**prediction)
+    assert spotcheck_mod.rescore_miner_tcg([prediction], gt) == 1.0
 
 
 @pytest.mark.asyncio

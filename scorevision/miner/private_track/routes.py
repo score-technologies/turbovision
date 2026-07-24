@@ -1,11 +1,18 @@
 import time
+
 from fastapi import HTTPException
-from scorevision.miner.private_track.predictor import predict_actions, predict_cricket_delivery
+from scorevision.miner.private_track.image import delete_image, download_image
+from scorevision.miner.private_track.predictor import (
+    predict_actions,
+    predict_cricket_delivery,
+    predict_tcg_grading,
+)
 from scorevision.miner.private_track.video import delete_video, download_video
 from scorevision.utils.schemas import ChallengeRequest, ChallengeResponse, PredictionPayload
 from scorevision.miner.private_track.logging import logger
 
-# TODO: choose a single mode per miner deployment: "soccer_action" or "cricket_delivery".
+# TODO: choose a single video mode per deployment: "soccer_action" or
+# "cricket_delivery". TCG requests are identified by their image_url payload.
 MINER_MODE = "soccer_action"
 
 
@@ -13,8 +20,24 @@ async def handle_challenge(request: ChallengeRequest) -> ChallengeResponse:
     logger.info(f"Challenge received: {request.challenge_id}")
     start_time = time.perf_counter()
     video_path = None
+    image_path = None
 
     try:
+        if request.image_url:
+            image_path = await download_image(request.image_url)
+            prediction = predict_tcg_grading(image_path)
+            processing_time = time.perf_counter() - start_time
+            logger.info(
+                "TCG grading challenge completed: %s, time: %.1fs",
+                request.challenge_id,
+                processing_time,
+            )
+            return ChallengeResponse(
+                challenge_id=request.challenge_id,
+                prediction=prediction,
+                processing_time=processing_time,
+            )
+
         if MINER_MODE == "cricket_delivery":
             prediction = predict_cricket_delivery(request)
             processing_time = time.perf_counter() - start_time
@@ -29,6 +52,10 @@ async def handle_challenge(request: ChallengeRequest) -> ChallengeResponse:
                 processing_time=processing_time,
             )
 
+        if MINER_MODE != "soccer_action":
+            raise ValueError(f"Unsupported private miner mode: {MINER_MODE}")
+        if not request.video_url:
+            raise ValueError("Soccer action challenge requires video_url")
         video_path = await download_video(request.video_url)
         predictions = predict_actions(video_path)
         processing_time = time.perf_counter() - start_time
@@ -48,3 +75,5 @@ async def handle_challenge(request: ChallengeRequest) -> ChallengeResponse:
     finally:
         if video_path:
             delete_video(video_path)
+        if image_path:
+            delete_image(image_path)

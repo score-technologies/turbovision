@@ -192,12 +192,11 @@ Current private elements are served as separate tracks from the miner point of v
 
 - Football private element (`groundtruth_type=soccer_action`)
 - Cricket private element (`groundtruth_type=cricket_delivery`)
+- TCG grading private element (`groundtruth_type=tcg_grading`)
 
-The template miner uses a static mode switch in `scorevision/miner/private_track/routes.py`:
-
-```python
-MINER_MODE = "soccer_action"  # or "cricket_delivery"
-```
+The registry selects miners by their committed `element_id`. TCG requests use
+`image_url`, while the existing football and cricket requests use their video
+contract. No `groundtruth_type` field is sent to miners.
 
 Keep one deployment per mode. Do not expect one running container to handle both private element types automatically.
 
@@ -237,7 +236,28 @@ Keep one deployment per mode. Do not expect one running container to handle both
 }
 ```
 
+- For TCG grading:
+
+```json
+{
+  "challenge_id": "123",
+  "prediction": {
+    "Header": {
+      "card_grade": 8
+    },
+    "Grading_Features": {
+      "subgrade_surface": 7,
+      "subgrade_centering": 9,
+      "subgrade_edges": 8,
+      "subgrade_corners": 8
+    }
+  },
+  "processing_time": 0.42
+}
+```
+
 For full cricket field guidance, see `scorevision/miner/CRICKET_MINER_SPEC.md`.
+For the TCG contract and scoring, see `scorevision/miner/private_track/TCG_GRADING_MINER_SPEC.md`.
 
 ### 1.3 On-Chain Commitment Must Match Element
 

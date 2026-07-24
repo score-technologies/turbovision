@@ -1,0 +1,259 @@
+{
+  "tee": {
+    "trusted_share_gamma": 0.2
+  },
+  "version": 1.3,
+  "window_id": "2025-10-27",
+  "expiry_block": 12345678910,
+  "elements": [
+    {
+      "id": "manak0/Detect-crime",
+      "beta": 1,
+      "first_block": 8087000,
+      "track": "public",
+      "weight": 0.04,
+      "dataset": {
+        "type": "synthetic_r2",
+        "image_count": 164,
+        "public_split_ref": "public_starter",
+        "annotation_format": "sam3_json_v1"
+      },
+      "metrics": {
+        "pillars": {
+          "map50": 0.6,
+          "false_positive": 0.4
+        },
+        "targets": {
+          "map50": 0.8,
+          "false_positive": 0.9
+        },
+        "baselines": {
+          "map50": 0.14005555591055954,
+          "false_positive": 0.4
+        }
+      },
+      "objects": [
+        "balaclava",
+        "hoodie",
+        "glove",
+        "bat",
+        "spray paint",
+        "graffiti"
+      ],
+      "preproc": {
+        "fps": 5,
+        "norm": "rgb-01",
+        "resize_long": 1280
+      },
+      "delta_floor": 0.01,
+      "ground_truth": true,
+      "window_block": 300,
+      "baseline_theta": 0.24,
+      "latency_p95_ms": 100,
+      "service_rate_fps": 1,
+      "challenge_type_id": 80,
+      "max_model_size_mb": 30,
+      "challenge_type_version": "1.0"
+    },
+    {
+      "id": "manak0/Detect-fire",
+      "beta": 1,
+      "first_block": 8160246,
+      "track": "public",
+      "weight": 0.04,
+      "dataset": {
+        "type": "synthetic_r2",
+        "image_count": 164,
+        "public_split_ref": "public_starter",
+        "annotation_format": "sam3_json_v1"
+      },
+      "metrics": {
+        "pillars": {
+          "map50": 0.6,
+          "false_positive": 0.4
+        },
+        "targets": {
+          "map50": 0.9,
+          "false_positive": 0.9
+        },
+        "baselines": {
+          "map50": 0.3932593937991298,
+          "false_positive": 0.4
+        }
+      },
+      "objects": [
+        "fire",
+        "smoke",
+        "fire extinguisher"
+      ],
+      "preproc": {
+        "fps": 5,
+        "norm": "rgb-01",
+        "resize_long": 1280
+      },
+      "delta_floor": 0.01,
+      "ground_truth": true,
+      "window_block": 300,
+      "baseline_theta": 0.3932593937991298,
+      "latency_p95_ms": 100,
+      "service_rate_fps": 1,
+      "challenge_type_id": 100,
+      "max_model_size_mb": 30,
+      "challenge_type_version": "1.0"
+    },
+    {
+      "id": "manak0/Detect-car-wash",
+      "beta": 1,
+      "weight": 0.04,
+      "track": "public",
+      "first_block": 8218196,
+      "dataset": {
+        "type": "synthetic_r2",
+        "image_count": 164,
+        "public_split_ref": "public_starter",
+        "annotation_format": "sam3_json_v1"
+      },
+      "metrics": {
+        "pillars": {
+          "map50": 0.6,
+          "false_positive": 0.4
+        },
+        "targets": {
+          "map50": 0.95,
+          "false_positive": 0.95
+        },
+        "baselines": {
+          "map50": 0.24369439275042618,
+          "false_positive": 0.4
+        }
+      },
+      "objects": [
+        "broom",
+        "drainage gate",
+        "nozzle",
+        "track"
+      ],
+      "preproc": {
+        "fps": 5,
+        "norm": "rgb-01",
+        "resize_long": 1280
+      },
+      "delta_floor": 0.01,
+      "ground_truth": true,
+      "window_block": 300,
+      "baseline_theta": 0.34369439275042618,
+      "latency_p95_ms": 100,
+      "service_rate_fps": 1,
+      "challenge_type_id": 118,
+      "max_model_size_mb": 30,
+      "challenge_type_version": "1.0"
+    },
+    {
+      "id": "manak0/Detect-road-signs",
+      "beta": 1,
+      "weight": 0.04,
+      "track": "public",
+      "first_block": 8439300,
+      "dataset": {
+        "type": "synthetic_r2",
+        "image_count": 164,
+        "public_split_ref": "public_starter",
+        "annotation_format": "sam3_json_v1"
+      },
+      "metrics": {
+        "pillars": {
+          "map50": 0.6,
+          "false_positive": 0.4
+        },
+        "targets": {
+          "map50": 0.9,
+          "false_positive": 0.9
+        },
+        "baselines": {
+          "map50": 0.5919211196881521,
+          "false_positive": 0.6
+        }
+      },
+      "objects": [
+        "road sign"
+      ],
+      "preproc": {
+        "fps": 5,
+        "norm": "rgb-01",
+        "resize_long": 1280
+      },
+      "delta_floor": 0.01,
+      "ground_truth": true,
+      "window_block": 300,
+      "baseline_theta": 0.37,
+      "latency_p95_ms": 100,
+      "service_rate_fps": 1,
+      "challenge_type_id": 93,
+      "max_model_size_mb": 30,
+      "challenge_type_version": "1.0"
+    },
+    {
+      "id": "manako/DetectCricketDelivery",
+      "track": "private",
+      "first_block": 8188200,
+      "beta": 1.0,
+      "weight": 0.3,
+      "window_block": 300,
+      "groundtruth_type": "cricket_delivery",
+      "eval_window": 4,
+      "metrics": {
+        "pillars": {
+          "cricket_scoring": 1.0
+        },
+        "targets": {
+          "cricket_scoring": 0.85
+        },
+        "baselines": {
+          "cricket_scoring": 0.0
+        }
+      }
+    },
+    {
+      "id": "manako/TCGGrading",
+      "track": "private",
+      "first_block": 8188200,
+      "beta": 1.0,
+      "weight": 0.1,
+      "window_block": 300,
+      "groundtruth_type": "tcg_grading",
+      "eval_window": 4,
+      "metrics": {
+        "pillars": {
+          "tcg_grading": 1.0
+        },
+        "targets": {
+          "tcg_grading": 0.85
+        },
+        "baselines": {
+          "tcg_grading": 0.0
+        }
+      }
+    },
+    {
+      "id": "manako/DetectFootballEvent",
+      "track": "private",
+      "first_block": 7886000,
+      "beta": 1.0,
+      "groundtruth_type": "soccer_action",
+      "weight": 0.3,
+      "window_block": 300,
+      "eval_window": 4,
+      "metrics": {
+        "pillars": {
+          "soccer_action": 1.0
+        },
+        "targets": {
+          "soccer_action": 0.85
+        },
+        "baselines": {
+          "soccer_action": 0.0
+        }
+      }
+    }
+  ]
+}
