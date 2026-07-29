@@ -107,6 +107,33 @@ def update_element_state(
             entry["anchor"] = anchor
 
 
+def get_due_trigger_block(entry: Dict[str, Any], block: int) -> int | None:
+    """Return the newest scheduled block crossed since the previous observation.
+
+    Chain subscriptions and RPC reconnects can skip block notifications. Keeping
+    the last observed height lets the runners catch up a crossed schedule instead
+    of requiring an exact-height read. On startup, however, we only trigger when
+    the current block is exactly scheduled, avoiding an unexpected mid-window run.
+    """
+    block = int(block)
+    tempo = max(1, int(entry["tempo"]))
+    anchor = int(entry["anchor"])
+    previous = entry.get("last_observed_block")
+
+    if previous is None:
+        due_block = block if block >= anchor and (block - anchor) % tempo == 0 else None
+    elif block > int(previous) and block >= anchor:
+        due_block = anchor + ((block - anchor) // tempo) * tempo
+        if due_block <= int(previous):
+            due_block = None
+    else:
+        due_block = None
+
+    if previous is None or block > int(previous):
+        entry["last_observed_block"] = block
+    return due_block
+
+
 async def load_manifest(path_manifest: Path | None, settings, block: int) -> Manifest:
     if path_manifest is not None:
         return Manifest.load_yaml(path_manifest)

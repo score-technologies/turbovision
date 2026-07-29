@@ -51,6 +51,7 @@ from scorevision.utils.windows import get_current_window_id, get_window_start_bl
 from scorevision.validator.central.scheduling import (
     cancel_removed_element_tasks,
     extract_element_tempos,
+    get_due_trigger_block,
     load_manifest,
     setup_shutdown_handler,
     to_pos_int,
@@ -358,17 +359,23 @@ def _trigger_scheduled_runners(element_state: Dict[str, Dict[str, Any]], block: 
         tempo = max(1, int(entry["tempo"]))
         anchor = int(entry["anchor"])
         task = entry.get("task")
-        delta = block - anchor
-        should_trigger = (delta >= 0) and (delta % tempo == 0)
+        trigger_block = get_due_trigger_block(entry, block)
 
-        if not should_trigger:
+        if trigger_block is None:
             continue
 
         if task is not None and not task.done():
-            logger.info("[RunnerLoop] element_id=%s still running; skipping trigger at block=%s", element_id, block)
+            logger.info("[RunnerLoop] element_id=%s still running; skipping trigger at block=%s", element_id, trigger_block)
         else:
-            logger.info("[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)", element_id, block, tempo, anchor)
-            entry["task"] = asyncio.create_task(runner(block_number=block, manifest=manifest, element_id=element_id))
+            if trigger_block != block:
+                logger.warning(
+                    "[RunnerLoop] Caught up missed trigger for element_id=%s scheduled_block=%s current_block=%s",
+                    element_id,
+                    trigger_block,
+                    block,
+                )
+            logger.info("[RunnerLoop] Triggering runner for element_id=%s at block=%s (tempo=%s anchor=%s)", element_id, trigger_block, tempo, anchor)
+            entry["task"] = asyncio.create_task(runner(block_number=trigger_block, manifest=manifest, element_id=element_id))
 
 
 async def runner(
@@ -768,11 +775,12 @@ async def runner_loop(path_manifest: Path | None = None):
                 subtensor = None
                 await asyncio.sleep(2.0)
                 continue
-            except (KeyError, ConnectionError, RuntimeError) as err:
+            except Exception as err:
                 logger.warning(
                     "[RunnerLoop] get_current_block error (%s: %r) → resetting subtensor",
                     type(err).__name__,
                     err,
+                    exc_info=True,
                 )
                 reset_subtensor()
                 subtensor = None
@@ -794,11 +802,12 @@ async def runner_loop(path_manifest: Path | None = None):
                     await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
                 except asyncio.TimeoutError:
                     continue
-                except (KeyError, ConnectionError, RuntimeError) as err:
+                except Exception as err:
                     logger.warning(
                         "[RunnerLoop] wait_for_block error (%s: %r); resetting subtensor",
                         type(err).__name__,
                         err,
+                        exc_info=True,
                     )
                     reset_subtensor()
                     subtensor = None
@@ -825,11 +834,12 @@ async def runner_loop(path_manifest: Path | None = None):
                 await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
             except asyncio.TimeoutError:
                 continue
-            except (KeyError, ConnectionError, RuntimeError) as err:
+            except Exception as err:
                 logger.warning(
                     "[RunnerLoop] wait_for_block error (%s: %r); resetting subtensor",
                     type(err).__name__,
                     err,
+                    exc_info=True,
                 )
                 reset_subtensor()
                 subtensor = None
@@ -840,7 +850,7 @@ async def runner_loop(path_manifest: Path | None = None):
             break
 
         except Exception as e:
-            logger.warning(
+            logger.exception(
                 "[RunnerLoop] Error: %s: %r; resetting subtensor and retrying...",
                 type(e).__name__,
                 e,
@@ -848,7 +858,7 @@ async def runner_loop(path_manifest: Path | None = None):
             reset_subtensor()
             subtensor = None
             try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
+                await asyncio.wait_for(shutdown_event.wait(), timeout=reconnect_delay)
             except asyncio.TimeoutError:
                 pass
 

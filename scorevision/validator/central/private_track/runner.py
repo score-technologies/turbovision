@@ -38,6 +38,7 @@ from scorevision.validator.central.private_track.spotcheck import PendingSpotche
 from scorevision.validator.central.scheduling import (
     cancel_removed_element_tasks,
     extract_element_tempos,
+    get_due_trigger_block,
     load_manifest,
     setup_shutdown_handler,
     update_element_state,
@@ -672,23 +673,28 @@ def _trigger_scheduled_runners(
     subtensor,
 ) -> None:
     for element_id, entry in element_state.items():
-        tempo = max(1, int(entry["tempo"]))
-        anchor = int(entry["anchor"])
         task = entry.get("task")
-        delta = block - anchor
-        should_trigger = (delta >= 0) and (delta % tempo == 0)
+        trigger_block = get_due_trigger_block(entry, block)
 
-        if not should_trigger:
+        if trigger_block is None:
             continue
 
         if task is not None and not task.done():
-            logger.info("%selement_id=%s still running; skipping at block=%s", LOG_PREFIX, element_id, block)
+            logger.info("%selement_id=%s still running; skipping at block=%s", LOG_PREFIX, element_id, trigger_block)
         else:
-            logger.info("%sTriggering challenge for element_id=%s at block=%s", LOG_PREFIX, element_id, block)
+            if trigger_block != block:
+                logger.warning(
+                    "%sCaught up missed trigger for element_id=%s scheduled_block=%s current_block=%s",
+                    LOG_PREFIX,
+                    element_id,
+                    trigger_block,
+                    block,
+                )
+            logger.info("%sTriggering challenge for element_id=%s at block=%s", LOG_PREFIX, element_id, trigger_block)
             task = asyncio.create_task(
-                _run_challenge_for_element(element_id, manifest, block, keypair, subtensor)
+                _run_challenge_for_element(element_id, manifest, trigger_block, keypair, subtensor)
             )
-            task.add_done_callback(lambda t, e=element_id, b=block: _log_runner_task_failure(t, e, b))
+            task.add_done_callback(lambda t, e=element_id, b=trigger_block: _log_runner_task_failure(t, e, b))
             entry["task"] = task
 
 
@@ -739,12 +745,13 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
                 subtensor = None
                 await asyncio.sleep(2.0)
                 continue
-            except (KeyError, ConnectionError, RuntimeError) as err:
+            except Exception as err:
                 logger.warning(
                     "%sget_current_block error (%s: %r) → resetting",
                     LOG_PREFIX,
                     type(err).__name__,
                     err,
+                    exc_info=True,
                 )
                 reset_subtensor()
                 subtensor = None
@@ -765,12 +772,13 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
                     await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
                 except asyncio.TimeoutError:
                     continue
-                except (KeyError, ConnectionError, RuntimeError) as err:
+                except Exception as err:
                     logger.warning(
                         "%swait_for_block error (%s: %r); resetting",
                         LOG_PREFIX,
                         type(err).__name__,
                         err,
+                        exc_info=True,
                     )
                     reset_subtensor()
                     subtensor = None
@@ -797,12 +805,13 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
                 await asyncio.wait_for(subtensor.wait_for_block(), timeout=wait_block_timeout)
             except asyncio.TimeoutError:
                 continue
-            except (KeyError, ConnectionError, RuntimeError) as err:
+            except Exception as err:
                 logger.warning(
                     "%swait_for_block error (%s: %r); resetting",
                     LOG_PREFIX,
                     type(err).__name__,
                     err,
+                    exc_info=True,
                 )
                 reset_subtensor()
                 subtensor = None
@@ -813,7 +822,7 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
             break
 
         except Exception as e:
-            logger.warning(
+            logger.exception(
                 "%sError: %s: %r; resetting subtensor and retrying...",
                 LOG_PREFIX,
                 type(e).__name__,
@@ -822,7 +831,7 @@ async def challenge_loop(path_manifest: Path | None = None) -> None:
             reset_subtensor()
             subtensor = None
             try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=120.0)
+                await asyncio.wait_for(shutdown_event.wait(), timeout=reconnect_delay)
             except asyncio.TimeoutError:
                 pass
 
