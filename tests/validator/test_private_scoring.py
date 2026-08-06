@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from scorevision.validator.central.private_track.scoring import (
+    _CRICKET_FIELD_WEIGHTS,
     calculate_time_decay,
     find_best_match,
     frame_to_seconds,
@@ -170,8 +171,8 @@ def test_cricket_scoring_top6_fields_perfect_match():
     score, breakdown = score_cricket_prediction_with_breakdown(prediction, prediction)
 
     # Only the 6 heaviest-weight fields are present in this fixture.
-    # Their total weight is 0.74, so a perfect match on those fields yields 0.74.
-    assert score == pytest.approx(0.74)
+    # Their total weight is 0.80, so a perfect match on those fields yields 0.80.
+    assert score == pytest.approx(0.80)
     assert breakdown["kph"] == 1.0
 
 
@@ -187,11 +188,47 @@ def test_cricket_scoring_uses_updated_private_track_field_weights():
 
     bounce_only = CricketDeliveryPrediction(bounce_x=6.0)
     score, _ = score_cricket_prediction_with_breakdown(bounce_only, ground_truth)
-    assert score == pytest.approx(0.22)
+    assert score == pytest.approx(0.23)
 
     kph_only = CricketDeliveryPrediction(kph=130.0)
     score, _ = score_cricket_prediction_with_breakdown(kph_only, ground_truth)
-    assert score == pytest.approx(0.03)
+    assert score == pytest.approx(0.04)
+
+
+def test_cricket_scoring_identifiers_and_outcomes_have_zero_weight():
+    prediction = CricketDeliveryPrediction(
+        match="match-a",
+        matchid=10,
+        inningsid=1,
+        overid=4,
+        ball_in_over=2,
+        ballid=20,
+        xlsx_overs="4.2",
+        scorecard_overs="4.2",
+        runs=3,
+        wickets=1,
+    )
+
+    score, breakdown = score_cricket_prediction_with_breakdown(prediction, prediction)
+
+    assert score == 0.0
+    zero_weight_fields = {
+        "match",
+        "matchid",
+        "inningsid",
+        "overid",
+        "ball_in_over",
+        "ballid",
+        "xlsx_overs",
+        "scorecard_overs",
+        "runs",
+        "wickets",
+    }
+    assert all(breakdown[field] == 1.0 for field in zero_weight_fields)
+
+
+def test_cricket_field_weights_sum_to_one():
+    assert sum(_CRICKET_FIELD_WEIGHTS.values()) == pytest.approx(1.0)
 
 
 def _tcg_prediction(
