@@ -51,6 +51,9 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5GE4vXbuK7Q53AgSmwdPGrRrzUmjM4415K9JsbugS2JmcMgG",
     "5F1mgNNNzFBjmGnq1i5SP6svoSxq2n9wp4WhA2DG9ttUKwD8",
     "5DjwjwAhLGnuLYXFMtP5VuCeLiczEQmctiW1FMgBDkHKzhCf",
+    "5HddqPvyeF1E5FYZTiyaKQA85mprWfoP6d3GriXvks8vJXUG",
+    "5CVBjijH1eey2KobTcQJNBSBAFX5PtvdnqXKLZWswddvphMs",
+    "5CcLYznNrKLATjs3aV8USd58wCtD6keQYqmRTrtChBGU8T8C",
 }
 
 REGISTRY_BYPASS_UIDS = {6}
