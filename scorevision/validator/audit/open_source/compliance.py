@@ -612,7 +612,7 @@ def _manifest_public_element_ids(manifest: Any) -> set[str]:
     return public_ids
 
 
-def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
+def _targets_from_winners(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     winners = snapshot.get("winners") or {}
     targets: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -645,6 +645,26 @@ def _targets_from_winners(snapshot: dict[str, Any]) -> list[tuple[str, str]]:
                         "commit_block": commit_block,
                     }
                 )
+        winner_hotkey = str(entry.get("winner_hotkey") or "").strip()
+        winner_key = (str(element_id), winner_hotkey)
+        if winner_hotkey and winner_key not in seen:
+            raw_commit_block = entry.get("winner_commit_block")
+            try:
+                winner_commit_block = (
+                    int(raw_commit_block) if raw_commit_block is not None else None
+                )
+            except Exception:
+                winner_commit_block = None
+            seen.add(winner_key)
+            targets.append(
+                {
+                    "element_id": str(element_id),
+                    "hotkey": winner_hotkey,
+                    "model": None,
+                    "revision": None,
+                    "commit_block": winner_commit_block,
+                }
+            )
     return sorted(targets, key=lambda t: (t["element_id"], t["hotkey"]))
 
 

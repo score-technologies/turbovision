@@ -142,6 +142,23 @@ def _top_rows(
     return selected[: max(0, int(top_k))]
 
 
+def _commit_block_for_hotkey(
+    rows: list[dict[str, float | int | str]],
+    hotkey: str | None,
+) -> int | None:
+    wanted_hotkey = str(hotkey or "").strip()
+    if not wanted_hotkey:
+        return None
+    for row in rows:
+        if str(row.get("hotkey") or "").strip() != wanted_hotkey:
+            continue
+        try:
+            return int(row["commit_block"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
 def _ranked_private_rows(
     rows: list[dict[str, float | int | str]],
     *,
@@ -603,15 +620,10 @@ async def weights_loop(
                                 snapshot_winner_hotkey = winner_meta.get("hotkey") if winner_meta else None
                                 snapshot_chute_id = winner_meta.get("chute_id") if winner_meta else None
                                 snapshot_slug = winner_meta.get("slug") if winner_meta else None
-                            snapshot_commit_block = None
-                            for row in [*top_3_official, *top_3_watchlist]:
-                                if row.get("hotkey") != snapshot_winner_hotkey:
-                                    continue
-                                try:
-                                    snapshot_commit_block = int(row["commit_block"])
-                                except Exception:
-                                    snapshot_commit_block = None
-                                break
+                            snapshot_commit_block = _commit_block_for_hotkey(
+                                sample_rows_all,
+                                snapshot_winner_hotkey,
+                            )
                             winner_entry = {
                                 "winner_hotkey": snapshot_winner_hotkey,
                                 "winner_commit_block": snapshot_commit_block,

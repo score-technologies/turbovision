@@ -14,6 +14,7 @@ from scorevision.validator.scoring import (
     are_similar_by_challenges,
 )
 from scorevision.validator.core.weights import (
+    _commit_block_for_hotkey,
     _inactive_miners_for_element,
     _private_ranked_weight_allocations,
     _ranked_private_rows,
@@ -214,6 +215,21 @@ def test_top_rows_orders_by_score_samples_then_uid():
     top = _top_rows(rows, min_samples=20, top_k=3)
 
     assert [row["uid"] for row in top] == [1, 2, 3]
+
+
+def test_commit_block_for_winner_outside_top_three():
+    rows = [
+        {
+            "hotkey": f"hk{uid}",
+            "uid": uid,
+            "avg_score": 1.0 - uid / 10,
+            "n_challenges": 30,
+            "commit_block": 100 + uid,
+        }
+        for uid in range(1, 5)
+    ]
+
+    assert _commit_block_for_hotkey(rows, "hk4") == 104
 
 
 def test_ranked_private_rows_adds_rank_and_weight_share():

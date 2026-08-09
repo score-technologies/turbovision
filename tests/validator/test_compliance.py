@@ -201,6 +201,29 @@ def test_targets_from_winners_uses_entry_winner_commit_block_fallback():
     assert targets[0]["commit_block"] == 321
 
 
+def test_targets_from_winners_includes_winner_outside_top_three():
+    targets = compliance_mod._targets_from_winners(
+        {
+            "winners": {
+                "E1": {
+                    "winner_hotkey": "tie-break-winner",
+                    "winner_commit_block": 444,
+                    "top_3_official": [
+                        {"hotkey": "average-1", "commit_block": 101},
+                        {"hotkey": "average-2", "commit_block": 102},
+                        {"hotkey": "average-3", "commit_block": 103},
+                    ],
+                    "top_3_watchlist": [],
+                }
+            }
+        }
+    )
+
+    by_hotkey = {target["hotkey"]: target for target in targets}
+    assert by_hotkey["tie-break-winner"]["commit_block"] == 444
+    assert set(by_hotkey) == {"average-1", "average-2", "average-3", "tie-break-winner"}
+
+
 def test_resolve_target_commit_skips_when_winner_commit_block_is_missing():
     target = {"element_id": "E1", "hotkey": "hk1"}
 
