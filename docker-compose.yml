@@ -161,6 +161,28 @@ services:
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     command: ["sv", "-v", "audit-validator", "open-source", "compliance"]
 
+  private-audit-export:
+    image: docker.io/mikhaelscore/turbovision-private-audit-export:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.private_audit_export
+    container_name: scorevision-private-audit-export
+    profiles: ["private_audit_export"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+    mem_reservation: "512m"
+    mem_limit: "1g"
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    volumes:
+      - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+    command: ["sv", "-v", "audit-validator", "private-track", "export"]
+
   prometheus:
     image: prom/prometheus:latest
     container_name: scorevision-prometheus
