@@ -86,6 +86,88 @@ def test_block_from_key_supports_snapshot_and_evaluation_names():
     assert export_mod._block_from_key("https://example.test/manako/audit/008820000.json") == 8820000
 
 
+def test_cricket_audit_keeps_only_positively_weighted_fields():
+    miner_response = {
+        "challenge_id": "123",
+        "predictions": [
+            {
+                "kph": 111,
+                "bounce_x": 7.6,
+                "stump_y": -0.7,
+                "runs": 1,
+                "wickets": 0,
+                "inningsid": 1,
+            }
+        ],
+    }
+    groundtruth = {
+        "challenge_id": 123,
+        "ground_truth": [
+            {
+                "meta": {
+                    "kph": 110.9,
+                    "bounce_x": 7.7,
+                    "stump_y": -0.71,
+                    "runs": 2,
+                    "wickets": 1,
+                    "innings_id": "1",
+                },
+                "frame": 0,
+                "action": "delivery",
+            }
+        ],
+    }
+
+    prediction, expected = export_mod._format_cricket_audit(
+        miner_response, groundtruth
+    )
+
+    assert prediction == {"kph": 111, "bounce_x": 7.6, "stump_y": -0.7}
+    assert expected == {"kph": 110.9, "bounce_x": 7.7, "stump_y": -0.71}
+
+
+def test_football_audit_normalizes_both_sides_to_frame_action():
+    miner_response = {
+        "challenge_id": "456",
+        "predictions": [
+            {"frame": 109, "action": "pass", "confidence": 0.66},
+            {"frame": 155, "action": "pass_received", "confidence": 0.84},
+        ],
+    }
+    groundtruth = {
+        "challenge_id": 456,
+        "ground_truth": [
+            {
+                "frame": 108,
+                "action": "pass",
+                "team": "AWAY",
+                "player_id": 1,
+                "meta": {"x": 0.3},
+            },
+            {
+                "frame": 154,
+                "action": "pass_received",
+                "team": "AWAY",
+                "player_id": 2,
+                "meta": {"x": 0.2},
+            },
+        ],
+    }
+
+    predictions, expected = export_mod._format_football_audit(
+        miner_response, groundtruth
+    )
+
+    assert predictions == [
+        {"frame": 109, "action": "pass"},
+        {"frame": 155, "action": "pass_received"},
+    ]
+    assert expected == [
+        {"frame": 108, "action": "pass"},
+        {"frame": 154, "action": "pass_received"},
+    ]
+
+
 def test_private_response_config_requires_read_credentials(monkeypatch):
     secret = lambda value: SimpleNamespace(get_secret_value=lambda: value)
     monkeypatch.setattr(

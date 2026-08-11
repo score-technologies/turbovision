@@ -38,6 +38,7 @@ from scorevision.utils.r2_public import (
 )
 from scorevision.utils.settings import get_settings
 from scorevision.utils.signing import build_validator_query_params
+from scorevision.validator.central.private_track.scoring import _CRICKET_FIELD_WEIGHTS
 
 logger = getLogger(__name__)
 LOG_PREFIX = "[PrivateAuditExport] "
@@ -256,6 +257,80 @@ def _shard_references(payload: dict[str, Any]) -> tuple[str, str]:
     return response_key, task_id
 
 
+def _first_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        return value[0]
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _weighted_cricket_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field_name: payload[field_name]
+        for field_name, weight in _CRICKET_FIELD_WEIGHTS.items()
+        if weight > 0 and field_name in payload
+    }
+
+
+def _format_cricket_audit(
+    miner_response: Any,
+    groundtruth: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    response_payload = miner_response if isinstance(miner_response, dict) else {}
+    prediction = _first_dict(response_payload.get("predictions"))
+
+    groundtruth_payload = groundtruth if isinstance(groundtruth, dict) else {}
+    groundtruth_entry = _first_dict(groundtruth_payload.get("ground_truth"))
+    groundtruth_meta = groundtruth_entry.get("meta") or groundtruth_entry
+    if not isinstance(groundtruth_meta, dict):
+        groundtruth_meta = {}
+
+    filtered_prediction = _weighted_cricket_fields(prediction)
+    filtered_groundtruth = _weighted_cricket_fields(groundtruth_meta)
+    if not filtered_prediction:
+        raise RuntimeError("Cricket miner response has no positively weighted fields")
+    if not filtered_groundtruth:
+        raise RuntimeError("Cricket ground truth has no positively weighted fields")
+    return filtered_prediction, filtered_groundtruth
+
+
+def _frame_actions(value: Any) -> list[dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    return [
+        {"frame": row["frame"], "action": row["action"]}
+        for row in rows
+        if isinstance(row, dict) and "frame" in row and "action" in row
+    ]
+
+
+def _format_football_audit(
+    miner_response: Any,
+    groundtruth: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    response_payload = miner_response if isinstance(miner_response, dict) else {}
+    groundtruth_payload = groundtruth if isinstance(groundtruth, dict) else {}
+    predictions = _frame_actions(response_payload.get("predictions"))
+    groundtruth_actions = _frame_actions(groundtruth_payload.get("ground_truth"))
+    if not predictions:
+        raise RuntimeError("Football miner response has no frame/action predictions")
+    if not groundtruth_actions:
+        raise RuntimeError("Football ground truth has no frame/action entries")
+    return predictions, groundtruth_actions
+
+
+def _format_audit_payloads(
+    groundtruth_type: str,
+    miner_response: Any,
+    groundtruth: Any,
+) -> tuple[Any, Any]:
+    if groundtruth_type == "cricket_delivery":
+        return _format_cricket_audit(miner_response, groundtruth)
+    if groundtruth_type == "soccer_action":
+        return _format_football_audit(miner_response, groundtruth)
+    return miner_response, groundtruth
+
+
 async def _fetch_raw_ground_truth(task_id: str, element_id: str, keypair) -> Any:
     settings = get_settings()
     api_url = (settings.PRIVATE_GT_API_URL or settings.SCOREVISION_API).rstrip("/")
@@ -340,6 +415,11 @@ async def run_private_audit_export_once(
                     label="Private responses R2",
                 ),
                 _fetch_raw_ground_truth(task_id, element_id, keypair),
+            )
+            miner_response, groundtruth = _format_audit_payloads(
+                groundtruth_type,
+                miner_response,
+                groundtruth,
             )
             result[element_id] = {
                 "miner_response": miner_response,
