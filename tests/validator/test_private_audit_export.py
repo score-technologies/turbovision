@@ -89,6 +89,9 @@ def test_block_from_key_supports_snapshot_and_evaluation_names():
 def test_cricket_audit_keeps_only_positively_weighted_fields():
     miner_response = {
         "challenge_id": "123",
+        "miner_hotkey": "hk-cricket",
+        "video_url": "https://example.test/cricket.mp4",
+        "frames": [{"frame_id": 1, "url": "https://example.test/frame.jpg"}],
         "predictions": [
             {
                 "kph": 111,
@@ -122,13 +125,20 @@ def test_cricket_audit_keeps_only_positively_weighted_fields():
         miner_response, groundtruth
     )
 
-    assert prediction == {"kph": 111, "bounce_x": 7.6, "stump_y": -0.7}
+    assert prediction == {
+        "miner_hotkey": "hk-cricket",
+        "video_url": "https://example.test/cricket.mp4",
+        "prediction": {"kph": 111, "bounce_x": 7.6, "stump_y": -0.7},
+    }
     assert expected == {"kph": 110.9, "bounce_x": 7.7, "stump_y": -0.71}
 
 
 def test_football_audit_normalizes_both_sides_to_frame_action():
     miner_response = {
         "challenge_id": "456",
+        "miner_hotkey": "hk-football",
+        "video_url": None,
+        "frames": [{"frame_id": 1, "url": "https://example.test/frame.jpg"}],
         "predictions": [
             {"frame": 109, "action": "pass", "confidence": 0.66},
             {"frame": 155, "action": "pass_received", "confidence": 0.84},
@@ -158,14 +168,24 @@ def test_football_audit_normalizes_both_sides_to_frame_action():
         miner_response, groundtruth
     )
 
-    assert predictions == [
-        {"frame": 109, "action": "pass"},
-        {"frame": 155, "action": "pass_received"},
-    ]
+    assert predictions == {
+        "miner_hotkey": "hk-football",
+        "frames": [{"frame_id": 1, "url": "https://example.test/frame.jpg"}],
+        "predictions": [
+            {"frame": 109, "action": "pass"},
+            {"frame": 155, "action": "pass_received"},
+        ],
+    }
     assert expected == [
         {"frame": 108, "action": "pass"},
         {"frame": 154, "action": "pass_received"},
     ]
+
+
+def test_miner_response_context_omits_null_asset():
+    assert export_mod._miner_response_context(
+        {"miner_hotkey": "hk", "video_url": None, "frames": None}
+    ) == {"miner_hotkey": "hk"}
 
 
 def test_private_response_config_requires_read_credentials(monkeypatch):

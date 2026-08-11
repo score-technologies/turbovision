@@ -273,6 +273,21 @@ def _weighted_cricket_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _miner_response_context(miner_response: dict[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    miner_hotkey = miner_response.get("miner_hotkey")
+    if miner_hotkey:
+        context["miner_hotkey"] = miner_hotkey
+
+    video_url = miner_response.get("video_url")
+    frames = miner_response.get("frames")
+    if video_url:
+        context["video_url"] = video_url
+    elif frames:
+        context["frames"] = frames
+    return context
+
+
 def _format_cricket_audit(
     miner_response: Any,
     groundtruth: Any,
@@ -292,7 +307,9 @@ def _format_cricket_audit(
         raise RuntimeError("Cricket miner response has no positively weighted fields")
     if not filtered_groundtruth:
         raise RuntimeError("Cricket ground truth has no positively weighted fields")
-    return filtered_prediction, filtered_groundtruth
+    formatted_response = _miner_response_context(response_payload)
+    formatted_response["prediction"] = filtered_prediction
+    return formatted_response, filtered_groundtruth
 
 
 def _frame_actions(value: Any) -> list[dict[str, Any]]:
@@ -307,7 +324,7 @@ def _frame_actions(value: Any) -> list[dict[str, Any]]:
 def _format_football_audit(
     miner_response: Any,
     groundtruth: Any,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     response_payload = miner_response if isinstance(miner_response, dict) else {}
     groundtruth_payload = groundtruth if isinstance(groundtruth, dict) else {}
     predictions = _frame_actions(response_payload.get("predictions"))
@@ -316,7 +333,9 @@ def _format_football_audit(
         raise RuntimeError("Football miner response has no frame/action predictions")
     if not groundtruth_actions:
         raise RuntimeError("Football ground truth has no frame/action entries")
-    return predictions, groundtruth_actions
+    formatted_response = _miner_response_context(response_payload)
+    formatted_response["predictions"] = predictions
+    return formatted_response, groundtruth_actions
 
 
 def _format_audit_payloads(
