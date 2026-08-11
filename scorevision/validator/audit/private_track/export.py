@@ -112,8 +112,11 @@ async def load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
 
 async def _private_manifest_elements(block: int) -> dict[str, str]:
     settings = get_settings()
+    index_url = settings.PRIVATE_AUDIT_MANIFEST_INDEX_URL
+    if not index_url:
+        raise RuntimeError("PRIVATE_AUDIT_MANIFEST_INDEX_URL is not configured")
     manifest = await load_manifest_from_public_index(
-        settings.URL_MANIFEST,
+        index_url,
         block_number=block,
         cache_dir=settings.SCOREVISION_CACHE_DIR,
     )
@@ -124,6 +127,13 @@ async def _private_manifest_elements(block: int) -> dict[str, str]:
         element_id = str(element.id)
         gt_type = getattr(element, "groundtruth_type", None)
         private[element_id] = str(getattr(gt_type, "value", gt_type) or "soccer_action")
+    logger.info(
+        "%sManifest source=%s block=%d private_elements=%s",
+        LOG_PREFIX,
+        index_url,
+        block,
+        sorted(private),
+    )
     return private
 
 

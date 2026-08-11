@@ -1,4 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from scorevision.validator.audit.private_track import export as export_mod
 
@@ -88,3 +91,33 @@ def test_private_response_config_requires_read_credentials(monkeypatch):
     config = export_mod._private_responses_config()
     assert config.access_key_id == "read-id"
     assert config.secret_access_key == "read-secret"
+
+
+@pytest.mark.asyncio
+async def test_private_manifest_uses_dedicated_index(monkeypatch, tmp_path):
+    settings = SimpleNamespace(
+        PRIVATE_AUDIT_MANIFEST_INDEX_URL="https://private.example/manifest/index.json",
+        SCOREVISION_CACHE_DIR=tmp_path,
+    )
+    manifest = SimpleNamespace(
+        elements=[
+            SimpleNamespace(
+                id="private/E1",
+                track="private",
+                groundtruth_type=SimpleNamespace(value="soccer_action"),
+            ),
+            SimpleNamespace(id="public/E2", track="public", groundtruth_type=None),
+        ]
+    )
+    load_manifest = AsyncMock(return_value=manifest)
+    monkeypatch.setattr(export_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(export_mod, "load_manifest_from_public_index", load_manifest)
+
+    result = await export_mod._private_manifest_elements(123)
+
+    assert result == {"private/E1": "soccer_action"}
+    load_manifest.assert_awaited_once_with(
+        "https://private.example/manifest/index.json",
+        block_number=123,
+        cache_dir=tmp_path,
+    )
