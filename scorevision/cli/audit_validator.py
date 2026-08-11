@@ -371,6 +371,33 @@ def pt_spotcheck_cmd(
         ))
 
 
+@private_track.command("export")
+@click.option("--once", is_flag=True, help="Run one private audit export and exit")
+@click.option(
+    "--trigger-block",
+    default=None,
+    type=int,
+    help="Block used as the output filename with --once",
+)
+def private_export_cmd(once: bool, trigger_block: int | None):
+    from scorevision.validator.audit.private_track.export import (
+        private_audit_export_loop,
+        run_private_audit_export_once,
+        setup_shutdown_handler,
+    )
+    setup_logging()
+    if once:
+        asyncio.run(run_private_audit_export_once(trigger_block))
+        return
+
+    async def run_loop():
+        setup_shutdown_handler()
+        await private_audit_export_loop()
+
+    logger.info("Starting block-scheduled private audit export loop")
+    asyncio.run(run_loop())
+
+
 @audit_validator.command("start")
 @click.option("--tail", default=28800, help="Tail blocks for data fetching")
 @click.option("--m-min", default=25, help="Minimum samples per miner")
@@ -459,4 +486,3 @@ def start_all_cmd(
             proc.join(timeout=5)
 
     logger.info("Audit validator shutdown complete")
-
