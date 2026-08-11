@@ -75,6 +75,17 @@ def test_due_trigger_block_catches_up_to_latest_interval():
     assert export_mod._due_trigger_block(14550, 100, 7200) == 14500
 
 
+def test_block_from_key_supports_snapshot_and_evaluation_names():
+    assert export_mod._block_from_key("manako/winners/008818800.json") == 8818800
+    assert (
+        export_mod._block_from_key(
+            "manako/E/hk/000000001/evaluation/008795400-64734.json"
+        )
+        == 8795400
+    )
+    assert export_mod._block_from_key("https://example.test/manako/audit/008820000.json") == 8820000
+
+
 def test_private_response_config_requires_read_credentials(monkeypatch):
     secret = lambda value: SimpleNamespace(get_secret_value=lambda: value)
     monkeypatch.setattr(

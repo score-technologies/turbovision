@@ -10,7 +10,9 @@ import random
 import signal
 from json import dumps, loads
 from logging import getLogger
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -56,6 +58,16 @@ def _run_key(trigger_block: int) -> str:
     return f"{_prefix()}/{max(0, int(trigger_block)):09d}.json"
 
 
+def _block_from_key(key: str) -> int | None:
+    """Extract a block from both `<block>.json` and `<block>-<id>.json`."""
+    raw_path = urlparse(key).path if "://" in key else key
+    stem = Path(raw_path).stem
+    try:
+        return int(stem.split("-", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def _private_responses_config() -> R2Config:
     settings = get_settings()
     return R2Config(
@@ -99,7 +111,7 @@ async def load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
     keys = await _fetch_index_keys(index_url)
     if not keys:
         raise RuntimeError("Winners index is empty")
-    latest_key = max(keys, key=lambda key: extract_block_from_key(key) or -1)
+    latest_key = max(keys, key=lambda key: _block_from_key(key) or -1)
     if latest_key.startswith(("http://", "https://")):
         snapshot_url = latest_key
     else:
@@ -107,7 +119,7 @@ async def load_latest_winners_snapshot() -> tuple[int, dict[str, Any]]:
     snapshot = await fetch_json_from_url(snapshot_url)
     if not isinstance(snapshot, dict):
         raise RuntimeError(f"Invalid winners snapshot: {latest_key}")
-    return int(snapshot.get("block") or extract_block_from_key(latest_key) or 0), snapshot
+    return int(snapshot.get("block") or _block_from_key(latest_key) or 0), snapshot
 
 
 async def _private_manifest_elements(block: int) -> dict[str, str]:
@@ -367,7 +379,7 @@ async def _last_export_block() -> int | None:
     except Exception as exc:
         logger.info("%sNo previous export index available: %s", LOG_PREFIX, exc)
         return None
-    blocks = [extract_block_from_key(key) for key in data] if isinstance(data, list) else []
+    blocks = [_block_from_key(key) for key in data] if isinstance(data, list) else []
     valid = [block for block in blocks if block is not None]
     return max(valid) if valid else None
 
