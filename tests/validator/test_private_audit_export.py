@@ -86,6 +86,15 @@ def test_block_from_key_supports_snapshot_and_evaluation_names():
     assert export_mod._block_from_key("https://example.test/manako/audit/008820000.json") == 8820000
 
 
+def test_element_audit_keys_use_one_folder_per_safe_element_id():
+    assert export_mod._element_run_key("manako/DetectCricketDelivery", 8818800) == (
+        "manako/audit/manako_DetectCricketDelivery/008818800.json"
+    )
+    assert export_mod._element_index_key("manako/DetectCricketDelivery") == (
+        "manako/audit/manako_DetectCricketDelivery/index.json"
+    )
+
+
 def test_cricket_audit_keeps_only_positively_weighted_fields():
     miner_response = {
         "challenge_id": "123",
@@ -234,3 +243,51 @@ async def test_private_manifest_uses_dedicated_index(monkeypatch, tmp_path):
         block_number=123,
         cache_dir=tmp_path,
     )
+
+
+@pytest.mark.asyncio
+async def test_store_exports_writes_one_file_and_index_per_element(monkeypatch):
+    client = SimpleNamespace(put_object=AsyncMock())
+
+    class ClientContext:
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    ensure_index = AsyncMock(return_value=True)
+    add_index_key = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        export_mod,
+        "get_settings",
+        lambda: SimpleNamespace(PRIVATE_AUDIT_EXPORT_PREFIX="manako/audit"),
+    )
+    monkeypatch.setattr(
+        export_mod,
+        "central_r2_config",
+        lambda settings: SimpleNamespace(bucket="public-bucket"),
+    )
+    monkeypatch.setattr(
+        export_mod,
+        "_client_factory",
+        lambda config, message: lambda: ClientContext(),
+    )
+    monkeypatch.setattr(export_mod, "ensure_index_exists", ensure_index)
+    monkeypatch.setattr(export_mod, "add_index_key_if_new", add_index_key)
+
+    keys = await export_mod._store_exports(
+        8818800,
+        {
+            "manako/DetectCricketDelivery": {"miner_response": {}, "groundtruth": {}},
+            "manako/DetectFootballEvent": {"miner_response": {}, "groundtruth": []},
+        },
+    )
+
+    assert keys == [
+        "manako/audit/manako_DetectCricketDelivery/008818800.json",
+        "manako/audit/manako_DetectFootballEvent/008818800.json",
+    ]
+    assert client.put_object.await_count == 2
+    assert ensure_index.await_count == 3
+    assert add_index_key.await_count == 4

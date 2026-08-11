@@ -55,8 +55,20 @@ def _index_key() -> str:
     return f"{_prefix()}/index.json"
 
 
-def _run_key(trigger_block: int) -> str:
-    return f"{_prefix()}/{max(0, int(trigger_block)):09d}.json"
+def _safe_element_id(element_id: str) -> str:
+    return str(element_id).strip().replace("/", "_")
+
+
+def _element_prefix(element_id: str) -> str:
+    return f"{_prefix()}/{_safe_element_id(element_id)}"
+
+
+def _element_index_key(element_id: str) -> str:
+    return f"{_element_prefix(element_id)}/index.json"
+
+
+def _element_run_key(element_id: str, trigger_block: int) -> str:
+    return f"{_element_prefix(element_id)}/{max(0, int(trigger_block)):09d}.json"
 
 
 def _block_from_key(key: str) -> int | None:
@@ -365,30 +377,50 @@ async def _fetch_raw_ground_truth(task_id: str, element_id: str, keypair) -> Any
         return response.json()
 
 
-async def _store_export(trigger_block: int, payload: dict[str, Any]) -> str:
+async def _store_exports(
+    trigger_block: int,
+    payloads_by_element: dict[str, dict[str, Any]],
+) -> list[str]:
     config = central_r2_config(get_settings())
     if not config.bucket:
         raise RuntimeError("Public score R2 bucket is not configured")
     factory = _client_factory(config, "Public score R2 credentials are not configured")
-    index_key = _index_key()
+    root_index_key = _index_key()
     await ensure_index_exists(
-        client_factory=factory, bucket=config.bucket, index_key=index_key
-    )
-    key = _run_key(trigger_block)
-    async with factory() as client:
-        await client.put_object(
-            Bucket=config.bucket,
-            Key=key,
-            Body=dumps(payload, separators=(",", ":")),
-            ContentType="application/json",
-        )
-    await add_index_key_if_new(
         client_factory=factory,
         bucket=config.bucket,
-        key=key,
-        index_key=index_key,
+        index_key=root_index_key,
     )
-    return key
+    stored_keys: list[str] = []
+    for element_id, payload in payloads_by_element.items():
+        element_index_key = _element_index_key(element_id)
+        await ensure_index_exists(
+            client_factory=factory,
+            bucket=config.bucket,
+            index_key=element_index_key,
+        )
+        key = _element_run_key(element_id, trigger_block)
+        async with factory() as client:
+            await client.put_object(
+                Bucket=config.bucket,
+                Key=key,
+                Body=dumps(payload, separators=(",", ":")),
+                ContentType="application/json",
+            )
+        await add_index_key_if_new(
+            client_factory=factory,
+            bucket=config.bucket,
+            key=key,
+            index_key=element_index_key,
+        )
+        await add_index_key_if_new(
+            client_factory=factory,
+            bucket=config.bucket,
+            key=key,
+            index_key=root_index_key,
+        )
+        stored_keys.append(key)
+    return stored_keys
 
 
 async def run_private_audit_export_once(
@@ -464,8 +496,8 @@ async def run_private_audit_export_once(
         )
     if not result:
         raise RuntimeError("Manifest contains no private elements to export")
-    key = await _store_export(trigger_block, result)
-    logger.info("%sStored %s with %d elements", LOG_PREFIX, key, len(result))
+    keys = await _store_exports(trigger_block, result)
+    logger.info("%sStored %d element audit files: %s", LOG_PREFIX, len(keys), keys)
     return result
 
 
