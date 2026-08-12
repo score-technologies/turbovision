@@ -13,9 +13,11 @@ from scorevision.validator.payload import (
 )
 from scorevision.validator.scoring import (
     aggregate_challenge_scores_by_miner,
+    aggregate_challenge_score_batches_by_miner,
     are_similar_by_challenges,
     days_to_blocks,
     pick_winner_with_tiebreak,
+    select_deterministic_historical_challenges,
     stake_of,
     weighted_median,
 )
@@ -55,9 +57,11 @@ __all__ = [
     "extract_miner_and_score",
     "extract_miner_meta",
     "aggregate_challenge_scores_by_miner",
+    "aggregate_challenge_score_batches_by_miner",
     "are_similar_by_challenges",
     "days_to_blocks",
     "pick_winner_with_tiebreak",
+    "select_deterministic_historical_challenges",
     "stake_of",
     "weighted_median",
     "get_winner_for_element",

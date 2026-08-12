@@ -6,6 +6,7 @@ from scorevision.utils.cloudflare_helpers import (
     _inactive_miners_key,
     _lane_index_key,
     _select_lane_specific_index_url,
+    _sink_sv_at_with_retries,
     emit_shard,
     put_inactive_miners,
 )
@@ -120,6 +121,38 @@ async def test_put_inactive_miners_merges_with_existing_list(monkeypatch):
 
 def test_exception_summary_includes_type_for_empty_message():
     assert _exception_summary(TimeoutError()) == "TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_score_shard_write_retries_twice(monkeypatch):
+    sink_mock = AsyncMock(
+        side_effect=[
+            TimeoutError("first failure"),
+            ConnectionError("second failure"),
+            ("5Fhotkey", [{"signature": "0xdeadbeef"}]),
+        ]
+    )
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(cloudflare_helpers, "sink_sv_at", sink_mock)
+    monkeypatch.setattr(cloudflare_helpers.asyncio, "sleep", sleep_mock)
+
+    result = await _sink_sv_at_with_retries(
+        "manako/element/hotkey/evaluation/000000001-challenge.json",
+        [{"payload": {"composite_score": 0.8}}],
+        lane="private",
+        timeout_s=1.0,
+        rid="element:hotkey:challenge:test",
+    )
+
+    assert result == ("5Fhotkey", [{"signature": "0xdeadbeef"}])
+    assert sink_mock.await_count == 3
+    assert [call.args[0] for call in sink_mock.await_args_list] == [
+        "manako/element/hotkey/evaluation/000000001-challenge.json"
+    ] * 3
+    assert [call.kwargs["lane"] for call in sink_mock.await_args_list] == [
+        "private"
+    ] * 3
+    assert [call.args[0] for call in sleep_mock.await_args_list] == [0.5, 1.0]
 
 
 @pytest.mark.asyncio

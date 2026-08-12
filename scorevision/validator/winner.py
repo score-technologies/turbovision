@@ -28,7 +28,7 @@ from scorevision.validator.payload import (
     extract_miner_meta,
 )
 from scorevision.validator.scoring import (
-    aggregate_challenge_scores_by_miner,
+    aggregate_challenge_score_batches_by_miner,
     days_to_blocks,
     pick_winner_with_tiebreak,
 )
@@ -48,6 +48,50 @@ def _drop_initial_zero_scores(scores: list[float], *, max_dropped: int = 5) -> t
     if dropped <= 0:
         return list(scores), 0
     return list(scores[dropped:]), dropped
+
+
+def _drop_initial_zero_challenge_rows(
+    rows: list[tuple[str, float]],
+    *,
+    max_dropped: int = 5,
+) -> tuple[list[tuple[str, float]], int]:
+    """Drop only the leading zero-score challenge rows, preserving their IDs."""
+    _filtered_scores, dropped = _drop_initial_zero_scores(
+        [float(score) for _challenge_id, score in rows],
+        max_dropped=max_dropped,
+    )
+    return list(rows[dropped:]), dropped
+
+
+def _apply_recent_commit_initial_zero_challenge_filter(
+    *,
+    challenge_scores_by_validator_miner: dict[tuple[str, int], deque],
+    uid_to_hk: dict[int, str],
+    first_commit_block_by_hk: dict[str, int],
+    max_block: int | None,
+    recent_commit_blocks: int,
+) -> tuple[dict[tuple[str, int], deque], int]:
+    """Apply the score warm-up filter to ordered tie-break challenge rows."""
+    filtered: dict[tuple[str, int], deque] = {}
+    dropped_total = 0
+
+    for challenge_key, challenge_rows in challenge_scores_by_validator_miner.items():
+        _validator_hk, miner_uid = challenge_key
+        miner_hk = uid_to_hk.get(miner_uid, "")
+        commit_block = first_commit_block_by_hk.get(miner_hk) if miner_hk else None
+        should_filter = (
+            max_block is not None
+            and commit_block is not None
+            and int(max_block) - int(commit_block) <= int(recent_commit_blocks)
+        )
+
+        rows = list(challenge_rows)
+        if should_filter:
+            rows, dropped = _drop_initial_zero_challenge_rows(rows)
+            dropped_total += dropped
+        filtered[challenge_key] = deque(rows, maxlen=challenge_rows.maxlen)
+
+    return filtered, dropped_total
 
 
 def _extract_sample_block(line: dict, payload: dict, telemetry: dict) -> int | None:
@@ -229,7 +273,7 @@ async def collect_recent_challenge_scores_by_validator_miner(
     element_id: str,
     current_window_id: str,
     lane: str = "public",
-    K: int = 25,
+    K: int | None = 25,
     eligible_uids: set[int] | None = None,
     excluded_uids: set[int] | None = None,
     compliance_failure_tuples: set[ComplianceFailureTuple] | None = None,
@@ -580,6 +624,7 @@ async def get_winner_for_element(
             if validator_uid is not None:
                 excluded_uids_for_tiebreak.add(validator_uid)
 
+            challenge_batch_size = settings.SCOREVISION_WINDOW_K_PER_VALIDATOR
             challenge_scores_by_validator_miner = await collect_recent_challenge_scores_by_validator_miner(
                 tail=tail,
                 validator_indexes=validator_indexes,
@@ -587,15 +632,42 @@ async def get_winner_for_element(
                 element_id=element_id,
                 current_window_id=current_window_id,
                 lane=lane,
-                K=settings.SCOREVISION_WINDOW_K_PER_VALIDATOR,
+                K=None,
                 eligible_uids=None,
                 excluded_uids=excluded_uids_for_tiebreak,
                 compliance_failure_tuples=compliance_failure_tuples,
             )
-            challenge_scores_by_miner = aggregate_challenge_scores_by_miner(challenge_scores_by_validator_miner)
+            (
+                challenge_scores_by_validator_miner,
+                tiebreak_warmup_zeros_dropped,
+            ) = _apply_recent_commit_initial_zero_challenge_filter(
+                challenge_scores_by_validator_miner=challenge_scores_by_validator_miner,
+                uid_to_hk=uid_to_hk,
+                first_commit_block_by_hk=first_commit_block_by_hk,
+                max_block=max_observed_block,
+                recent_commit_blocks=recent_commit_blocks,
+            )
+            if tiebreak_warmup_zeros_dropped:
+                logger.info(
+                    "[window-tiebreak] Element=%s | Dropped %d initial zero-score challenge rows",
+                    element_id,
+                    tiebreak_warmup_zeros_dropped,
+                )
+            (
+                recent_challenge_scores_by_miner,
+                historical_challenge_scores_by_miner,
+            ) = aggregate_challenge_score_batches_by_miner(
+                challenge_scores_by_validator_miner,
+                batch_size=challenge_batch_size,
+            )
 
             additional_tiebreak_uids = {
-                uid for uid in challenge_scores_by_miner.keys() if uid not in excluded_uids_for_tiebreak
+                uid
+                for uid in (
+                    recent_challenge_scores_by_miner.keys()
+                    | historical_challenge_scores_by_miner.keys()
+                )
+                if uid not in excluded_uids_for_tiebreak
             }
             if additional_tiebreak_uids:
                 candidate_uids.update(additional_tiebreak_uids)
@@ -614,7 +686,7 @@ async def get_winner_for_element(
                 candidate_hotkeys={uid_to_hk[uid] for uid in candidate_uids if uid in uid_to_hk},
                 backfill_allowed_hotkeys={
                     uid_to_hk[uid]
-                    for uid in challenge_scores_by_miner.keys()
+                    for uid in recent_challenge_scores_by_miner.keys()
                     if uid in uid_to_hk
                 },
                 first_block=first_block,
@@ -622,7 +694,10 @@ async def get_winner_for_element(
             final_uid = pick_winner_with_tiebreak(
                 winner_uid,
                 uid_to_hk=uid_to_hk,
-                challenge_scores_by_miner=challenge_scores_by_miner,
+                recent_challenge_scores_by_miner=recent_challenge_scores_by_miner,
+                historical_challenge_scores_by_miner=historical_challenge_scores_by_miner,
+                current_window_id=current_window_id,
+                historical_sample_size=challenge_batch_size,
                 candidate_uids=candidate_uids,
                 delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
                 delta_rel=adaptive_delta_rel,
