@@ -702,7 +702,7 @@ async def get_winner_for_element(
                 delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
                 delta_rel=adaptive_delta_rel,
                 first_commit_block_by_hk=first_commit_block_by_hk_tiebreak,
-                min_common_challenges=6,
+                min_common_challenges=8,
             )
             if final_uid != winner_uid:
                 logger.info(
