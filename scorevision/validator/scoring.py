@@ -1,4 +1,5 @@
 from collections import deque
+from hashlib import sha256
 from logging import getLogger
 from statistics import median
 from scorevision.utils.settings import get_settings
@@ -162,37 +163,101 @@ def aggregate_challenge_scores_by_miner(
     return result
 
 
+def aggregate_challenge_score_batches_by_miner(
+    challenge_scores_by_validator_miner: dict[tuple[str, int], deque],
+    *,
+    batch_size: int,
+) -> tuple[dict[int, dict[str, float]], dict[int, dict[str, float]]]:
+    """Return each miner's recent batch and complete evaluation-window history."""
+    recent: dict[int, dict[str, float]] = {}
+    history: dict[int, dict[str, float]] = {}
+    size = max(1, int(batch_size))
+
+    for (_validator_hk, miner_uid), dq in challenge_scores_by_validator_miner.items():
+        rows = list(dq)
+        recent_rows = rows[-size:]
+
+        recent.setdefault(miner_uid, {})
+        history.setdefault(miner_uid, {})
+        for challenge_id, score in recent_rows:
+            recent[miner_uid][challenge_id] = float(score)
+        for challenge_id, score in rows:
+            history[miner_uid][challenge_id] = float(score)
+
+    return recent, history
+
+
+def select_deterministic_historical_challenges(
+    winner_history: dict[str, float],
+    candidate_history: dict[str, float],
+    *,
+    excluded_challenge_ids: set[str],
+    current_window_id: str,
+    sample_size: int,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Select the same pseudo-random common history on every validator."""
+    common_ids = (
+        set(winner_history)
+        & set(candidate_history)
+    ).difference(excluded_challenge_ids)
+    ranked_ids = sorted(
+        common_ids,
+        key=lambda challenge_id: (
+            sha256(f"{current_window_id}:{challenge_id}".encode("utf-8")).digest(),
+            challenge_id,
+        ),
+    )
+    selected_ids = ranked_ids[: max(1, int(sample_size))]
+    return (
+        {challenge_id: winner_history[challenge_id] for challenge_id in selected_ids},
+        {challenge_id: candidate_history[challenge_id] for challenge_id in selected_ids},
+    )
+
+
 def pick_winner_with_tiebreak(
     winner_uid: int,
     uid_to_hk: dict[int, str],
-    challenge_scores_by_miner: dict[int, dict[str, float]],
-    candidate_uids: set[int],
+    challenge_scores_by_miner: dict[int, dict[str, float]] | None = None,
+    candidate_uids: set[int] | None = None,
     *,
+    recent_challenge_scores_by_miner: dict[int, dict[str, float]] | None = None,
+    historical_challenge_scores_by_miner: dict[int, dict[str, float]] | None = None,
+    current_window_id: str = "",
+    historical_sample_size: int = 10,
     delta_abs: float,
     delta_rel: float,
     first_commit_block_by_hk: dict[str, int],
     min_common_challenges: int = 5,
 ) -> int:
-    if winner_uid not in challenge_scores_by_miner:
+    legacy_single_batch = recent_challenge_scores_by_miner is None
+    if recent_challenge_scores_by_miner is None:
+        recent_challenge_scores_by_miner = challenge_scores_by_miner or {}
+    if historical_challenge_scores_by_miner is None:
+        historical_challenge_scores_by_miner = (
+            recent_challenge_scores_by_miner if legacy_single_batch else {}
+        )
+    candidate_uids = set(candidate_uids or set())
+
+    if winner_uid not in recent_challenge_scores_by_miner:
         return winner_uid
-    winner_scores = challenge_scores_by_miner[winner_uid]
+    winner_recent_scores = recent_challenge_scores_by_miner[winner_uid]
     similar_uids = [winner_uid]
     for miner_uid in candidate_uids:
         if miner_uid == winner_uid:
             continue
-        scores = challenge_scores_by_miner.get(miner_uid)
-        if not scores:
+        recent_scores = recent_challenge_scores_by_miner.get(miner_uid)
+        if not recent_scores:
             continue
-        is_similar, similarity_debug = _are_similar_by_challenges_debug(
-            winner_scores,
-            scores,
+        recent_is_similar, recent_debug = _are_similar_by_challenges_debug(
+            winner_recent_scores,
+            recent_scores,
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=min_common_challenges,
         )
 
         logger.info(
-            "[window-tiebreak] compare winner uid=%d hk=%s vs uid=%d hk=%s -> "
+            "[window-tiebreak] recent-batch winner uid=%d hk=%s vs uid=%d hk=%s -> "
             "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
             "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
             "failed_examples=%s",
@@ -200,18 +265,65 @@ def pick_winner_with_tiebreak(
             uid_to_hk.get(winner_uid, ""),
             miner_uid,
             uid_to_hk.get(miner_uid, ""),
-            is_similar,
-            similarity_debug.get("reason"),
-            similarity_debug.get("all_challenges"),
-            similarity_debug.get("compared_challenges"),
-            similarity_debug.get("min_common_challenges"),
-            similarity_debug.get("failed_score_challenges"),
-            similarity_debug.get("max_abs_diff"),
-            similarity_debug.get("max_abs_diff_threshold"),
-            similarity_debug.get("max_abs_diff_challenge_id"),
-            similarity_debug.get("failed_examples"),
+            recent_is_similar,
+            recent_debug.get("reason"),
+            recent_debug.get("all_challenges"),
+            recent_debug.get("compared_challenges"),
+            recent_debug.get("min_common_challenges"),
+            recent_debug.get("failed_score_challenges"),
+            recent_debug.get("max_abs_diff"),
+            recent_debug.get("max_abs_diff_threshold"),
+            recent_debug.get("max_abs_diff_challenge_id"),
+            recent_debug.get("failed_examples"),
         )
-        if is_similar:
+        if not recent_is_similar:
+            continue
+        if legacy_single_batch:
+            similar_uids.append(miner_uid)
+            continue
+
+        winner_history = historical_challenge_scores_by_miner.get(winner_uid)
+        candidate_history = historical_challenge_scores_by_miner.get(miner_uid)
+        if not winner_history or not candidate_history:
+            continue
+        excluded_recent_ids = set(winner_recent_scores) | set(recent_scores)
+        winner_historical_sample, candidate_historical_sample = (
+            select_deterministic_historical_challenges(
+                winner_history,
+                candidate_history,
+                excluded_challenge_ids=excluded_recent_ids,
+                current_window_id=current_window_id,
+                sample_size=historical_sample_size,
+            )
+        )
+        historical_is_similar, historical_debug = _are_similar_by_challenges_debug(
+            winner_historical_sample,
+            candidate_historical_sample,
+            delta_abs=delta_abs,
+            delta_rel=delta_rel,
+            min_common_challenges=min_common_challenges,
+        )
+        logger.info(
+            "[window-tiebreak] historical-sample winner uid=%d hk=%s vs uid=%d hk=%s -> "
+            "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
+            "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
+            "failed_examples=%s",
+            winner_uid,
+            uid_to_hk.get(winner_uid, ""),
+            miner_uid,
+            uid_to_hk.get(miner_uid, ""),
+            historical_is_similar,
+            historical_debug.get("reason"),
+            historical_debug.get("all_challenges"),
+            historical_debug.get("compared_challenges"),
+            historical_debug.get("min_common_challenges"),
+            historical_debug.get("failed_score_challenges"),
+            historical_debug.get("max_abs_diff"),
+            historical_debug.get("max_abs_diff_threshold"),
+            historical_debug.get("max_abs_diff_challenge_id"),
+            historical_debug.get("failed_examples"),
+        )
+        if historical_is_similar:
             similar_uids.append(miner_uid)
     if len(similar_uids) == 1:
         logger.info("[window-tiebreak] No similar miners found; provisional winner %d wins", winner_uid)

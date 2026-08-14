@@ -302,6 +302,37 @@ async def sink_sv_at(
     return hk, signed
 
 
+async def _sink_sv_at_with_retries(
+    key: str,
+    lines: list[dict],
+    *,
+    lane: str,
+    timeout_s: float,
+    rid: str,
+    retries: int = 2,
+) -> tuple[str, list[dict]]:
+    """Write one score shard, retrying transient sink failures in isolation."""
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.wait_for(
+                sink_sv_at(key, lines, lane=lane), timeout=timeout_s
+            )
+        except Exception as exc:
+            if attempt >= retries:
+                raise
+            delay_s = 0.5 * (2**attempt)
+            logger.warning(
+                "[emit:%s] score shard write failed (%s); retrying in %.1fs "
+                "(attempt %d/%d)",
+                rid,
+                exc,
+                delay_s,
+                attempt + 2,
+                retries + 1,
+            )
+            await asyncio.sleep(delay_s)
+
+
 async def emit_shard(
     slug: str,
     challenge: SVChallenge,
@@ -552,8 +583,12 @@ async def emit_shard(
 
     try:
         logger.info(f"[emit:{rid}] writing evaluation shard to {eval_key}")
-        hk, signed_lines = await asyncio.wait_for(
-            sink_sv_at(eval_key, [shard_line], lane=lane), timeout=timeout_s
+        hk, signed_lines = await _sink_sv_at_with_retries(
+            eval_key,
+            [shard_line],
+            lane=lane,
+            timeout_s=timeout_s,
+            rid=rid,
         )
     except asyncio.TimeoutError:
         logger.error(f"[emit:{rid}] sink_sv_at timed out after {timeout_s}s")

@@ -1,5 +1,9 @@
+from collections import deque
+
 from scorevision.validator.winner import (
+    _apply_recent_commit_initial_zero_challenge_filter,
     _apply_recent_commit_initial_zero_filter,
+    _drop_initial_zero_challenge_rows,
     _drop_initial_zero_scores,
     _extract_sample_commit_block,
     _extract_sample_block,
@@ -39,6 +43,70 @@ def test_drop_initial_zero_scores_caps_at_five():
     filtered, dropped = _drop_initial_zero_scores([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8])
     assert filtered == [0.0, 0.8]
     assert dropped == 5
+
+
+def test_drop_initial_zero_challenge_rows_only_removes_zero_prefix():
+    filtered, dropped = _drop_initial_zero_challenge_rows(
+        [
+            ("c1", 0.0),
+            ("c2", 0.0),
+            ("c3", 0.8),
+            ("c4", 0.0),
+            ("c5", 0.9),
+        ]
+    )
+
+    assert filtered == [("c3", 0.8), ("c4", 0.0), ("c5", 0.9)]
+    assert dropped == 2
+
+
+def test_drop_initial_zero_challenge_rows_caps_at_five():
+    filtered, dropped = _drop_initial_zero_challenge_rows(
+        [(f"c{i}", 0.0) for i in range(1, 7)] + [("c7", 0.8)]
+    )
+
+    assert filtered == [("c6", 0.0), ("c7", 0.8)]
+    assert dropped == 5
+
+
+def test_tiebreak_zero_filter_only_applies_to_recent_commitments():
+    histories = {
+        ("validator", 1): deque([("c1", 0.0), ("c2", 0.0), ("c3", 0.8)]),
+        ("validator", 2): deque([("c1", 0.0), ("c2", 0.0), ("c3", 0.8)]),
+    }
+
+    filtered, dropped = _apply_recent_commit_initial_zero_challenge_filter(
+        challenge_scores_by_validator_miner=histories,
+        uid_to_hk={1: "recent-hk", 2: "old-hk"},
+        first_commit_block_by_hk={"recent-hk": 95, "old-hk": 20},
+        max_block=100,
+        recent_commit_blocks=10,
+    )
+
+    assert list(filtered[("validator", 1)]) == [("c3", 0.8)]
+    assert list(filtered[("validator", 2)]) == [
+        ("c1", 0.0),
+        ("c2", 0.0),
+        ("c3", 0.8),
+    ]
+    assert dropped == 2
+
+
+def test_tiebreak_zero_filter_keeps_zeros_when_commit_block_is_unknown():
+    histories = {
+        ("validator", 1): deque([("c1", 0.0), ("c2", 0.8)]),
+    }
+
+    filtered, dropped = _apply_recent_commit_initial_zero_challenge_filter(
+        challenge_scores_by_validator_miner=histories,
+        uid_to_hk={1: "unknown-hk"},
+        first_commit_block_by_hk={},
+        max_block=100,
+        recent_commit_blocks=10,
+    )
+
+    assert list(filtered[("validator", 1)]) == [("c1", 0.0), ("c2", 0.8)]
+    assert dropped == 0
 
 
 def test_extract_sample_block_prefers_payload_block():

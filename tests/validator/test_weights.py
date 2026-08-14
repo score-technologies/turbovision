@@ -1,4 +1,7 @@
+from collections import deque
+
 import pytest
+import scorevision.validator.scoring as scoring
 from scorevision.validator.core.weights import _top_rows
 from scorevision.validator.payload import (
     extract_miner_and_score,
@@ -8,10 +11,13 @@ from scorevision.validator.payload import (
     extract_elements_from_manifest,
 )
 from scorevision.validator.scoring import (
+    aggregate_challenge_score_batches_by_miner,
     weighted_median,
     days_to_blocks,
     stake_of,
     are_similar_by_challenges,
+    pick_winner_with_tiebreak,
+    select_deterministic_historical_challenges,
 )
 from scorevision.validator.core.weights import (
     _commit_block_for_hotkey,
@@ -189,6 +195,117 @@ def test_are_similar_by_challenges_two_failed_challenges_is_not_similar():
     scores2["c0"] = 0.11
     scores2["c1"] = 0.11
     assert are_similar_by_challenges(scores1, scores2, delta_abs=0.003, delta_rel=0.03) is False
+
+
+def test_aggregate_challenge_score_batches_returns_recent_ten_and_full_history():
+    rows = deque((f"c{i}", float(i)) for i in range(1, 21))
+
+    recent, history = aggregate_challenge_score_batches_by_miner(
+        {("validator", 1): rows},
+        batch_size=10,
+    )
+
+    assert list(history[1]) == [f"c{i}" for i in range(1, 21)]
+    assert list(recent[1]) == [f"c{i}" for i in range(11, 21)]
+
+
+def test_historical_sample_is_deterministic_and_ignores_input_order():
+    winner_history = {f"c{i}": float(i) for i in range(20)}
+    candidate_history = dict(reversed(list(winner_history.items())[:-1]))
+
+    first_winner, first_candidate = select_deterministic_historical_challenges(
+        winner_history,
+        candidate_history,
+        excluded_challenge_ids={"c0", "c1"},
+        current_window_id="block-12000",
+        sample_size=10,
+    )
+    second_winner, second_candidate = select_deterministic_historical_challenges(
+        dict(reversed(list(winner_history.items()))),
+        dict(reversed(list(candidate_history.items()))),
+        excluded_challenge_ids={"c1", "c0"},
+        current_window_id="block-12000",
+        sample_size=10,
+    )
+
+    assert list(first_winner) == list(second_winner)
+    assert list(first_candidate) == list(second_candidate)
+    assert len(first_winner) == 10
+    assert not ({"c0", "c1"} & set(first_winner))
+    assert set(first_winner) <= (set(winner_history) & set(candidate_history))
+
+
+def test_tiebreak_requires_similarity_in_recent_and_historical_samples():
+    winner_recent = {f"recent-{i}": 0.8 for i in range(10)}
+    candidate_recent = dict(winner_recent)
+    winner_previous = {f"previous-{i}": 0.8 for i in range(10)}
+    candidate_previous = dict(winner_previous)
+    candidate_previous["previous-0"] = 0.5
+    candidate_previous["previous-1"] = 0.5
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        recent_challenge_scores_by_miner={1: winner_recent, 2: candidate_recent},
+        historical_challenge_scores_by_miner={1: winner_previous, 2: candidate_previous},
+        current_window_id="block-12000",
+        candidate_uids={1, 2},
+        delta_abs=0.003,
+        delta_rel=0.03,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        min_common_challenges=6,
+    )
+
+    assert winner_uid == 1
+
+
+def test_tiebreak_uses_commit_block_when_recent_and_historical_are_similar():
+    winner_recent = {f"recent-{i}": 0.8 for i in range(10)}
+    winner_previous = {f"previous-{i}": 0.8 for i in range(10)}
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        recent_challenge_scores_by_miner={1: winner_recent, 2: dict(winner_recent)},
+        historical_challenge_scores_by_miner={1: winner_previous, 2: dict(winner_previous)},
+        current_window_id="block-12000",
+        candidate_uids={1, 2},
+        delta_abs=0.003,
+        delta_rel=0.03,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        min_common_challenges=6,
+    )
+
+    assert winner_uid == 2
+
+
+def test_tiebreak_short_circuits_historical_sample_when_recent_is_not_similar(monkeypatch):
+    calls = 0
+
+    def reject_recent_batch(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("historical sample must not be evaluated")
+        return False, {"reason": "score_delta_exceeded"}
+
+    monkeypatch.setattr(scoring, "_are_similar_by_challenges_debug", reject_recent_batch)
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        recent_challenge_scores_by_miner={1: {"c": 0.8}, 2: {"c": 0.1}},
+        historical_challenge_scores_by_miner={1: {"p": 0.8}, 2: {"p": 0.8}},
+        current_window_id="block-12000",
+        candidate_uids={1, 2},
+        delta_abs=0.003,
+        delta_rel=0.03,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        min_common_challenges=6,
+    )
+
+    assert winner_uid == 1
+    assert calls == 1
 
 
 def test_weights_result_dataclass():
