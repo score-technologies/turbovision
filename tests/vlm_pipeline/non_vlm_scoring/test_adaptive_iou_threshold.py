@@ -14,6 +14,7 @@ from scorevision.vlm_pipeline.non_vlm_scoring.objects import (
 from scorevision.vlm_pipeline.non_vlm_scoring.polygons import (
     ADAPTIVE_IOU_ANCHORS,
     _adaptive_iou_threshold_for_gt,
+    _build_per_image_rows,
     _gt_area_ratio,
 )
 from scorevision.vlm_pipeline.utils.data_models import PseudoGroundTruth
@@ -97,6 +98,43 @@ def test_gt_area_ratio_uses_settings_default_when_image_size_missing():
     ratio = _gt_area_ratio(gt, image_height=None, image_width=None)
     # default settings: 960x540 -> area 518400
     assert ratio == pytest.approx(5184 / 518400)
+
+
+def test_backend_stub_uses_real_frame_store_dimensions():
+    pseudo_gt = [_pgt(0, [_gt_box(32, 32)], image_shape=(1, 1))]
+
+    class FrameStore:
+        def get_frame(self, frame_number: int):
+            assert frame_number == 0
+            return np.zeros((1024, 1024, 3), dtype=np.uint8)
+
+    frame_store = FrameStore()
+    rows = _build_per_image_rows(
+        pseudo_gt=pseudo_gt,
+        miner_predictions={},
+        frame_store=frame_store,
+    )
+
+    assert rows[0]["image_height"] == 1024
+    assert rows[0]["image_width"] == 1024
+
+
+def test_backend_stub_does_not_force_maximum_adaptive_threshold():
+    pseudo_gt = [_pgt(0, [_gt_box(32, 32)], image_shape=(1, 1))]
+    prediction = BoundingBox(bbox_2d=(8, 8, 40, 40), label="player")
+
+    class FrameStore:
+        def get_frame(self, frame_number: int):
+            assert frame_number == 0
+            return np.zeros((1024, 1024, 3), dtype=np.uint8)
+
+    score = compare_map50(
+        pseudo_gt=pseudo_gt,
+        miner_predictions={0: {"bboxes": [prediction]}},
+        frames=FrameStore(),
+    )
+
+    assert score == pytest.approx(1.0)
 
 
 # ===============================

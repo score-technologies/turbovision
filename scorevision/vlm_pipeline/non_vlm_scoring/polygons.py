@@ -360,8 +360,43 @@ def _team_auc_f1(
     return max(f1_m1, f1_m2)
 
 
+def _image_dimensions_for_pgt(
+    pgt: PseudoGroundTruth,
+    *,
+    frame_store: object | None = None,
+) -> tuple[int | None, int | None]:
+    image = None
+    get_frame = getattr(frame_store, "get_frame", None)
+    if callable(get_frame):
+        try:
+            image = get_frame(pgt.frame_number)
+        except Exception:
+            logger.warning(
+                "Could not load frame %s to determine its dimensions",
+                pgt.frame_number,
+                exc_info=True,
+            )
+
+    if image is None:
+        image = getattr(pgt, "spatial_image", None)
+
+    shape = getattr(image, "shape", None)
+    if shape is None or len(shape) < 2:
+        return None, None
+
+    height, width = int(shape[0]), int(shape[1])
+    # Real-GT payloads from Score Backend currently carry a 1x1 placeholder
+    # image. It must not override the actual frame/configured dimensions.
+    if height <= 1 and width <= 1:
+        return None, None
+    return height, width
+
+
 def _build_per_image_rows(
-    pseudo_gt: List[PseudoGroundTruth], miner_predictions: dict[int, dict]
+    pseudo_gt: List[PseudoGroundTruth],
+    miner_predictions: dict[int, dict],
+    *,
+    frame_store: object | None = None,
 ) -> List[dict]:
     rows: List[dict] = []
     for pgt in pseudo_gt:
@@ -392,15 +427,15 @@ def _build_per_image_rows(
                 }
             )
 
+        image_height, image_width = _image_dimensions_for_pgt(
+            pgt,
+            frame_store=frame_store,
+        )
         rows.append(
             {
                 "image_id": str(frame_number),
-                "image_height": int(pgt.spatial_image.shape[0])
-                if getattr(pgt, "spatial_image", None) is not None
-                else None,
-                "image_width": int(pgt.spatial_image.shape[1])
-                if getattr(pgt, "spatial_image", None) is not None
-                else None,
+                "image_height": image_height,
+                "image_width": image_width,
                 "gt": gt_detections,
                 "predictions": pred_detections,
             }
@@ -571,7 +606,11 @@ def _evaluate_detection_metrics(
     miner_predictions: dict[int, dict],
     **kwargs,
 ) -> dict:
-    per_image = _build_per_image_rows(pseudo_gt=pseudo_gt, miner_predictions=miner_predictions)
+    per_image = _build_per_image_rows(
+        pseudo_gt=pseudo_gt,
+        miner_predictions=miner_predictions,
+        frame_store=kwargs.get("frames"),
+    )
     if not per_image:
         return {"map_50": 0.0, "precision": 0.0, "recall": 0.0, "false_positive": 0.0}
 
