@@ -2,9 +2,10 @@ from pathlib import Path
 import click
 
 from scorevision.utils.settings import get_settings
-from scorevision.utils.chutes_helpers import deploy_to_chutes, share_chute
+from scorevision.utils.chutes_helpers import deploy_to_chutes
 from scorevision.utils.huggingface_helpers import (
     create_update_or_verify_huggingface_repo,
+    set_huggingface_repo_visibility,
 )
 from scorevision.utils.bittensor_helpers import on_chain_commit
 from scorevision.utils.manifest import (
@@ -44,7 +45,9 @@ async def _resolve_element_id_from_manifest(
                 "Unable to load manifest. Configure URL_MANIFEST or SCOREVISION_MANIFEST_PATH/SV_MANIFEST_PATH."
             ) from e
 
-    element_ids = [str(getattr(element, "id", "")).strip() for element in manifest.elements]
+    element_ids = [
+        str(getattr(element, "id", "")).strip() for element in manifest.elements
+    ]
     element_ids = list(dict.fromkeys(eid for eid in element_ids if eid))
     if not element_ids:
         raise click.ClickException("No element IDs found in the current manifest.")
@@ -82,10 +85,19 @@ async def deploy_miner(
     )
 
     if chute_id:
-        await on_chain_commit(
+        committed = await on_chain_commit(
             skip=skip_bittensor_commit,
             revision=hf_revision,
             chute_id=chute_id,
             chute_slug=chute_slug,
             element_id=element_id,
         )
+        if committed:
+            set_huggingface_repo_visibility(private=False)
+            click.echo(
+                "Hugging Face repository is now public after the on-chain commit."
+            )
+        elif not skip_bittensor_commit:
+            raise click.ClickException(
+                "On-chain commitment failed; the Hugging Face repository remains private."
+            )

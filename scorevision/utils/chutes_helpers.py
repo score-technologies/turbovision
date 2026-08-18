@@ -2,7 +2,7 @@ from logging import getLogger
 from json import loads, JSONDecodeError
 from os import environ, chmod, stat
 from stat import S_IEXEC
-from asyncio import create_subprocess_exec, subprocess
+from asyncio import create_subprocess_exec, sleep, subprocess
 from pathlib import Path
 from contextlib import contextmanager
 from random import Random
@@ -67,7 +67,7 @@ def get_chute_name(hf_revision: str) -> str:
     settings = get_settings()
     nickname = generate_nickname(key=hf_revision)
     logger.info(f"Hf Revision ({hf_revision}) -> Nickname ({nickname})")
-    return f"turbovision-{settings.HUGGINGFACE_USERNAME.replace('/','-')}-{nickname}".lower()
+    return f"turbovision-{settings.HUGGINGFACE_USERNAME.replace('/', '-')}-{nickname}".lower()
 
 
 def guess_chute_slug(hf_revision: str) -> str:
@@ -252,6 +252,88 @@ async def warmup_chute(chute_id: str) -> None:
         raise ValueError("Chutes warmup failed.")
 
 
+async def create_huggingface_secret(chute_id: str, token: str) -> None:
+    """Attach a private-repo read token to an existing chute."""
+    if not token:
+        raise ValueError(
+            "CHUTES_HF_TOKEN missing. Create a fine-grained Hugging Face token "
+            "with read access only to the miner repository."
+        )
+
+    settings = get_settings()
+    api_key = settings.CHUTES_API_KEY.get_secret_value()
+    if not api_key:
+        raise ValueError("CHUTES_API_KEY missing.")
+
+    session = await get_async_client()
+    async with session.post(
+        f"{settings.CHUTES_MINERS_ENDPOINT.rstrip('/')}/secrets/",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={"purpose": chute_id, "key": "HF_TOKEN", "value": token},
+    ) as response:
+        body = await response.text()
+        safe_body = body.replace(token, "[REDACTED]")
+        if response.status == 200:
+            logger.info("Created HF_TOKEN secret for chute_id=%s", chute_id)
+            return
+        if response.status == 409 and "already exists" in body.lower():
+            logger.info("HF_TOKEN secret already exists for chute_id=%s", chute_id)
+            return
+
+        logger.error(
+            "Chutes secret creation failed with HTTP %s: %s",
+            response.status,
+            safe_body[:300],
+        )
+        raise ValueError("Failed to attach the Hugging Face token to the chute.")
+
+
+async def verify_chute_health(
+    *, chute_slug: str, attempts: int = 30, delay_seconds: float = 10.0
+) -> None:
+    """Wait until the private model has been loaded successfully by the chute."""
+    settings = get_settings()
+    url = (
+        settings.CHUTES_MINER_BASE_URL_TEMPLATE.format(slug=chute_slug).rstrip("/")
+        + "/health"
+    )
+    headers = {
+        "Authorization": f"Bearer {settings.CHUTES_API_KEY.get_secret_value()}",
+        "Content-Type": "application/json",
+    }
+    last_error = "no response"
+    session = await get_async_client()
+    for attempt in range(1, attempts + 1):
+        try:
+            async with session.post(url, headers=headers, json={}) as response:
+                body = await response.text()
+                if response.status == 200:
+                    data = loads(body)
+                    if data.get("status") == "healthy":
+                        logger.info(
+                            "Chute health verified with private HF model loaded."
+                        )
+                        return
+                    last_error = str(data.get("status") or body[:300])
+                else:
+                    last_error = f"HTTP {response.status}: {body[:300]}"
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+
+        logger.info(
+            "Waiting for chute health (%s/%s): %s", attempt, attempts, last_error
+        )
+        if attempt < attempts:
+            await sleep(delay_seconds)
+
+    raise RuntimeError(
+        f"Chute did not load the private Hugging Face model: {last_error}"
+    )
+
+
 async def deploy_chute(path: Path) -> None:
     logger.info("🚀 Deploying model to chutes... This may take a moment..")
 
@@ -344,29 +426,34 @@ async def resolve_chute_id_and_slug(model_name: str) -> tuple[str, str]:
     return chute_id, chute_slug
 
 
-async def deploy_to_chutes(revision: str, skip: bool) -> tuple[str | None, str | None]:
+async def deploy_to_chutes(
+    revision: str, skip: bool, hf_token: str | None = None
+) -> tuple[str | None, str | None]:
     if skip:
         return None, None
 
     settings = get_settings()
-    try:
-        chute_deployment_script = render_chute_template(
-            revision=revision,
-        )
-        with temporary_chutes_config_file(prefix="sv_chutes", delete=True) as (
-            tmp,
-            tmp_path,
-        ):
-            tmp.write(chute_deployment_script)
-            tmp.flush()
-            logger.info(f"Wrote Chute script with user-specific data: {tmp_path}")
-            await build_and_deploy_chute(path=tmp_path)
-        chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
-        logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
-        return chute_id, chute_slug
-    except Exception as e:
-        logger.error(e)
-        return None, None
+    private_hf_token = hf_token or settings.CHUTES_HF_TOKEN.get_secret_value()
+    chute_deployment_script = render_chute_template(
+        revision=revision,
+    )
+    with temporary_chutes_config_file(prefix="sv_chutes", delete=True) as (
+        tmp,
+        tmp_path,
+    ):
+        tmp.write(chute_deployment_script)
+        tmp.flush()
+        logger.info(f"Wrote Chute script with user-specific data: {tmp_path}")
+        await build_and_deploy_chute(path=tmp_path)
+    chute_slug, chute_id = await get_chute_slug_and_id(revision=revision)
+    if not chute_id or not chute_slug:
+        raise RuntimeError("Chutes deployment did not return a chute ID and slug.")
+
+    await create_huggingface_secret(chute_id=chute_id, token=private_hf_token)
+    await warmup_chute(chute_id=chute_id)
+    await verify_chute_health(chute_slug=chute_slug)
+    logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
+    return chute_id, chute_slug
 
 
 def mask_and_encode(content: bytes) -> str:
@@ -386,6 +473,7 @@ def mask_and_encode(content: bytes) -> str:
     source_code_tree = ast.parse(content_masked)
     normalised_source_code = ast.dump(source_code_tree, include_attributes=False)
     return sha256(normalised_source_code.encode("utf-8")).hexdigest()
+
 
 def _extract_hf_repo_info(source: str) -> tuple[str | None, str | None]:
     """Extract HF_REPO_NAME and HF_REPO_REVISION from the miner source code."""

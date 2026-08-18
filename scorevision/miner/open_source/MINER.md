@@ -69,6 +69,16 @@ Your model implementation lives in your Hugging Face repo (see `example_miner/RE
 - `chute_config.yml` – optional Chutes runtime/image configuration.
 
 ## 5. Push, Deploy, Commit
+Before deploying, configure two separate Hugging Face tokens:
+
+- `HF_TOKEN`: the local token used to create/update the repository.
+- `CHUTES_HF_TOKEN`: a fine-grained read-only token scoped only to the miner repository. The deploy command stores it as the chute's `HF_TOKEN` secret.
+
+The deployment keeps the Hugging Face repository private while Chutes builds and
+loads the model. It warms the chute and checks `/health`, submits the on-chain
+commit, and only makes the repository public after the commit succeeds. With
+`--no-commit`, the repository remains private.
+
 Deploy with the current CLI command:
 
 ```bash

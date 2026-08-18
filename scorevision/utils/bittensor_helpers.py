@@ -174,13 +174,14 @@ def reset_subtensor():
     global _SUBTENSOR
     _SUBTENSOR = None
 
+
 async def on_chain_commit(
     skip: bool,
     revision: str,
     chute_id: str,
     chute_slug: str | None,
     element_id: str | None,
-) -> None:
+) -> bool:
     settings = get_settings()
     repo_name = get_huggingface_repo_name()
     w = Wallet(
@@ -199,23 +200,27 @@ async def on_chain_commit(
         payload["element_id"] = str(element_id)
 
     logger.info(f"Commit payload: {payload}")
-    try:
-        if skip:
-            raise Exception(
-                f"No chute_id/slug; skipping on-chain commit for now. Payload would be: {payload}"
-            )
+    if skip:
+        logger.info("On-chain commit skipped. Payload would be: %s", payload)
+        return False
 
+    try:
         sub = await get_subtensor()
 
-        await sub.set_reveal_commitment(
+        response = await sub.set_reveal_commitment(
             wallet=w,
             netuid=settings.SCOREVISION_NETUID,
             data=dumps(payload),
             blocks_until_reveal=1,
+            raise_error=True,
         )
+        if not response.success:
+            raise RuntimeError(response.message or "On-chain commitment failed")
         logger.info("On-chain commitment submitted.")
+        return True
     except Exception as e:
-        logger.error(f"(Dry-run) On-chain commit skipped: {type(e).__name__}: {e}")
+        logger.error("On-chain commitment failed: %s: %s", type(e).__name__, e)
+        return False
 
 
 async def _set_weights_with_confirmation(

@@ -42,9 +42,23 @@ def test_legacy_hf_env_names_are_accepted(monkeypatch):
     get_settings.cache_clear()
 
 
+def test_chutes_hf_token_is_separate_from_upload_token(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "upload-token")
+    monkeypatch.setenv("CHUTES_HF_TOKEN", "repo-scoped-read-token")
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.HUGGINGFACE_API_KEY.get_secret_value() == "upload-token"
+    assert settings.CHUTES_HF_TOKEN.get_secret_value() == "repo-scoped-read-token"
+    get_settings.cache_clear()
+
+
 def test_scorevision_public_results_url_env_name_is_accepted(monkeypatch):
     monkeypatch.delenv("R2_BUCKET_PUBLIC_URL", raising=False)
-    monkeypatch.setenv("SCOREVISION_PUBLIC_RESULTS_URL", "https://pub-scorevision.r2.dev")
+    monkeypatch.setenv(
+        "SCOREVISION_PUBLIC_RESULTS_URL", "https://pub-scorevision.r2.dev"
+    )
 
     get_settings.cache_clear()
     settings = get_settings()
