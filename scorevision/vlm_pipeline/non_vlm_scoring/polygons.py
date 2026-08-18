@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from logging import getLogger
 from typing import Iterable, List, Tuple
@@ -19,6 +20,19 @@ from scorevision.vlm_pipeline.utils.response_models import (
 
 AUC_IOU_THRESHOLDS = (0.3, 0.5)
 ENUM_IOU_THRESHOLD = 0.3
+
+# Adaptive IoU threshold for mAP50 / false_positive TP-FP classification.
+# Small GT boxes suffer more from hand-annotation placement noise (a few px
+# off costs much more IoU on a tiny box than on a large one), so the IoU bar
+# required to count a prediction as a match is scaled to the GT box's area
+# relative to the image: (ratio of gt_area/image_area -> required IoU),
+# interpolated log-linearly between anchors, flat on the middle plateau.
+ADAPTIVE_IOU_ANCHORS: Tuple[Tuple[float, float], ...] = (
+    (0.0005, 0.30),
+    (0.01, 0.50),
+    (0.05, 0.50),
+    (0.25, 0.70),
+)
 
 logger = getLogger(__name__)
 
@@ -394,10 +408,44 @@ def _build_per_image_rows(
     return rows
 
 
+def _gt_area_ratio(
+    gt_box: BoundingBox,
+    *,
+    image_height: int | None,
+    image_width: int | None,
+) -> float:
+    settings = get_settings()
+    height = image_height or settings.SCOREVISION_IMAGE_HEIGHT
+    width = image_width or settings.SCOREVISION_IMAGE_WIDTH
+    image_area = max(1, height * width)
+    x1, y1, x2, y2 = gt_box.bbox_2d
+    gt_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    return gt_area / image_area
+
+
+def _adaptive_iou_threshold_for_gt(
+    gt_box: BoundingBox,
+    *,
+    image_height: int | None,
+    image_width: int | None,
+) -> float:
+    ratio = _gt_area_ratio(gt_box, image_height=image_height, image_width=image_width)
+    r_min, t_min = ADAPTIVE_IOU_ANCHORS[0]
+    r_max, t_max = ADAPTIVE_IOU_ANCHORS[-1]
+    ratio = max(r_min, min(r_max, ratio))
+
+    for (r0, t0), (r1, t1) in zip(ADAPTIVE_IOU_ANCHORS, ADAPTIVE_IOU_ANCHORS[1:]):
+        if r0 <= ratio <= r1:
+            if t0 == t1:
+                return t0
+            frac = (math.log10(ratio) - math.log10(r0)) / (math.log10(r1) - math.log10(r0))
+            return t0 + (t1 - t0) * frac
+    return t_max
+
+
 def _evaluate_detection_metrics_at_threshold(
     *,
     per_image: List[dict],
-    iou_threshold: float,
     image_height: int | None = None,
     image_width: int | None = None,
 ) -> dict:
@@ -466,7 +514,17 @@ def _evaluate_detection_metrics_at_threshold(
                     best_iou = iou
                     best_idx = gt_idx
 
-            if best_idx >= 0 and best_iou >= iou_threshold:
+            required_iou = (
+                _adaptive_iou_threshold_for_gt(
+                    gt_boxes[best_idx],
+                    image_height=row_height,
+                    image_width=row_width,
+                )
+                if best_idx >= 0
+                else None
+            )
+
+            if best_idx >= 0 and best_iou >= required_iou:
                 matched[image_id][best_idx] = True
                 tp_flags.append(1)
                 fp_flags.append(0)
@@ -519,7 +577,6 @@ def _evaluate_detection_metrics(
 
     at_50 = _evaluate_detection_metrics_at_threshold(
         per_image=per_image,
-        iou_threshold=0.5,
         image_height=kwargs.get("image_height"),
         image_width=kwargs.get("image_width"),
     )
