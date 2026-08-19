@@ -18,7 +18,7 @@ btcli subnet register --netuid <SCOREVISION_NETUID> --wallet.name <coldkey_name>
 Turbo Vision deployment requires a funded Chutes account:
 
 ```bash
-pip install -U chutes
+pip install "chutes==0.6.11rc2"
 chutes register
 ```
 

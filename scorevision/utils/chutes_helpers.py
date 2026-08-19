@@ -450,9 +450,11 @@ async def deploy_to_chutes(
         raise RuntimeError("Chutes deployment did not return a chute ID and slug.")
 
     await create_huggingface_secret(chute_id=chute_id, token=private_hf_token)
-    await warmup_chute(chute_id=chute_id)
-    await verify_chute_health(chute_slug=chute_slug)
-    logger.info(f"Deployed chute_id={chute_id} slug={chute_slug}")
+    logger.info(
+        "Deployed chute_id=%s slug=%s; warmup will happen on first use.",
+        chute_id,
+        chute_slug,
+    )
     return chute_id, chute_slug
 
 

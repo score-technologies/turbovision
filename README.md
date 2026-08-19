@@ -33,7 +33,7 @@ Set these in `.env`:
 Upgrade to a developer-enabled account on [chutes.ai](https://chutes.ai), install the CLI, register, and mint an API key. Store it as `CHUTES_API_KEY`.
 
 ```bash
-pip install -U chutes
+pip install "chutes==0.6.11rc2"
 chutes register
 ```
 
