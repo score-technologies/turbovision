@@ -27,7 +27,7 @@ COPY scorevision ./scorevision
 # Build wheels for dependencies
 RUN pip install --upgrade pip wheel setuptools hatchling && \
     pip wheel --wheel-dir /wheels . && \
-    pip wheel --wheel-dir /chutes-wheels "chutes==0.4.8"
+    pip wheel --wheel-dir /chutes-wheels "chutes==0.6.11rc2"
 
 # ---- Runtime Stage ----
 FROM python:3.12-slim-bookworm
@@ -52,7 +52,7 @@ COPY --from=builder /wheels /wheels
 COPY --from=builder /chutes-wheels /chutes-wheels
 RUN pip install --no-index --find-links=/wheels scorevision && \
     python -m venv /opt/chutes && \
-    /opt/chutes/bin/pip install --no-index --find-links=/chutes-wheels chutes==0.4.8 && \
+    /opt/chutes/bin/pip install --no-index --find-links=/chutes-wheels chutes==0.6.11rc2 && \
     rm -rf /wheels /chutes-wheels
 
 # Copy application code (separate layer for better caching)

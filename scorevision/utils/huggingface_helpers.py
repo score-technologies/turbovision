@@ -98,10 +98,7 @@ async def create_or_update_huggingface_repo(model_path: Path, hf_api: HfApi) -> 
     name = get_huggingface_repo_name()
     hf_api.create_repo(repo_id=name, repo_type="model", private=True, exist_ok=True)
 
-    try:
-        hf_api.update_repo_visibility(repo_id=name, private=True)
-    except Exception as e:
-        logger.error(f"Error making hf repo private: {e}")
+    hf_api.update_repo_settings(repo_id=name, repo_type="model", private=True)
 
     await upload_directory_to_huggingface_repo(path_dir=model_path, hf_api=hf_api)
 
@@ -146,12 +143,26 @@ async def create_update_or_verify_huggingface_repo(
         hf_revision = await get_huggingface_repo_revision(hf_api=hf_api)
         logger.info(f"Hf revision: {hf_revision}")
 
-    try:
-        hf_api.update_repo_settings(
-            repo_id=get_huggingface_repo_name(), repo_type="model", private=False
-        )
-    except Exception as e:
-        logger.error(f"Error making hf repo public: {e}")
-        pass
+    # Keep both new and pre-existing repositories private throughout Chutes
+    # deployment. Publication happens only after a confirmed on-chain commit.
+    hf_api.update_repo_settings(
+        repo_id=get_huggingface_repo_name(), repo_type="model", private=True
+    )
 
     return hf_revision
+
+
+def set_huggingface_repo_visibility(*, private: bool) -> None:
+    """Change the miner repository visibility, failing closed on errors."""
+    settings = get_settings()
+    token = settings.HUGGINGFACE_API_KEY.get_secret_value()
+    if not token:
+        raise ValueError("HUGGINGFACE_API_KEY required to change repo visibility")
+
+    visibility = "private" if private else "public"
+    logger.info("Making Hugging Face repo %s", visibility)
+    HfApi(token=token).update_repo_settings(
+        repo_id=get_huggingface_repo_name(),
+        repo_type="model",
+        private=private,
+    )

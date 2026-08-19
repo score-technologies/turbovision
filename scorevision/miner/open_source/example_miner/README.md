@@ -70,23 +70,34 @@ Take note of the chute image id
 chutes images delete <chute-image-id>
 ```
 
-2. Use Turbovision's CLI to build, deploy and commit on-chain (Note: you can skip the on-chain commit using `--no-commit`.  You can also specify a past huggingface revision to point to using `--revision` and/or the local files you want to upload to your huggingface repo using `--model-path`)
+2. Create a fine-grained Hugging Face token with read-only access to this model
+   repository and expose it to the deploy process as `CHUTES_HF_TOKEN`. Keep
+   `HF_TOKEN` as the local token with permission to upload and change repository
+   visibility.
+
+3. Use Turbovision's CLI to build, deploy and commit on-chain. The repository
+   remains private while Chutes loads it using the scoped secret, and becomes
+   public only after a successful on-chain commit. You can skip the on-chain
+   commit using `--no-commit`; in that case the repository stays private. You
+   can also specify a past Hugging Face revision using `--revision` and/or the
+   local files to upload using `--model-path`.
 ```bash
 sv -vv deploy-os-miner --element-id <element_id>
 ```
 
-3. When completed, warm up the chute (if its cold 🧊). (You can confirm its status using `chutes chutes list` or `chutes chutes get <chute-id>` if you already know its id). Note: Warming up can sometimes take a while but if the chute runs without errors (should be if you've tested locally first) and there are sufficient nodes (i.e. machines) available matching the `config.yml` you specified, the chute should become hot 🔥!
+4. The deployment command warms and health-checks the chute automatically. To
+   warm it again later (if it is cold 🧊), use:
 ```bash
 chutes warmup <chute-id>
 ```
 
-4. Test the chute's endpoints
+5. Test the chute's endpoints
 ```bash
 curl -X POST https://<YOUR-CHUTE-SLUG>.chutes.ai/health -d '{}' -H "Authorization: Bearer $CHUTES_API_KEY"
 curl -X POST https://<YOUR-CHUTE-SLUG>.chutes.ai/predict -d '{"url": "https://scoredata.me/2025_03_14/35ae7a/h1_0f2ca0.mp4","meta": {}}' -H "Authorization: Bearer $CHUTES_API_KEY"
 ```
 
-5. Test what your chute would get on a validator (this also applies any validation/integrity checks which may fail if you did not use the Turbovision CLI above to deploy the chute)
+6. Test what your chute would get on a validator (this also applies any validation/integrity checks which may fail if you did not use the Turbovision CLI above to deploy the chute)
 ```bash
 sv -vv run-once
 ```

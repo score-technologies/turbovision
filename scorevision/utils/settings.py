@@ -25,6 +25,7 @@ class Settings(BaseModel):
     CHUTES_MINER_PREDICT_ENDPOINT: str
     CHUTES_MINER_BASE_URL_TEMPLATE: str
     CHUTES_API_KEY: SecretStr
+    CHUTES_HF_TOKEN: SecretStr
     PATH_CHUTE_TEMPLATES: Path
     PATH_CHUTE_SCRIPT: Path
     FILENAME_CHUTE_MAIN: str
@@ -249,6 +250,7 @@ def get_settings() -> Settings:
             "https://{slug}.chutes.ai",
         ),
         CHUTES_API_KEY=getenv("CHUTES_API_KEY", ""),
+        CHUTES_HF_TOKEN=getenv("CHUTES_HF_TOKEN", ""),
         PATH_CHUTE_TEMPLATES=Path(
             getenv(
                 "PATH_CHUTE_TEMPLATES",
