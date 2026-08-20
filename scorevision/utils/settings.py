@@ -417,7 +417,7 @@ def get_settings() -> Settings:
             "https://turbo.scoredata.me/manifest/index.json",
         ),
         PRIVATE_AUDIT_TEMPO=int(getenv("PRIVATE_AUDIT_TEMPO", 100)),
-        PRIVATE_AUDIT_MIN_SAMPLES=int(getenv("PRIVATE_AUDIT_MIN_SAMPLES", 20)),
+        PRIVATE_AUDIT_MIN_SAMPLES=int(getenv("PRIVATE_AUDIT_MIN_SAMPLES", 30)),
         PRIVATE_GHCR_NAMESPACE=getenv("PRIVATE_GHCR_NAMESPACE", "scorevision"),
         PRIVATE_DOCKER_TIMEOUT_S=float(getenv("PRIVATE_DOCKER_TIMEOUT_S", 300.0)),
         PRIVATE_SPOTCHECK_MATCH_THRESHOLD=float(getenv("PRIVATE_SPOTCHECK_MATCH_THRESHOLD", 0.98)),

@@ -504,7 +504,7 @@ async def weights_loop(
                         is_private = track == "private"
                         if is_private:
                             tail_from_eval = days_to_blocks(eval_window_days)
-                            tail_for_element = tail_from_eval if tail_from_eval is not None else effective_tail
+                            tail_for_element = tail_from_eval if tail_from_eval is not None else public_tail_blocks
                         else:
                             tail_for_element = public_tail_blocks
                         max_tail_used = max(max_tail_used, tail_for_element)
