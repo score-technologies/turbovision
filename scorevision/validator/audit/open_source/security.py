@@ -7,12 +7,15 @@ import inspect
 import logging
 import multiprocessing as mp
 import os
+import pwd
 import resource
 import shutil
 import socket
 import sys
 import tempfile
 from base64 import b64decode
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -22,6 +25,8 @@ from urllib.request import Request, urlopen
 from cv2 import IMREAD_COLOR, imdecode
 from huggingface_hub import snapshot_download
 from numpy import frombuffer, uint8
+
+from scorevision.utils.secret_env import scrub_secret_env, secret_env_names
 
 
 logger = logging.getLogger("scorevision.security")
@@ -68,6 +73,7 @@ ALLOWED_SUFFIXES = {
     ".labels",
     ".csv",
 }
+MAX_MINER_PY_BYTES = 1024 * 1024
 DISALLOWED_BINARY_SUFFIXES = {
     ".so",
     ".dylib",
@@ -120,9 +126,46 @@ def _load_miner_from_hf_repo(
             return cls()
 
 
+def _hf_token() -> str | None:
+    """Read the HF token from settings, not from the environment.
+
+    The environment is scrubbed before any miner code runs, so the token has to
+    travel in memory and be handed to snapshot_download explicitly.
+    """
+    try:
+        from scorevision.utils.settings import get_settings
+
+        token = get_settings().HUGGINGFACE_API_KEY.get_secret_value().strip()
+    except Exception:
+        token = ""
+    return token or None
+
+
+def _symlink_root(repo_path: Path) -> Path:
+    """Where symlinks in a snapshot are allowed to point.
+
+    huggingface_hub materialises files as symlinks into its own blob store, one
+    level above the snapshot, so that directory is legitimate. Anything else is a
+    link out of the repo and we refuse to even stat it.
+    """
+    resolved = repo_path.resolve()
+    for parent in resolved.parents:
+        if parent.name.startswith(("models--", "datasets--")):
+            return parent
+    return resolved
+
+
 def _scan_miner_ast(miner_path: Path) -> None:
+    size = miner_path.stat().st_size
+    if size > MAX_MINER_PY_BYTES:
+        raise ValueError(f"miner_py_too_large:{size}>{MAX_MINER_PY_BYTES}")
     source = miner_path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(miner_path))
+    try:
+        tree = ast.parse(source, filename=str(miner_path))
+    except RecursionError:
+        # Deeply nested source can blow the parser stack; that is a rejection,
+        # not a crash of the checker.
+        raise ValueError("miner_py_unparseable") from None
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -146,7 +189,10 @@ def _scan_miner_ast(miner_path: Path) -> None:
 def _validate_repo_artifacts(repo_path: Path, max_repo_bytes: int) -> tuple[int, int]:
     total_bytes = 0
     onnx_count = 0
+    symlink_root = _symlink_root(repo_path)
     for p in repo_path.rglob("*"):
+        if p.is_symlink() and not p.resolve().is_relative_to(symlink_root):
+            raise ValueError(f"symlink_escapes_repo:{p.name}")
         if not p.is_file():
             continue
         if "__pycache__" in p.parts or p.suffix.lower() == ".pyc":
@@ -266,6 +312,77 @@ def _sandbox_limits(*, memory_bytes: int, max_processes: int) -> None:
     _safe_setrlimit(resource.RLIMIT_NOFILE, 128)
 
 
+UNPRIVILEGED_USERS = ("sv-worker", "nobody", "nfsnobody")
+
+
+def _unprivileged_ids() -> tuple[int, int] | None:
+    override = (os.getenv("CHECKER_WORKER_USER") or "").strip()
+    for name in ((override,) if override else ()) + UNPRIVILEGED_USERS:
+        try:
+            entry = pwd.getpwnam(name)
+        except KeyError:
+            continue
+        if entry.pw_uid != 0:
+            return entry.pw_uid, entry.pw_gid
+    return None
+
+
+_PRIVILEGE_STATE = "unknown"
+
+
+def _drop_privileges(tmp_dir: str) -> None:
+    """Become an unprivileged user before any miner code is loaded.
+
+    This is what puts the parent out of reach: once the worker runs as another
+    user it can no longer read /proc/<parent>/environ, where the container's
+    original environment - credentials included - still lives, nor any
+    root-owned mount such as the wallet.
+    """
+    global _PRIVILEGE_STATE
+    if os.geteuid() != 0:
+        _PRIVILEGE_STATE = f"NOT_DROPPED(already uid={os.getuid()}, parent env still readable)"
+        logger.warning(
+            "[worker] not running as root: cannot drop privileges, the parent "
+            "environment stays readable from this process"
+        )
+        return
+
+    ids = _unprivileged_ids()
+    if ids is None:
+        raise RuntimeError("no_unprivileged_user_available")
+    uid, gid = ids
+
+    for root, dirs, files in os.walk(tmp_dir):
+        for name in dirs + files:
+            os.chown(os.path.join(root, name), uid, gid)
+    os.chown(tmp_dir, uid, gid)
+
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    if os.geteuid() == 0 or os.getuid() == 0:
+        raise RuntimeError("privilege_drop_failed")
+    _PRIVILEGE_STATE = f"dropped to uid={uid} gid={gid}"
+    logger.info("[worker] dropped privileges to uid=%s gid=%s", uid, gid)
+
+
+def _harden_worker_process(tmp_dir: str) -> None:
+    """Strip anything the miner code must not reach before it is loaded.
+
+    The worker inherits the parent environment, so any credential still present
+    here is readable by miner.py. Caches are redirected into the throwaway
+    directory so nothing is written next to the validator's own state.
+    """
+    scrub_secret_env()
+    for name in ("HOME", "TMPDIR", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+        os.environ[name] = tmp_dir
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    leaked = secret_env_names()
+    if leaked:
+        raise RuntimeError(f"secret_env_visible:worker:{','.join(leaked)}")
+    _drop_privileges(tmp_dir)
+
+
 def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
     _ = cpu_seconds  # kept for API compatibility
     tmp_dir = tempfile.mkdtemp(prefix="sv-comp-")
@@ -275,7 +392,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
         logging.disable(logging.CRITICAL)
         _sandbox_limits(memory_bytes=memory_bytes, max_processes=16)
         os.chdir(tmp_dir)
-        os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+        _harden_worker_process(tmp_dir)
 
         while True:
             msg = conn.recv()
@@ -286,19 +403,18 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                 return
 
             if op == "init":
-                model_repo = str(msg["model_repo"])
-                revision = str(msg["revision"])
-                max_repo_bytes = int(msg["max_repo_bytes"])
+                # The repo is downloaded and validated by the parent: this process
+                # never needs the network, so it can run with none at all.
+                repo_path = Path(str(msg["repo_path"]))
+                model_repo = str(msg.get("model_repo") or "")
+                revision = str(msg.get("revision") or "")
                 t0 = monotonic()
 
-                repo_path = Path(snapshot_download(model_repo, revision=revision))
                 miner_py = repo_path / "miner.py"
                 if not miner_py.exists():
                     conn.send({"ok": False, "error": "miner.py missing in HF repo"})
                     continue
 
-                _validate_repo_artifacts(repo_path, max_repo_bytes=max_repo_bytes)
-                _scan_miner_ast(miner_py)
                 miner = _load_miner_from_hf_repo(path_hf_repo=repo_path, filename="miner.py", classname="Miner")
                 _validate_miner_interface(miner)
 
@@ -308,6 +424,8 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                         "init_ms": (monotonic() - t0) * 1000.0,
                         "model_repo": model_repo,
                         "revision": revision,
+                        "privileges": _PRIVILEGE_STATE,
+                        "uid": os.getuid(),
                     }
                 )
                 continue
@@ -413,10 +531,55 @@ class PersistentInferenceWorker:
         self._ctx = mp.get_context("spawn")
         self._parent_conn = None
         self._proc = None
+        self._staging: Path | None = None
+
+    def _prepare_repo(self) -> Path:
+        """Download and vet the miner repo in the parent, before any of it runs.
+
+        Nothing here executes miner code: it downloads, walks files and parses
+        miner.py. Doing it on this side is what lets the worker live without a
+        network.
+        """
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                snapshot_download,
+                self.model_repo,
+                revision=self.revision,
+                token=_hf_token(),
+            )
+            try:
+                repo_path = Path(future.result(timeout=self.wall_timeout_seconds * 2))
+            except FuturesTimeout:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise RuntimeError("worker_repo_download_timeout") from None
+
+        miner_py = repo_path / "miner.py"
+        if not miner_py.exists():
+            raise RuntimeError("miner.py missing in HF repo")
+        _validate_repo_artifacts(repo_path, max_repo_bytes=self.max_repo_bytes)
+        _scan_miner_ast(miner_py)
+        return self._stage_repo(repo_path)
+
+    def _stage_repo(self, repo_path: Path) -> Path:
+        """Copy the vetted repo somewhere the unprivileged worker can read it.
+
+        The HF cache lives under the parent's home, which the worker loses access
+        to once it drops privileges; symlinks are resolved on the way out.
+        """
+        staging = Path(tempfile.mkdtemp(prefix="sv-repo-"))
+        target = staging / "repo"
+        shutil.copytree(repo_path, target, symlinks=False)
+        os.chmod(staging, 0o755)
+        for path in [target, *target.rglob("*")]:
+            os.chmod(path, 0o755 if path.is_dir() else 0o644)
+        self._staging = staging
+        return target
 
     def start(self) -> None:
         if self._proc is not None:
             return
+
+        repo_path = self._prepare_repo()
 
         parent_conn, child_conn = self._ctx.Pipe(duplex=True)
         proc = self._ctx.Process(
@@ -444,9 +607,9 @@ class PersistentInferenceWorker:
         self._parent_conn.send(
             {
                 "op": "init",
+                "repo_path": str(repo_path),
                 "model_repo": self.model_repo,
                 "revision": self.revision,
-                "max_repo_bytes": self.max_repo_bytes,
             }
         )
         if not self._parent_conn.poll(self.wall_timeout_seconds):
@@ -458,11 +621,13 @@ class PersistentInferenceWorker:
             raise RuntimeError(out.get("error", "worker_init_failed"))
 
         logger.info(
-            "[worker] ready model=%s revision=%s init_ms=%.1f total_start_ms=%.1f",
+            "[worker] ready model=%s revision=%s init_ms=%.1f total_start_ms=%.1f uid=%s privileges=%s",
             self.model_repo,
             self.revision,
             float(out.get("init_ms", 0.0)),
             (monotonic() - t0) * 1000.0,
+            out.get("uid"),
+            out.get("privileges"),
         )
 
     def infer(self, *, payload_frames: list[dict[str, Any]], challenge_id: str) -> LocalRunResult:
@@ -525,8 +690,14 @@ class PersistentInferenceWorker:
             memory_mb_peak,
         )
 
+    def _clear_staging(self) -> None:
+        if self._staging is not None:
+            shutil.rmtree(self._staging, ignore_errors=True)
+            self._staging = None
+
     def close(self) -> None:
         if self._proc is None or self._parent_conn is None:
+            self._clear_staging()
             return
 
         try:
@@ -547,6 +718,8 @@ class PersistentInferenceWorker:
             self._parent_conn.close()
         except Exception:
             pass
+
+        self._clear_staging()
 
         logger.info("[worker] close model=%s revision=%s", self.model_repo, self.revision)
 

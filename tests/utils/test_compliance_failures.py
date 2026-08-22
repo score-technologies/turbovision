@@ -20,12 +20,47 @@ def test_parse_compliance_failure_tuples_from_public_shape():
             "element_id": "manak0/Detect-fire",
             "commit_block": "123",
             "latest_status": "FAIL_OUTPUT",
+            "latest_run_key": "compliance/runs/008595150.json",
         },
-        {"hotkey": "hk2", "element_id": "E2", "commit_block": None},
+        {
+            "hotkey": "hk2",
+            "element_id": "E2",
+            "commit_block": None,
+            "latest_run_key": "compliance/runs/008595150.json",
+        },
     ]
 
     assert parse_compliance_failure_tuples(rows) == {
         ComplianceFailureTuple("hk1", "manak0/Detect-fire", 123)
+    }
+
+
+def test_parse_compliance_failure_tuples_ignores_rows_without_run_key():
+    rows = [
+        {
+            "hotkey": "hk1",
+            "element_id": "manak0/Detect-fire",
+            "commit_block": 123,
+            "latest_status": "FAIL_OUTPUT",
+        },
+        {
+            "hotkey": "hk2",
+            "element_id": "manak0/Detect-fire",
+            "commit_block": 124,
+            "latest_status": "FAIL_OUTPUT",
+            "latest_run_key": "   ",
+        },
+        {
+            "hotkey": "hk3",
+            "element_id": "manak0/Detect-fire",
+            "commit_block": 125,
+            "latest_status": "FAIL_LATENCY",
+            "latest_run_key": "compliance/runs/008595150.json",
+        },
+    ]
+
+    assert parse_compliance_failure_tuples(rows) == {
+        ComplianceFailureTuple("hk3", "manak0/Detect-fire", 125)
     }
 
 
