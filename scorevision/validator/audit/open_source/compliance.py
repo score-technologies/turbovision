@@ -7,6 +7,7 @@ import json
 import random
 import threading
 from pathlib import Path
+from base64 import b64encode
 from json import dumps
 from logging import getLogger
 from time import time
@@ -14,6 +15,7 @@ from typing import Any
 from types import SimpleNamespace
 import os
 
+import aiohttp
 import cv2
 import numpy as np
 
@@ -31,6 +33,7 @@ from scorevision.utils.r2 import (
     R2Config,
 )
 from scorevision.utils.r2_public import extract_base_url
+from scorevision.utils.secret_env import scrub_secret_env
 from scorevision.utils.settings import get_settings
 from scorevision.validator.central.scheduling import load_manifest
 
@@ -809,6 +812,29 @@ async def _resolve_target_commit(
     }
 
 
+async def _inline_frame_images(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fetch the challenge images here so the worker running miner code needs no network.
+
+    Frames stored on R2 carry a url and no payload; the worker would otherwise fetch
+    them itself. Inlining as base64 keeps the untrusted process fully offline.
+    """
+    inlined: list[dict[str, Any]] = []
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for frame in frames:
+            row = dict(frame)
+            url = str(row.get("url") or "").strip()
+            if not row.get("data"):
+                if not url:
+                    raise ValueError("frame_without_data_or_url")
+                async with session.get(url) as resp:
+                    resp.raise_for_status()
+                    row["data"] = b64encode(await resp.read()).decode()
+            row.pop("url", None)
+            inlined.append(row)
+    return inlined
+
+
 async def _sample_challenges_for_tuple(
     *,
     public_url: str,
@@ -926,6 +952,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
     cfg = checker_r2_config()
     if not is_configured(cfg, require_bucket=True):
         raise RuntimeError("Checker R2 not configured")
+    scrub_secret_env()
 
     st_for_manifest = await get_subtensor()
     current_block = int(await st_for_manifest.get_current_block())
@@ -1100,6 +1127,20 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     bool(payload_frames),
                 )
                 details.append({"challenge_id": challenge_id, "ok": False, "reason": "missing_response_blob"})
+                continue
+            try:
+                payload_frames = await _inline_frame_images(payload_frames)
+            except Exception as e:
+                # Fetching images is our job, not the miner's: never score it as a failure.
+                missing_blob_count += 1
+                logger.warning(
+                    "[compliance] frame fetch failed element=%s hotkey=%s challenge_id=%s err=%s",
+                    element_id,
+                    hotkey,
+                    challenge_id,
+                    e,
+                )
+                details.append({"challenge_id": challenge_id, "ok": False, "reason": f"frame_fetch_failed:{e}"})
                 continue
             try:
                 if worker is not None:
@@ -1462,6 +1503,7 @@ async def run_public_compliance_once() -> dict[str, Any]:
 
 async def compliance_loop() -> None:
     settings = get_settings()
+    scrub_secret_env()
     last_trigger_block = await _load_last_trigger_block_from_runs_index()
     while True:
         try:

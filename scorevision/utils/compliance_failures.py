@@ -50,9 +50,15 @@ def parse_compliance_failure_tuples(data: Any) -> set[ComplianceFailureTuple]:
         rows = []
 
     parsed: set[ComplianceFailureTuple] = set()
+    skipped_unattributed = 0
     for row in rows:
         item = None
         if isinstance(row, dict):
+            # A ban is only honoured when it points at the compliance run that
+            # produced it; rows written outside the checker have no run key.
+            if not str(row.get("latest_run_key") or "").strip():
+                skipped_unattributed += 1
+                continue
             item = normalize_compliance_failure_tuple(
                 row.get("hotkey"),
                 row.get("element_id") or row.get("element"),
@@ -62,6 +68,11 @@ def parse_compliance_failure_tuples(data: Any) -> set[ComplianceFailureTuple]:
             item = normalize_compliance_failure_tuple(row[0], row[1], row[2])
         if item is not None:
             parsed.add(item)
+    if skipped_unattributed:
+        logger.warning(
+            "[compliance-failures] ignored %d failing tuples without latest_run_key",
+            skipped_unattributed,
+        )
     return parsed
 
 
