@@ -138,3 +138,18 @@ def test_drop_privileges_warns_instead_of_failing_when_not_root(tmp_path, caplog
     with caplog.at_level("WARNING"):
         sec._drop_privileges(str(tmp_path))
     assert "cannot drop privileges" in caplog.text
+
+
+def test_worker_reports_its_privilege_state_to_the_parent(monkeypatch, fake_repo, caplog):
+    """Worker logging is muted, so the drop status has to travel back on the pipe."""
+    monkeypatch.setattr(sec, "snapshot_download", lambda *a, **k: str(fake_repo))
+
+    worker = sec.PersistentInferenceWorker(model_repo="acme/model", revision="rev")
+    with caplog.at_level("INFO"):
+        try:
+            worker.start()
+        finally:
+            worker.close()
+
+    assert "privileges=" in caplog.text
+    assert "uid=" in caplog.text

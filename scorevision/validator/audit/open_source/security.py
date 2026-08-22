@@ -327,6 +327,9 @@ def _unprivileged_ids() -> tuple[int, int] | None:
     return None
 
 
+_PRIVILEGE_STATE = "unknown"
+
+
 def _drop_privileges(tmp_dir: str) -> None:
     """Become an unprivileged user before any miner code is loaded.
 
@@ -335,7 +338,9 @@ def _drop_privileges(tmp_dir: str) -> None:
     original environment - credentials included - still lives, nor any
     root-owned mount such as the wallet.
     """
+    global _PRIVILEGE_STATE
     if os.geteuid() != 0:
+        _PRIVILEGE_STATE = f"NOT_DROPPED(already uid={os.getuid()}, parent env still readable)"
         logger.warning(
             "[worker] not running as root: cannot drop privileges, the parent "
             "environment stays readable from this process"
@@ -357,6 +362,7 @@ def _drop_privileges(tmp_dir: str) -> None:
     os.setuid(uid)
     if os.geteuid() == 0 or os.getuid() == 0:
         raise RuntimeError("privilege_drop_failed")
+    _PRIVILEGE_STATE = f"dropped to uid={uid} gid={gid}"
     logger.info("[worker] dropped privileges to uid=%s gid=%s", uid, gid)
 
 
@@ -418,6 +424,8 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                         "init_ms": (monotonic() - t0) * 1000.0,
                         "model_repo": model_repo,
                         "revision": revision,
+                        "privileges": _PRIVILEGE_STATE,
+                        "uid": os.getuid(),
                     }
                 )
                 continue
@@ -613,11 +621,13 @@ class PersistentInferenceWorker:
             raise RuntimeError(out.get("error", "worker_init_failed"))
 
         logger.info(
-            "[worker] ready model=%s revision=%s init_ms=%.1f total_start_ms=%.1f",
+            "[worker] ready model=%s revision=%s init_ms=%.1f total_start_ms=%.1f uid=%s privileges=%s",
             self.model_repo,
             self.revision,
             float(out.get("init_ms", 0.0)),
             (monotonic() - t0) * 1000.0,
+            out.get("uid"),
+            out.get("privileges"),
         )
 
     def infer(self, *, payload_frames: list[dict[str, Any]], challenge_id: str) -> LocalRunResult:
