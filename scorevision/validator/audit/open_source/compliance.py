@@ -41,6 +41,7 @@ from scorevision.utils.r2 import (
     R2Config,
 )
 from scorevision.utils.r2_public import extract_base_url
+from scorevision.utils.run_signing import load_signing_keypair, sign_run_payload
 from scorevision.utils.secret_env import scrub_secret_env
 from scorevision.utils.settings import get_settings
 from scorevision.validator.central.scheduling import load_manifest
@@ -162,6 +163,34 @@ def _get_persistent_worker_class():
     return _PERSISTENT_WORKER_CLASS
 
 
+_SIGNING_KEYPAIR = None
+_SIGNING_KEYPAIR_LOADED = False
+
+
+def _signing_keypair():
+    """Load the run-signing key once, or None when signing is not configured yet."""
+    global _SIGNING_KEYPAIR, _SIGNING_KEYPAIR_LOADED
+    if _SIGNING_KEYPAIR_LOADED:
+        return _SIGNING_KEYPAIR
+    _SIGNING_KEYPAIR_LOADED = True
+    key_file = (get_settings().CHECKER_SIGNING_KEY_FILE or "").strip()
+    if not key_file:
+        logger.warning("[compliance] no signing key configured: runs will be written unsigned")
+        return None
+    try:
+        _SIGNING_KEYPAIR = load_signing_keypair(key_file)
+        logger.info("[compliance] run signing enabled hotkey=%s", _SIGNING_KEYPAIR.ss58_address)
+    except Exception:
+        logger.exception("[compliance] unable to load signing key file=%s", key_file)
+        raise
+    return _SIGNING_KEYPAIR
+
+
+def _signer_hotkey() -> str:
+    keypair = _signing_keypair()
+    return keypair.ss58_address if keypair is not None else ""
+
+
 def checker_r2_config() -> R2Config:
     s = get_settings()
     return R2Config(
@@ -183,143 +212,6 @@ def _checker_runs_index_key() -> str:
 
 def _checker_runs_key(block: int) -> str:
     return f"{_checker_prefix()}runs/{max(0, int(block)):09d}.json"
-
-
-def _checker_fails_key() -> str:
-    custom = (get_settings().CHECKER_R2_FAILS_KEY or "").strip()
-    if custom:
-        return custom
-    return f"{_checker_prefix()}failing_tuples.json"
-
-
-def _checker_latency_state_key() -> str:
-    custom = (get_settings().CHECKER_R2_LATENCY_STATE_KEY or "").strip()
-    if custom:
-        return custom
-    return f"{_checker_prefix()}latency_state.json"
-
-
-def _checker_public_url_for_key(key: str) -> str | None:
-    base = (get_settings().CHECKER_R2_BUCKET_PUBLIC_URL or "").strip().rstrip("/")
-    if not base:
-        return None
-    return f"{base}/{str(key).strip().lstrip('/')}"
-
-
-def _merge_failed_tuples(
-    existing: Any,
-    failed_tuples: list[dict[str, Any]],
-    *,
-    run_key: str,
-    now: float,
-    clear_latency_tuples: set[tuple[str, str, int]] | None = None,
-) -> dict[tuple[str, str, int], dict[str, Any]]:
-    merged: dict[tuple[str, str, int], dict[str, Any]] = {}
-    clear_latency_tuples = clear_latency_tuples or set()
-    if isinstance(existing, list):
-        for row in existing:
-            try:
-                key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
-                if key in clear_latency_tuples and row.get("latest_status") == "FAIL_LATENCY":
-                    continue
-                merged[key] = row
-            except Exception:
-                continue
-
-    run_url = _checker_public_url_for_key(run_key)
-    for row in failed_tuples:
-        cb = row.get("commit_block")
-        if cb is None:
-            continue
-        key = (str(row["hotkey"]), str(row["element_id"]), int(cb))
-        latest_status = row.get("status") or "FAIL_RUNTIME"
-        prev = merged.get(key)
-        if prev is None:
-            prev = {
-                "hotkey": key[0],
-                "element_id": key[1],
-                "commit_block": key[2],
-                "first_seen": now,
-            }
-            merged[key] = prev
-        prev["last_seen"] = now
-        prev["latest_status"] = latest_status
-        prev["latest_run_key"] = run_key
-        if run_url is not None:
-            prev["latest_run_url"] = run_url
-    return merged
-
-
-def _normalize_latency_state(existing: Any) -> dict[tuple[str, str, int], dict[str, Any]]:
-    rows: list[Any]
-    if isinstance(existing, list):
-        rows = existing
-    elif isinstance(existing, dict):
-        raw_rows = existing.get("entries") or existing.get("tuples") or existing.get("state") or []
-        rows = raw_rows if isinstance(raw_rows, list) else []
-    else:
-        rows = []
-
-    state: dict[tuple[str, str, int], dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            key = (str(row["hotkey"]), str(row["element_id"]), int(row["commit_block"]))
-        except Exception:
-            continue
-        if not key[0] or not key[1] or key[2] < 0:
-            continue
-        normalized = dict(row)
-        normalized["hotkey"] = key[0]
-        normalized["element_id"] = key[1]
-        normalized["commit_block"] = key[2]
-        try:
-            streak = int(normalized.get("consecutive_latency_failures", 0))
-        except Exception:
-            streak = 0
-        normalized["consecutive_latency_failures"] = max(0, streak)
-        state[key] = normalized
-    return state
-
-
-def _record_latency_pass(
-    state: dict[tuple[str, str, int], dict[str, Any]],
-    key: tuple[str, str, int],
-) -> bool:
-    return state.pop(key, None) is not None
-
-
-def _record_latency_failure(
-    state: dict[tuple[str, str, int], dict[str, Any]],
-    key: tuple[str, str, int],
-    *,
-    run_key: str,
-    now: float,
-    p95_ms: float,
-    latency_threshold_ms: float,
-    effective_latency_threshold_ms: float,
-) -> int:
-    run_url = _checker_public_url_for_key(run_key)
-    row = state.get(key)
-    if row is None:
-        row = {
-            "hotkey": key[0],
-            "element_id": key[1],
-            "commit_block": key[2],
-            "first_seen": now,
-            "consecutive_latency_failures": 0,
-        }
-        state[key] = row
-    row["consecutive_latency_failures"] = int(row.get("consecutive_latency_failures", 0)) + 1
-    row["last_seen"] = now
-    row["latest_p95_latency_ms"] = float(p95_ms)
-    row["latency_threshold_ms"] = float(latency_threshold_ms)
-    row["effective_latency_threshold_ms"] = float(effective_latency_threshold_ms)
-    row["latest_run_key"] = run_key
-    if run_url is not None:
-        row["latest_run_url"] = run_url
-    return int(row["consecutive_latency_failures"])
 
 
 def _get_checker_client():
@@ -347,6 +239,20 @@ async def _get_json(key: str) -> dict | list | None:
             return __import__("json").loads(body.decode())
         except Exception:
             return None
+
+
+async def _load_last_run_key_from_runs_index() -> str | None:
+    """Last run we wrote, used to chain the next one.
+
+    The index is mutable, so this is a hint rather than a guarantee: if it is
+    tampered with, the chain recorded in the payload breaks and the final checker
+    reports it instead of silently missing a run.
+    """
+    data = await _get_json(_checker_runs_index_key())
+    if not isinstance(data, list) or not data:
+        return None
+    last = str(data[-1]).strip()
+    return last or None
 
 
 async def _load_last_trigger_block_from_runs_index() -> int:
@@ -1075,14 +981,9 @@ async def run_public_compliance_once() -> dict[str, Any]:
     logger.info("[compliance] loaded public index keys=%d", len(index_keys))
 
     run_key = _checker_runs_key(winners_block)
-    latency_state_key = _checker_latency_state_key()
-    latency_state = _normalize_latency_state(await _get_json(latency_state_key))
-    latency_fail_streak_threshold = max(1, int(settings.CHECKER_LATENCY_FAIL_STREAK_THRESHOLD))
+    previous_run_key = await _load_last_run_key_from_runs_index()
     latency_tolerance_ms = max(0.0, float(settings.CHECKER_LATENCY_TOLERANCE_MS))
-    latency_state_changed = False
-    clear_latency_tuples: set[tuple[str, str, int]] = set()
     run_results: list[dict[str, Any]] = []
-    failed_tuples: list[dict[str, Any]] = []
 
     for target_row in targets:
         element_id = str(target_row["element_id"])
@@ -1119,7 +1020,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     "reason": "target_commitment_missing",
                 }
             )
-            failed_tuples.append({"element_id": element_id, "hotkey": hotkey, "commit_block": None})
             continue
 
         sampled = await _sample_challenges_for_tuple(
@@ -1148,9 +1048,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
                     "status": "FAIL_RUNTIME",
                     "reason": "no_challenges_found",
                 }
-            )
-            failed_tuples.append(
-                {"element_id": element_id, "hotkey": hotkey, "commit_block": target["commit_block"]}
             )
             continue
 
@@ -1416,31 +1313,15 @@ async def run_public_compliance_once() -> dict[str, Any]:
         p95_ms = _p95(latencies)
         effective_latency_threshold_ms = latency_threshold_ms + latency_tolerance_ms
         latency_ok = p95_ms <= effective_latency_threshold_ms
-        latency_failure_streak = 0
-        latency_promoted = False
-        tuple_key = (hotkey, element_id, int(target["commit_block"]))
-        if all_ok and latency_ok:
-            clear_latency_tuples.add(tuple_key)
-            if _record_latency_pass(latency_state, tuple_key):
-                latency_state_changed = True
-            status = "PASS"
-        elif all_ok:
-            latency_failure_streak = _record_latency_failure(
-                latency_state,
-                tuple_key,
-                run_key=run_key,
-                now=time(),
-                p95_ms=p95_ms,
-                latency_threshold_ms=latency_threshold_ms,
-                effective_latency_threshold_ms=effective_latency_threshold_ms,
-            )
-            latency_state_changed = True
-            latency_promoted = latency_failure_streak >= latency_fail_streak_threshold
-            status = "FAIL_LATENCY" if latency_promoted else "PENDING_LATENCY"
-            if not latency_promoted:
-                clear_latency_tuples.add(tuple_key)
-        else:
+        # This loop measures, it does not judge: no streak is kept here, so there is
+        # no counter on this machine for a stolen key to inflate or erase. Promotion
+        # to a ban belongs to the final checker, on the owner side.
+        if not all_ok:
             status = "FAIL_OUTPUT"
+        elif latency_ok:
+            status = "PASS"
+        else:
+            status = "PENDING_LATENCY"
         result_row = {
             "element_id": element_id,
             "hotkey": hotkey,
@@ -1452,9 +1333,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
             "latency_threshold_ms": latency_threshold_ms,
             "effective_latency_threshold_ms": effective_latency_threshold_ms,
             "latency_tolerance_ms": latency_tolerance_ms,
-            "latency_failure_streak": latency_failure_streak,
-            "latency_fail_streak_threshold": latency_fail_streak_threshold,
-            "latency_promoted": latency_promoted,
             "details": details,
         }
         run_results.append(result_row)
@@ -1480,23 +1358,21 @@ async def run_public_compliance_once() -> dict[str, Any]:
                 element_id,
                 hotkey,
             )
-        if status not in ("PASS", "PENDING_LATENCY"):
-            failed_tuples.append(
-                {
-                    "element_id": element_id,
-                    "hotkey": hotkey,
-                    "commit_block": target["commit_block"],
-                    "status": status,
-                }
-            )
 
     payload = {
         "type": "public_compliance_run",
         "ts": time(),
         "winners_block": winners_block,
         "targets": len(targets),
+        "prev_run_key": previous_run_key,
         "results": run_results,
     }
+    signing_keypair = _signing_keypair()
+    if signing_keypair is not None:
+        payload = sign_run_payload(payload, run_key=run_key, keypair=signing_keypair)
+        logger.info(
+            "[compliance] run signed key=%s signer=%s", run_key, payload.get("signer_hotkey")
+        )
 
     logger.info(
         "[compliance:r2] begin write bucket=%s runs_index=%s run_key=%s",
@@ -1533,64 +1409,6 @@ async def run_public_compliance_once() -> dict[str, Any]:
         )
         raise
 
-    if latency_state_changed:
-        logger.info(
-            "[compliance:r2] write latency state start key=%s rows=%d",
-            latency_state_key,
-            len(latency_state),
-        )
-        try:
-            await _put_json(latency_state_key, list(latency_state.values()))
-            logger.info(
-                "[compliance:r2] write latency state done key=%s rows=%d",
-                latency_state_key,
-                len(latency_state),
-            )
-        except Exception:
-            logger.exception(
-                "[compliance:r2] failed while writing latency state key=%s rows=%d",
-                latency_state_key,
-                len(latency_state),
-            )
-            raise
-
-    fails_key = _checker_fails_key()
-    logger.info("[compliance:r2] load fails list start key=%s", fails_key)
-    existing = await _get_json(fails_key)
-    logger.info(
-        "[compliance:r2] load fails list done key=%s has_existing=%s type=%s",
-        fails_key,
-        existing is not None,
-        type(existing).__name__ if existing is not None else "None",
-    )
-    now = time()
-    merged = _merge_failed_tuples(
-        existing,
-        failed_tuples,
-        run_key=run_key,
-        now=now,
-        clear_latency_tuples=clear_latency_tuples,
-    )
-
-    try:
-        logger.info(
-            "[compliance:r2] write fails list start key=%s rows=%d",
-            fails_key,
-            len(merged),
-        )
-        await _put_json(fails_key, list(merged.values()))
-        logger.info(
-            "[compliance:r2] write fails list done key=%s rows=%d",
-            fails_key,
-            len(merged),
-        )
-    except Exception:
-        logger.exception(
-            "[compliance:r2] failed while writing fails list key=%s rows=%d",
-            fails_key,
-            len(merged),
-        )
-        raise
     return payload
 
 

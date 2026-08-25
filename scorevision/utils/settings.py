@@ -180,8 +180,6 @@ class Settings(BaseModel):
     CHECKER_R2_CONCURRENCY: int
     CHECKER_R2_BUCKET_PUBLIC_URL: str
     CHECKER_R2_RESULTS_PREFIX: str
-    CHECKER_R2_FAILS_KEY: str
-    CHECKER_R2_LATENCY_STATE_KEY: str
     CHECKER_INTERVAL_BLOCKS: int
     CHECKER_POLL_INTERVAL_S: int
     CHECKER_CHALLENGES_PER_TARGET: int
@@ -197,6 +195,11 @@ class Settings(BaseModel):
     CHECKER_RUNTIME_MEMORY_BYTES: int
     CHECKER_RUNTIME_CPU_SECONDS: int
     CHECKER_RUNTIME_WALL_TIMEOUT_S: int
+    CHECKER_SIGNING_KEY_FILE: str
+    LATENCY_LOOP_HOTKEY: str
+    FINAL_CHECKER_OUTPUT_KEY: str
+    FINAL_CHECKER_STATE_KEY: str
+    FINAL_CHECKER_POLL_INTERVAL_S: int
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -445,8 +448,6 @@ def get_settings() -> Settings:
         CHECKER_R2_CONCURRENCY=int(getenv("CHECKER_R2_CONCURRENCY", shared_r2_concurrency)),
         CHECKER_R2_BUCKET_PUBLIC_URL=getenv("CHECKER_R2_BUCKET_PUBLIC_URL", ""),
         CHECKER_R2_RESULTS_PREFIX=getenv("CHECKER_R2_RESULTS_PREFIX", "manako/compliances"),
-        CHECKER_R2_FAILS_KEY=getenv("CHECKER_R2_FAILS_KEY", ""),
-        CHECKER_R2_LATENCY_STATE_KEY=getenv("CHECKER_R2_LATENCY_STATE_KEY", ""),
         CHECKER_INTERVAL_BLOCKS=int(getenv("CHECKER_INTERVAL_BLOCKS", 360)),
         CHECKER_POLL_INTERVAL_S=int(getenv("CHECKER_POLL_INTERVAL_S", 60)),
         CHECKER_CHALLENGES_PER_TARGET=int(getenv("CHECKER_CHALLENGES_PER_TARGET", 10)),
@@ -462,4 +463,15 @@ def get_settings() -> Settings:
         CHECKER_RUNTIME_MEMORY_BYTES=int(getenv("CHECKER_RUNTIME_MEMORY_BYTES", 8589934592)),
         CHECKER_RUNTIME_CPU_SECONDS=int(getenv("CHECKER_RUNTIME_CPU_SECONDS", 30)),
         CHECKER_RUNTIME_WALL_TIMEOUT_S=int(getenv("CHECKER_RUNTIME_WALL_TIMEOUT_S", 45)),
+        # Path to the run-signing key: a root-only file, never an env variable.
+        CHECKER_SIGNING_KEY_FILE=getenv("CHECKER_SIGNING_KEY_FILE", ""),
+        # ss58 address the final checker expects on every signed run.
+        LATENCY_LOOP_HOTKEY=getenv("LATENCY_LOOP_HOTKEY", ""),
+        FINAL_CHECKER_OUTPUT_KEY=getenv(
+            "FINAL_CHECKER_OUTPUT_KEY", "manako/conformity/failing_tuples.json"
+        ),
+        FINAL_CHECKER_STATE_KEY=getenv(
+            "FINAL_CHECKER_STATE_KEY", "manako/conformity/latency_state.json"
+        ),
+        FINAL_CHECKER_POLL_INTERVAL_S=int(getenv("FINAL_CHECKER_POLL_INTERVAL_S", 300)),
     )

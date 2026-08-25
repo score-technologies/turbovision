@@ -161,6 +161,26 @@ services:
       - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
     command: ["sv", "-v", "audit-validator", "open-source", "compliance"]
 
+  latency-final-checker:
+    image: docker.io/mikhaelscore/turbovision-latency-final-checker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.latency_final_checker
+    container_name: scorevision-latency-final-checker
+    profiles: ["latency_final_checker"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+    mem_reservation: "512m"
+    mem_limit: "1g"
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    command: ["sv", "-v", "audit-validator", "open-source", "final-checker"]
+
   private-audit-export:
     image: docker.io/mikhaelscore/turbovision-private-audit-export:latest
     build:

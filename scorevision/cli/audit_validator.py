@@ -267,6 +267,23 @@ def spotcheck_cmd(
         ))
 
 
+@open_source.command("final-checker")
+@click.option("--once", is_flag=True, help="Run one verification pass and exit")
+def final_checker_cmd(once: bool):
+    from scorevision.validator.audit.open_source.final_checker import (
+        final_checker_loop,
+        run_final_check_once,
+    )
+
+    setup_logging()
+    if once:
+        out = asyncio.run(run_final_check_once())
+        logger.info("Final check done: %s", out)
+        return
+    logger.info("Starting final checker loop")
+    asyncio.run(final_checker_loop())
+
+
 @open_source.command("compliance")
 @click.option("--once", is_flag=True, help="Run one compliance iteration and exit")
 def compliance_cmd(once: bool):
