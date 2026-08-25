@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from json import dumps, loads
 from logging import getLogger
+from re import compile as re_compile
 from time import time
 from typing import Any
 
@@ -28,6 +29,15 @@ LATENCY_BREACH_STATUSES = ("PENDING_LATENCY", "FAIL_LATENCY")
 OBSERVED_STATUSES = ("PASS", "PENDING_LATENCY", "FAIL_LATENCY", "FAIL_OUTPUT")
 
 MAX_CONCURRENT_FETCHES = 8
+# Anyone holding the conformity key can create objects under the runs prefix — the
+# lock only forbids overwriting and deleting. Only keys the checker could have
+# produced are worth fetching, and no cycle should be made unbounded by junk.
+RUN_KEY_PATTERN = re_compile(r"^\d{9}\.json$")
+MAX_RUNS_PER_CYCLE = 200
+
+
+def _is_run_key(key: str, prefix: str) -> bool:
+    return key.startswith(prefix) and bool(RUN_KEY_PATTERN.match(key[len(prefix) :]))
 
 
 # ---------------------------------------------------------------- reading runs
@@ -48,13 +58,56 @@ def _url_for_key(key: str) -> str:
     return f"{_public_base()}/{str(key).strip().lstrip('/')}"
 
 
+def _read_config() -> R2Config | None:
+    """Read-only credentials for the conformity bucket, if provisioned."""
+    settings = get_settings()
+    cfg = R2Config(
+        bucket=(settings.CHECKER_R2_BUCKET or "").strip(),
+        account_id=settings.CHECKER_R2_ACCOUNT_ID.get_secret_value(),
+        access_key_id=settings.CHECKER_R2_READ_ACCESS_KEY_ID.get_secret_value(),
+        secret_access_key=settings.CHECKER_R2_READ_SECRET_ACCESS_KEY.get_secret_value(),
+        concurrency=settings.CHECKER_R2_CONCURRENCY,
+    )
+    return cfg if is_configured(cfg, require_bucket=True) else None
+
+
+async def _list_run_keys(cfg: R2Config, after: str | None) -> list[str]:
+    """Enumerate runs from the bucket itself.
+
+    The index is a mutable object: an entry can be removed before we ever read it,
+    and the run it points at then goes unobserved. A listing cannot be edited, so
+    discovering runs this way removes the problem instead of detecting it.
+    """
+    prefix = _runs_prefix()
+    keys: list[str] = []
+    token: str | None = None
+    async with create_s3_client(cfg, error_message="Conformity read credentials not set") as client:
+        while True:
+            params: dict[str, Any] = {"Bucket": cfg.bucket, "Prefix": prefix, "MaxKeys": 1000}
+            if token:
+                params["ContinuationToken"] = token
+            elif after:
+                params["StartAfter"] = after
+            response = await client.list_objects_v2(**params)
+            for item in response.get("Contents") or []:
+                key = str(item.get("Key") or "")
+                if _is_run_key(key, prefix):
+                    keys.append(key)
+            if not response.get("IsTruncated"):
+                break
+            token = response.get("NextContinuationToken")
+            if not token:
+                break
+    return sorted(keys)
+
+
 async def _fetch_index() -> list[str]:
     data = await fetch_json_from_url(_url_for_key(f"{_runs_prefix()}index.json"))
     if not isinstance(data, list):
         logger.error("[final-checker] runs index unavailable or malformed")
         return []
     prefix = _runs_prefix()
-    return [k for k in data if isinstance(k, str) and k.startswith(prefix) and "index" not in k]
+    return [k for k in data if isinstance(k, str) and _is_run_key(k, prefix)]
 
 
 async def _fetch_payloads(keys: list[str]) -> list[tuple[str, dict[str, Any] | None]]:
@@ -226,6 +279,19 @@ async def _put_owner_json(key: str, payload: Any) -> None:
 # ------------------------------------------------------------------ the cycle
 
 
+def chain_is_continuous(payload: dict[str, Any], cursor: str | None) -> bool:
+    """Does this run follow the one we last processed?
+
+    The runs index is mutable, so an entry can be removed before we ever read it.
+    Each run names its predecessor, which turns that removal into a visible break
+    instead of a silently missing observation.
+    """
+    previous = str(payload.get("prev_run_key") or "").strip()
+    if not cursor or not previous:
+        return True
+    return previous == cursor
+
+
 def _new_keys(index: list[str], cursor: str | None) -> list[str]:
     """Strictly increasing keys only: re-inserting an old key must not replay it."""
     if not cursor:
@@ -246,14 +312,30 @@ async def run_final_check_once() -> dict[str, Any]:
     tuples: dict[str, dict[str, Any]] = state.get("tuples") if isinstance(state.get("tuples"), dict) else {}
     cursor = state.get("last_run_key")
 
-    index = await _fetch_index()
-    if not index:
-        return {"published": False, "reason": "empty_index"}
+    read_cfg = _read_config()
+    if read_cfg is not None:
+        pending = await _list_run_keys(read_cfg, cursor)
+        discovery = "listing"
+    else:
+        # No read token: fall back to the mutable index, which the chain check
+        # below can only report on after the fact.
+        index = await _fetch_index()
+        if not index:
+            return {"published": False, "reason": "empty_index"}
+        pending = _new_keys(index, cursor)
+        discovery = "index"
 
-    pending = _new_keys(index, cursor)
     if not pending:
         logger.info("[final-checker] no new run since %s", cursor)
         return {"published": False, "reason": "no_new_run"}
+
+    if len(pending) > MAX_RUNS_PER_CYCLE:
+        logger.warning(
+            "[final-checker] %d runs pending, processing the first %d this cycle",
+            len(pending),
+            MAX_RUNS_PER_CYCLE,
+        )
+        pending = pending[:MAX_RUNS_PER_CYCLE]
 
     applied = 0
     rejected = 0
@@ -265,13 +347,12 @@ async def run_final_check_once() -> dict[str, Any]:
             rejected += 1
             cursor = key
             continue
-        previous = str(payload.get("prev_run_key") or "").strip()
-        if cursor and previous and previous != cursor:
+        if not chain_is_continuous(payload, cursor):
             logger.error(
                 "[final-checker] run chain broken: %s claims to follow %s but we last saw %s "
                 "(a run may have been hidden from the index)",
                 key,
-                previous,
+                payload.get("prev_run_key"),
                 cursor,
             )
         tuples = apply_run(tuples, key, payload, streak_threshold=threshold)
@@ -286,7 +367,8 @@ async def run_final_check_once() -> dict[str, Any]:
     )
 
     logger.info(
-        "[final-checker] done applied=%d rejected=%d tracked=%d banned=%d cursor=%s",
+        "[final-checker] done discovery=%s applied=%d rejected=%d tracked=%d banned=%d cursor=%s",
+        discovery,
         applied,
         rejected,
         len(tuples),

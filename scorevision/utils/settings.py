@@ -195,6 +195,8 @@ class Settings(BaseModel):
     CHECKER_RUNTIME_MEMORY_BYTES: int
     CHECKER_RUNTIME_CPU_SECONDS: int
     CHECKER_RUNTIME_WALL_TIMEOUT_S: int
+    CHECKER_R2_READ_ACCESS_KEY_ID: SecretStr
+    CHECKER_R2_READ_SECRET_ACCESS_KEY: SecretStr
     CHECKER_SIGNING_KEY_FILE: str
     LATENCY_LOOP_HOTKEY: str
     FINAL_CHECKER_OUTPUT_KEY: str
@@ -464,6 +466,10 @@ def get_settings() -> Settings:
         CHECKER_RUNTIME_CPU_SECONDS=int(getenv("CHECKER_RUNTIME_CPU_SECONDS", 30)),
         CHECKER_RUNTIME_WALL_TIMEOUT_S=int(getenv("CHECKER_RUNTIME_WALL_TIMEOUT_S", 45)),
         # Path to the run-signing key: a root-only file, never an env variable.
+        # Read-only conformity token, owner side only: lets the final checker
+        # enumerate runs from the bucket instead of trusting a mutable index.
+        CHECKER_R2_READ_ACCESS_KEY_ID=getenv("CHECKER_R2_READ_ACCESS_KEY_ID", ""),
+        CHECKER_R2_READ_SECRET_ACCESS_KEY=getenv("CHECKER_R2_READ_SECRET_ACCESS_KEY", ""),
         CHECKER_SIGNING_KEY_FILE=getenv("CHECKER_SIGNING_KEY_FILE", ""),
         # ss58 address the final checker expects on every signed run.
         LATENCY_LOOP_HOTKEY=getenv("LATENCY_LOOP_HOTKEY", ""),

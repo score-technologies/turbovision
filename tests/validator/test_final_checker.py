@@ -168,3 +168,94 @@ def test_signature_check_is_skipped_until_the_hotkey_is_pinned(monkeypatch):
     monkeypatch.setattr(fc, "get_settings", lambda: type("S", (), {"LATENCY_LOOP_HOTKEY": ""})())
 
     assert fc._is_authentic("runs/1.json", _payload(1.0, _row("PASS", 90.0)))
+
+
+def test_a_hidden_run_breaks_the_chain():
+    """The runs index is mutable: dropping an entry must not pass unnoticed."""
+    cursor = f"{PREFIX}000000002.json"
+
+    following = _payload(3.0, _row("PASS", 90.0), prev=cursor)
+    assert fc.chain_is_continuous(following, cursor)
+
+    # run 2 was removed from the index before we read it, so run 3 names a
+    # predecessor we never saw
+    orphan = _payload(3.0, _row("PASS", 90.0), prev=f"{PREFIX}000000009.json")
+    assert not fc.chain_is_continuous(orphan, cursor)
+
+    # nothing to compare against on a first run, or on an unchained payload
+    assert fc.chain_is_continuous(orphan, None)
+    assert fc.chain_is_continuous(_payload(3.0, _row("PASS", 90.0)), cursor)
+
+
+class _FakeS3:
+    """Minimal ListObjectsV2 stand-in that honours StartAfter and pagination."""
+
+    def __init__(self, keys: list[str]):
+        self.keys = sorted(keys)
+        self.calls: list[dict] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    async def list_objects_v2(self, **params):
+        self.calls.append(params)
+        keys = [k for k in self.keys if k.startswith(params["Prefix"])]
+        after = params.get("ContinuationToken") or params.get("StartAfter")
+        if after:
+            keys = [k for k in keys if k > after]
+        page, rest = keys[: params["MaxKeys"]], keys[params["MaxKeys"] :]
+        return {
+            "Contents": [{"Key": k} for k in page],
+            "IsTruncated": bool(rest),
+            "NextContinuationToken": page[-1] if rest else None,
+        }
+
+
+def _fake_cfg():
+    from scorevision.utils.r2 import R2Config
+
+    return R2Config(bucket="conformity", account_id="a", access_key_id="b", secret_access_key="c", concurrency=1)
+
+
+def test_listing_returns_only_runs_after_the_cursor(monkeypatch):
+    keys = [f"{PREFIX}00000000{i}.json" for i in range(1, 6)] + [f"{PREFIX}index.json"]
+    fake = _FakeS3(keys)
+    monkeypatch.setattr(fc, "create_s3_client", lambda cfg, error_message: fake)
+    monkeypatch.setattr(fc, "_runs_prefix", lambda: PREFIX)
+
+    found = asyncio.run(fc._list_run_keys(_fake_cfg(), f"{PREFIX}000000003.json"))
+
+    assert found == [f"{PREFIX}000000004.json", f"{PREFIX}000000005.json"]
+    assert fake.calls[0]["StartAfter"] == f"{PREFIX}000000003.json"
+
+
+def test_listing_paginates_and_skips_the_index(monkeypatch):
+    keys = [f"{PREFIX}{i:09d}.json" for i in range(1, 2101)] + [f"{PREFIX}index.json"]
+    fake = _FakeS3(keys)
+    monkeypatch.setattr(fc, "create_s3_client", lambda cfg, error_message: fake)
+    monkeypatch.setattr(fc, "_runs_prefix", lambda: PREFIX)
+
+    found = asyncio.run(fc._list_run_keys(_fake_cfg(), None))
+
+    assert len(found) == 2100
+    assert all("index" not in k for k in found)
+    assert len(fake.calls) == 3  # 1000 + 1000 + 100
+
+
+def test_only_well_formed_run_keys_are_considered(monkeypatch):
+    """The lock forbids overwriting, not creating: junk under the prefix is ignored."""
+    junk = [
+        f"{PREFIX}0deadbeef.json",
+        f"{PREFIX}000000001.txt",
+        f"{PREFIX}nested/000000001.json",
+        f"{PREFIX}index.json",
+        f"{PREFIX}000000001.json.bak",
+    ]
+    fake = _FakeS3(junk + [f"{PREFIX}000000001.json"])
+    monkeypatch.setattr(fc, "create_s3_client", lambda cfg, error_message: fake)
+    monkeypatch.setattr(fc, "_runs_prefix", lambda: PREFIX)
+
+    assert asyncio.run(fc._list_run_keys(_fake_cfg(), None)) == [f"{PREFIX}000000001.json"]
