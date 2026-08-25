@@ -16,6 +16,10 @@ from scorevision.utils.bittensor_helpers import (
     get_validator_indexes_from_chain,
 )
 from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
+from scorevision.utils.commit_recovery import (
+    is_recovery_commit,
+    recover_commitments_from_shards,
+)
 from scorevision.utils.compliance_failures import (
     ComplianceFailureTuple,
     fetch_compliance_failure_tuples,
@@ -349,7 +353,12 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
             await asyncio.sleep(delay_s)
     return None
 
-def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
+def _pick_latest_miner_commit_for_element(
+    arr,
+    wanted_element_id: str | None,
+    *,
+    include_recovery: bool = True,
+):
     best_blk = None
     best_data = None
     best_obj = None
@@ -366,7 +375,11 @@ def _pick_latest_miner_commit_for_element(arr, wanted_element_id: str | None):
             continue
 
         role = obj.get("role")
-        if role != "miner":
+        if role != "miner" and not (
+            include_recovery
+            and wanted_element_id is not None
+            and is_recovery_commit(obj, wanted_element_id)
+        ):
             continue
 
         committed_eid = obj.get("element_id")
@@ -428,7 +441,11 @@ async def _find_miner_commit_via_archive_backfill(
         if not hist:
             return None, None
 
-        blk, _data, obj = _pick_latest_miner_commit_for_element(hist, wanted_element_id)
+        blk, _data, obj = _pick_latest_miner_commit_for_element(
+            hist,
+            wanted_element_id,
+            include_recovery=False,
+        )
         if obj is not None:
             return int(blk or 0), obj
 
@@ -622,6 +639,7 @@ async def get_miners_from_registry(
         else _REGISTRY_COMMIT_BACKFILL_FIRST_BLOCK
     )
     unresolved_for_backfill: list[tuple[int, str, list]] = []
+    unresolved_for_recovery: list[tuple[int, str, int]] = []
     for uid, hk in enumerate(meta.hotkeys):
         bypass_registry_checks = is_registry_bypass(uid, hk)
         if hk in blacklisted_hotkeys and not bypass_registry_checks:
@@ -637,6 +655,11 @@ async def get_miners_from_registry(
             unresolved_for_backfill.append((uid, hk, list(arr)))
             continue
         if obj is None:
+            continue
+
+        if is_recovery_commit(obj, wanted, hotkey=hk):
+            if wanted is not None:
+                unresolved_for_recovery.append((uid, hk, int(best_blk or 0)))
             continue
 
         cand = _build_miner_candidate(uid, hk, obj, int(best_blk or 0))
@@ -673,6 +696,70 @@ async def get_miners_from_registry(
                 )
                 continue
             candidates[uid] = cand
+
+    if wanted is not None and unresolved_for_recovery:
+        try:
+            validator_indexes = await get_validator_indexes_from_chain(netuid)
+            recovered = await recover_commitments_from_shards(
+                {(hk, wanted) for _uid, hk, _recovery_block in unresolved_for_recovery},
+                validator_indexes,
+            )
+            for uid, hk, recovery_block in unresolved_for_recovery:
+                recovered_commitment = recovered.get((hk, wanted))
+                if recovered_commitment is None:
+                    logger.warning(
+                        "[Registry] recovery unresolved uid=%s hotkey=%s element_id=%s "
+                        "recovery_block=%s: no valid matching public shard",
+                        uid,
+                        hk,
+                        wanted,
+                        recovery_block,
+                    )
+                    continue
+                cand = _build_miner_candidate(
+                    uid,
+                    hk,
+                    recovered_commitment.as_miner_commitment(hk),
+                    recovered_commitment.commit_block,
+                )
+                if cand is None:
+                    continue
+                if is_inactive_miner_tuple(
+                    inactive_miner_tuples,
+                    hotkey=cand.hotkey,
+                    element_id=cand.element_id,
+                    commit_block=cand.block,
+                ):
+                    logger.info(
+                        "[Registry] recovered uid=%s hotkey=%s element_id=%s "
+                        "commit_block=%s ignored: inactive miner tuple",
+                        uid,
+                        cand.hotkey,
+                        cand.element_id,
+                        cand.block,
+                    )
+                    continue
+                if is_compliance_tuple_failed(
+                    compliance_failure_tuples,
+                    hotkey=cand.hotkey,
+                    element_id=cand.element_id,
+                    commit_block=cand.block,
+                ):
+                    cand.registry_skip_reason = "compliance_failed_tuple"
+                    skipped[uid] = cand
+                    continue
+                candidates[uid] = cand
+                logger.info(
+                    "[Registry] recovered uid=%s hotkey=%s element_id=%s "
+                    "original_commit_block=%s from shard_block=%s",
+                    uid,
+                    hk,
+                    wanted,
+                    cand.block,
+                    recovered_commitment.shard_block,
+                )
+        except Exception as e:
+            logger.warning("[Registry] commitment recovery disabled due to error: %s", e)
 
     if (
         wanted is not None

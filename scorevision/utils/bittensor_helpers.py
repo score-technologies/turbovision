@@ -13,6 +13,11 @@ from bittensor import AsyncSubtensor, Wallet
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
 from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
+from scorevision.utils.commit_recovery import (
+    RECOVERY_COMMIT_ROLE,
+    is_recovery_commit,
+    recover_commitments_from_shards,
+)
 
 logger = getLogger(__name__)
 
@@ -220,6 +225,45 @@ async def on_chain_commit(
         return True
     except Exception as e:
         logger.error("On-chain commitment failed: %s: %s", type(e).__name__, e)
+        return False
+
+
+async def on_chain_commit_recover(*, element_id: str, skip: bool = False) -> bool:
+    """Publish a minimal request to restore a public miner commitment from shards."""
+    normalized_element_id = str(element_id or "").strip()
+    if not normalized_element_id:
+        raise ValueError("element_id is required for commitment recovery")
+
+    settings = get_settings()
+    wallet = Wallet(
+        name=settings.BITTENSOR_WALLET_COLD,
+        hotkey=settings.BITTENSOR_WALLET_HOT,
+    )
+    payload = {
+        "role": RECOVERY_COMMIT_ROLE,
+        "element_id": normalized_element_id,
+        "hotkey": wallet.hotkey.ss58_address,
+    }
+    logger.info("Commit recovery payload: %s", payload)
+    if skip:
+        logger.info("On-chain commit recovery skipped. Payload would be: %s", payload)
+        return False
+
+    try:
+        subtensor = await get_subtensor()
+        response = await subtensor.set_reveal_commitment(
+            wallet=wallet,
+            netuid=settings.SCOREVISION_NETUID,
+            data=dumps(payload),
+            blocks_until_reveal=1,
+            raise_error=True,
+        )
+        if not response.success:
+            raise RuntimeError(response.message or "On-chain commit recovery failed")
+        logger.info("On-chain commit recovery submitted.")
+        return True
+    except Exception as e:
+        logger.error("On-chain commit recovery failed: %s: %s", type(e).__name__, e)
         return False
 
 
@@ -444,6 +488,7 @@ async def _first_commit_block_by_miner(
             resolved_first_block = max(0, int(first_block or 0))
             last_block_by_hk: dict[str, int] = {}
             unresolved_for_backfill: list[tuple[str, list]] = []
+            unresolved_for_recovery: list[tuple[str, int]] = []
             for hk in meta.hotkeys:
                 if wanted_hotkeys and hk not in wanted_hotkeys:
                     continue
@@ -452,6 +497,7 @@ async def _first_commit_block_by_miner(
                     continue
 
                 last_block = None
+                latest_is_recovery = False
                 for tup in arr:
                     try:
                         blk, data = tup
@@ -463,9 +509,15 @@ async def _first_commit_block_by_miner(
                     except Exception:
                         continue
 
+                    is_recovery = False
                     if isinstance(obj, dict):
                         role = obj.get("role")
-                        if role != "miner":
+                        is_recovery = wanted_element_id is not None and is_recovery_commit(
+                            obj,
+                            wanted_element_id,
+                            hotkey=hk,
+                        )
+                        if role != "miner" and not is_recovery:
                             continue
                         committed_eid = obj.get("element_id")
                         committed_eid = (
@@ -481,13 +533,53 @@ async def _first_commit_block_by_miner(
 
                     if last_block is None or blk_int > last_block:
                         last_block = blk_int
+                        latest_is_recovery = is_recovery
 
                 if last_block is not None:
-                    last_block_by_hk[hk] = last_block
+                    if latest_is_recovery and wanted_element_id is not None:
+                        unresolved_for_recovery.append((hk, last_block))
+                    else:
+                        last_block_by_hk[hk] = last_block
                 elif wanted_element_id is not None:
                     if backfill_hotkeys and hk not in backfill_hotkeys:
                         continue
                     unresolved_for_backfill.append((hk, list(arr)))
+
+            if wanted_element_id is not None and unresolved_for_recovery:
+                try:
+                    validator_indexes = await get_validator_indexes_from_chain(netuid)
+                    recovered = await recover_commitments_from_shards(
+                        {(hk, wanted_element_id) for hk, _block in unresolved_for_recovery},
+                        validator_indexes,
+                    )
+                    for hk, recovery_block in unresolved_for_recovery:
+                        recovered_commitment = recovered.get((hk, wanted_element_id))
+                        if recovered_commitment is None:
+                            logger.warning(
+                                "[first_commit_block_by_miner] recovery unresolved "
+                                "hotkey=%s element=%s recovery_block=%s",
+                                hk,
+                                wanted_element_id,
+                                recovery_block,
+                            )
+                            continue
+                        last_block_by_hk[hk] = recovered_commitment.commit_block
+                    logger.info(
+                        "[first_commit_block_by_miner] recovered %d/%d hotkey(s) "
+                        "for element=%s",
+                        sum(
+                            1
+                            for hk, _block in unresolved_for_recovery
+                            if hk in last_block_by_hk
+                        ),
+                        len(unresolved_for_recovery),
+                        wanted_element_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[first_commit_block_by_miner] shard recovery error: %s",
+                        e,
+                    )
 
             if (
                 wanted_element_id is not None

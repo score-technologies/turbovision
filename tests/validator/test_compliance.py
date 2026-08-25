@@ -5,6 +5,7 @@ import pytest
 
 from scorevision.validator.audit.open_source import compliance as compliance_mod
 from scorevision.validator.audit.open_source import security as security_mod
+from scorevision.utils.commit_recovery import RecoveredCommitment
 
 
 def test_security_runner_is_initialized_and_callable():
@@ -291,6 +292,95 @@ def test_resolve_target_commit_uses_chain_model_when_commit_block_matches():
     assert resolved["commit_block"] == 200
     assert resolved["model"] == "repo/model"
     assert resolved["revision"] == "rev2"
+
+
+def test_resolve_target_commit_uses_recovered_original_commitment():
+    target = {"element_id": "E1", "hotkey": "hk1", "commit_block": 100}
+    recovered = RecoveredCommitment(
+        model="repo/model",
+        revision="rev1",
+        slug="slug1",
+        chute_id="chute1",
+        element_id="E1",
+        commit_block=100,
+        shard_block=499,
+        shard_key="shard.json",
+    )
+
+    resolved = asyncio.run(
+        compliance_mod._resolve_target_commit(
+            target,
+            commits_by_hotkey={
+                "hk1": [
+                    (
+                        500,
+                        '{"role":"miner_recover","element_id":"E1","hotkey":"hk1"}',
+                    )
+                ]
+            },
+            hotkey_to_uid={"hk1": 1},
+            recovered_commitments={("hk1", "E1"): recovered},
+        )
+    )
+
+    assert resolved is not None
+    assert "skip_reason" not in resolved
+    assert resolved["commit_block"] == 100
+    assert resolved["model"] == "repo/model"
+    assert resolved["revision"] == "rev1"
+
+
+@pytest.mark.asyncio
+async def test_recover_target_commitments_batches_recovery_requests(monkeypatch):
+    async def fake_validator_indexes(netuid):
+        assert netuid == 18
+        return {"validator": "https://validator.example/manako/index.json"}
+
+    recovered = RecoveredCommitment(
+        model="repo/model",
+        revision="rev1",
+        slug="slug1",
+        chute_id="chute1",
+        element_id="E1",
+        commit_block=100,
+        shard_block=499,
+        shard_key="shard.json",
+    )
+
+    async def fake_recover(requests, indexes):
+        assert requests == {("hk1", "E1")}
+        assert indexes == {"validator": "https://validator.example/manako/index.json"}
+        return {("hk1", "E1"): recovered}
+
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_validator_indexes_from_chain",
+        fake_validator_indexes,
+    )
+    monkeypatch.setattr(
+        compliance_mod,
+        "recover_commitments_from_shards",
+        fake_recover,
+    )
+
+    result = await compliance_mod._recover_target_commitments(
+        [{"element_id": "E1", "hotkey": "hk1", "commit_block": 100}],
+        {
+            "hk1": [
+                (
+                    90,
+                    '{"role":"miner","element_id":"E1","model":"old","revision":"old"}',
+                ),
+                (
+                    500,
+                    '{"role":"miner_recover","element_id":"E1","hotkey":"hk1"}',
+                ),
+            ]
+        },
+        netuid=18,
+    )
+
+    assert result == {("hk1", "E1"): recovered}
 
 
 def test_compare_predictions_iou_success_when_boxes_match():

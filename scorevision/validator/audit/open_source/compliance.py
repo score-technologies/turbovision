@@ -19,8 +19,16 @@ import aiohttp
 import cv2
 import numpy as np
 
-from scorevision.utils.bittensor_helpers import get_subtensor
+from scorevision.utils.bittensor_helpers import (
+    get_subtensor,
+    get_validator_indexes_from_chain,
+)
 from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
+from scorevision.utils.commit_recovery import (
+    RecoveredCommitment,
+    is_recovery_commit,
+    recover_commitments_from_shards,
+)
 from scorevision.utils.r2 import (
     add_index_key_if_new,
     create_s3_client,
@@ -674,6 +682,8 @@ def _targets_from_winners(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
 def _pick_latest_miner_commit_for_element(
     commits: list[tuple[int, str]] | None,
     wanted_element_id: str,
+    *,
+    hotkey: str | None = None,
 ) -> tuple[int | None, dict[str, Any] | None]:
     best_block = None
     best_obj = None
@@ -683,7 +693,11 @@ def _pick_latest_miner_commit_for_element(
             obj = json.loads(payload)
         except Exception:
             continue
-        if obj.get("role") != "miner":
+        if obj.get("role") != "miner" and not is_recovery_commit(
+            obj,
+            wanted_element_id,
+            hotkey=hotkey,
+        ):
             continue
         committed_eid = obj.get("element_id")
         committed_eid = str(committed_eid).strip() if committed_eid is not None else None
@@ -705,10 +719,51 @@ async def _fetch_commitment_context(
     return commits, hotkey_to_uid
 
 
+async def _recover_target_commitments(
+    targets: list[dict[str, Any]],
+    commits_by_hotkey: dict[str, list[tuple[int, str]]],
+    *,
+    netuid: int,
+) -> dict[tuple[str, str], RecoveredCommitment]:
+    recovery_requests: set[tuple[str, str]] = set()
+    for target in targets:
+        element_id = str(target.get("element_id") or "").strip()
+        hotkey = str(target.get("hotkey") or "").strip()
+        if not element_id or not hotkey:
+            continue
+        _block, obj = _pick_latest_miner_commit_for_element(
+            commits_by_hotkey.get(hotkey),
+            element_id,
+            hotkey=hotkey,
+        )
+        if is_recovery_commit(obj, element_id, hotkey=hotkey):
+            recovery_requests.add((hotkey, element_id))
+
+    if not recovery_requests:
+        return {}
+
+    try:
+        validator_indexes = await get_validator_indexes_from_chain(netuid)
+        recovered = await recover_commitments_from_shards(
+            recovery_requests,
+            validator_indexes,
+        )
+    except Exception as e:
+        logger.warning("[compliance] commitment recovery unavailable: %s", e)
+        return {}
+    logger.info(
+        "[compliance] recovered %d/%d target commitment(s) from public shards",
+        len(recovered),
+        len(recovery_requests),
+    )
+    return recovered
+
+
 async def _resolve_target_commit(
     target: dict[str, Any],
     commits_by_hotkey: dict[str, list[tuple[int, str]]],
     hotkey_to_uid: dict[str, int],
+    recovered_commitments: dict[tuple[str, str], RecoveredCommitment] | None = None,
 ) -> dict[str, Any] | None:
     element_id = str(target["element_id"])
     hotkey = str(target["hotkey"])
@@ -721,7 +776,35 @@ async def _resolve_target_commit(
         snapshot_commit_block = None
 
     commits = commits_by_hotkey.get(hotkey)
-    chain_block, chain_obj = _pick_latest_miner_commit_for_element(commits, element_id)
+    chain_block, chain_obj = _pick_latest_miner_commit_for_element(
+        commits,
+        element_id,
+        hotkey=hotkey,
+    )
+    if is_recovery_commit(chain_obj, element_id, hotkey=hotkey):
+        recovery_block = chain_block
+        recovered = (recovered_commitments or {}).get((hotkey, element_id))
+        if recovered is None:
+            logger.info(
+                "[compliance] target element=%s hotkey=%s recovery block=%s "
+                "unresolved: no valid matching public shard",
+                element_id,
+                hotkey,
+                recovery_block,
+            )
+            chain_block = None
+            chain_obj = None
+        else:
+            chain_block = recovered.commit_block
+            chain_obj = recovered.as_miner_commitment(hotkey)
+            logger.info(
+                "[compliance] target element=%s hotkey=%s recovered original "
+                "commit block=%s from shard block=%s",
+                element_id,
+                hotkey,
+                chain_block,
+                recovered.shard_block,
+            )
 
     if snapshot_commit_block is None:
         logger.info(
@@ -983,6 +1066,11 @@ async def run_public_compliance_once() -> dict[str, Any]:
         )
         logger.info("[compliance] winners sample: %s", sample)
     commits_by_hotkey, hotkey_to_uid = await _fetch_commitment_context(settings.SCOREVISION_NETUID)
+    recovered_commitments = await _recover_target_commitments(
+        targets,
+        commits_by_hotkey,
+        netuid=settings.SCOREVISION_NETUID,
+    )
     index_keys = await fetch_index_keys(settings.SCOREVISION_PUBLIC_RESULTS_URL)
     logger.info("[compliance] loaded public index keys=%d", len(index_keys))
 
@@ -1004,7 +1092,12 @@ async def run_public_compliance_once() -> dict[str, Any]:
             element_id,
             settings.CHECKER_LATENCY_P95_MS,
         )
-        target = await _resolve_target_commit(target_row, commits_by_hotkey, hotkey_to_uid)
+        target = await _resolve_target_commit(
+            target_row,
+            commits_by_hotkey,
+            hotkey_to_uid,
+            recovered_commitments,
+        )
         if target and target.get("skip_reason"):
             run_results.append(
                 {

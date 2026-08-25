@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from scorevision.utils import miner_registry as registry
+from scorevision.utils.commit_recovery import RecoveredCommitment
 from scorevision.utils.compliance_failures import ComplianceFailureTuple
 from scorevision.utils.inactive_miners import InactiveMinerTuple
 
@@ -366,3 +367,71 @@ async def test_get_miners_from_registry_deduplicates_same_model_revision(monkeyp
         skipped[1].registry_skip_reason
         == "dedup_by_model_revision_kept_uid:0_block:10"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_miners_from_registry_recovers_commitment_from_public_shard(monkeypatch):
+    class RecoverySubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1"])
+
+        async def get_all_revealed_commitments(self, netuid):
+            return {
+                "hk1": [
+                    (
+                        500,
+                        json.dumps(
+                            {
+                                "role": "miner_recover",
+                                "element_id": "PlayerDetect_v1@1.0",
+                                "hotkey": "hk1",
+                            }
+                        ),
+                    )
+                ]
+            }
+
+    async def fake_get_subtensor():
+        return RecoverySubtensor()
+
+    async def fake_validator_indexes(_netuid):
+        return {"validator": "https://validator.example/manako/index.json"}
+
+    async def fake_recover(requests, _indexes):
+        assert ("hk1", "PlayerDetect_v1@1.0") in requests
+        return {
+            ("hk1", "PlayerDetect_v1@1.0"): RecoveredCommitment(
+                model="org/model",
+                revision="rev1",
+                slug="slug1",
+                chute_id="chute1",
+                element_id="PlayerDetect_v1@1.0",
+                commit_block=123,
+                shard_block=499,
+                shard_key="shard.json",
+            )
+        }
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev1"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "get_validator_indexes_from_chain", fake_validator_indexes)
+    monkeypatch.setattr(registry, "recover_commitments_from_shards", fake_recover)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="PlayerDetect_v1@1.0",
+        compliance_failure_tuples=set(),
+        inactive_miner_tuples=set(),
+    )
+
+    assert kept[0].block == 123
+    assert kept[0].model == "org/model"
+    assert skipped == {}

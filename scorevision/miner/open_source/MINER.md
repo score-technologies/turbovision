@@ -92,6 +92,22 @@ Useful flags:
 
 If `--element-id` is omitted (and commit is enabled), `sv deploy-os-miner` reads the active manifest and prompts you to choose an element.
 
+If the hotkey is deregistered and later registers again, its revealed commitment may
+no longer be available on-chain. Restore the last public-track commitment without
+redeploying the model:
+
+```bash
+sv commit_recover --element-id <element_id>
+```
+
+The command publishes only the hotkey and Element ID. Validators then read the latest
+matching signed public shard from the active index, verify that its path, payload,
+miner hotkey, Element ID, and commitment block agree, and restore the model,
+revision, chute, and original commit block from that shard. The original block remains
+the one used for model-copy tiebreaks. The same recovered tuple is used by public
+compliance and latency checks. Use `--no-commit` to print the recovery payload without
+submitting it.
+
 ## 6. Validate Deployment Health
 Use Chutes dashboard and instance logs:
 

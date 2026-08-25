@@ -75,6 +75,47 @@ def os_deploy_miner_cmd(model_path: Path | None, revision: str | None, no_deploy
     except Exception as e:
         click.echo(e)
 
+
+@app.command("commit_recover")
+@click.option(
+    "--element-id",
+    default=None,
+    help="Public track element ID whose last emitted commitment should be restored.",
+)
+@click.option(
+    "--no-commit",
+    is_flag=True,
+    help="Print the recovery payload without submitting it on-chain.",
+)
+def commit_recover_cmd(element_id: str | None, no_commit: bool):
+    """Recover a public miner commitment from its latest signed score shard."""
+    from scorevision.cli.open_source_miner import _resolve_element_id_from_manifest
+    from scorevision.utils.bittensor_helpers import on_chain_commit_recover
+
+    async def _run() -> None:
+        resolved_element_id = await _resolve_element_id_from_manifest(
+            element_id,
+            skip_bittensor_commit=False,
+        )
+        if not resolved_element_id:
+            raise click.ClickException("An element ID is required for commitment recovery.")
+        committed = await on_chain_commit_recover(
+            element_id=resolved_element_id,
+            skip=no_commit,
+        )
+        if no_commit:
+            click.echo("Recovery payload printed; no on-chain commitment was submitted.")
+        elif committed:
+            click.echo(
+                "Commit recovery submitted. Validators will restore the commitment "
+                "from the latest matching public shard."
+            )
+        else:
+            raise click.ClickException("On-chain commit recovery failed.")
+
+    run(_run())
+
+
 @app.command("runner")
 def runner_cmd():
     from scorevision.validator.central import runner_loop
