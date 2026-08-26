@@ -21,6 +21,7 @@ import numpy as np
 
 from scorevision.utils.bittensor_helpers import (
     get_subtensor,
+    load_hotkey_keypair,
     get_validator_indexes_from_chain,
 )
 from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
@@ -41,7 +42,7 @@ from scorevision.utils.r2 import (
     R2Config,
 )
 from scorevision.utils.r2_public import extract_base_url
-from scorevision.utils.run_signing import load_signing_keypair, sign_run_payload
+from scorevision.utils.run_signing import sign_run_payload
 from scorevision.utils.secret_env import scrub_secret_env
 from scorevision.utils.settings import get_settings
 from scorevision.validator.central.scheduling import load_manifest
@@ -168,27 +169,46 @@ _SIGNING_KEYPAIR_LOADED = False
 
 
 def _signing_keypair():
-    """Load the run-signing key once, or None when signing is not configured yet."""
+    """Resolve the run-signing hotkey once, or None when signing is not configured.
+
+    Same resolution as the signer service: a wallet name and a hotkey name, read
+    from the wallet directory. The secret never goes through the environment.
+    """
     global _SIGNING_KEYPAIR, _SIGNING_KEYPAIR_LOADED
     if _SIGNING_KEYPAIR_LOADED:
         return _SIGNING_KEYPAIR
     _SIGNING_KEYPAIR_LOADED = True
-    key_file = (get_settings().CHECKER_SIGNING_KEY_FILE or "").strip()
-    if not key_file:
-        logger.warning("[compliance] no signing key configured: runs will be written unsigned")
+
+    settings = get_settings()
+    hotkey_name = (settings.CHECKER_SIGNING_HOTKEY or "").strip()
+    if not hotkey_name:
+        logger.warning("[compliance] no signing hotkey configured: runs will be written unsigned")
         return None
+    wallet_name = (settings.CHECKER_SIGNING_WALLET or "").strip()
+
     try:
-        _SIGNING_KEYPAIR = load_signing_keypair(key_file)
-        logger.info("[compliance] run signing enabled hotkey=%s", _SIGNING_KEYPAIR.ss58_address)
+        _SIGNING_KEYPAIR = load_hotkey_keypair(wallet_name, hotkey_name)
+        # The verifying side rebuilds the key from the ss58 alone, which defaults
+        # to sr25519: anything else would have every run silently rejected.
+        if int(getattr(_SIGNING_KEYPAIR, "crypto_type", 1)) != 1:
+            raise ValueError(
+                f"signing_hotkey_not_sr25519:{hotkey_name}:"
+                f"crypto_type={_SIGNING_KEYPAIR.crypto_type}"
+            )
+        logger.info(
+            "[compliance] run signing enabled wallet=%s hotkey=%s ss58=%s",
+            wallet_name or settings.BITTENSOR_WALLET_COLD,
+            hotkey_name,
+            _SIGNING_KEYPAIR.ss58_address,
+        )
     except Exception:
-        logger.exception("[compliance] unable to load signing key file=%s", key_file)
+        logger.exception(
+            "[compliance] unable to load signing hotkey wallet=%s hotkey=%s",
+            wallet_name,
+            hotkey_name,
+        )
         raise
     return _SIGNING_KEYPAIR
-
-
-def _signer_hotkey() -> str:
-    keypair = _signing_keypair()
-    return keypair.ss58_address if keypair is not None else ""
 
 
 def checker_r2_config() -> R2Config:

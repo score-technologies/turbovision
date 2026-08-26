@@ -197,7 +197,8 @@ class Settings(BaseModel):
     CHECKER_RUNTIME_WALL_TIMEOUT_S: int
     CHECKER_R2_READ_ACCESS_KEY_ID: SecretStr
     CHECKER_R2_READ_SECRET_ACCESS_KEY: SecretStr
-    CHECKER_SIGNING_KEY_FILE: str
+    CHECKER_SIGNING_WALLET: str
+    CHECKER_SIGNING_HOTKEY: str
     LATENCY_LOOP_HOTKEY: str
     FINAL_CHECKER_OUTPUT_KEY: str
     FINAL_CHECKER_STATE_KEY: str
@@ -470,7 +471,10 @@ def get_settings() -> Settings:
         # enumerate runs from the bucket instead of trusting a mutable index.
         CHECKER_R2_READ_ACCESS_KEY_ID=getenv("CHECKER_R2_READ_ACCESS_KEY_ID", ""),
         CHECKER_R2_READ_SECRET_ACCESS_KEY=getenv("CHECKER_R2_READ_SECRET_ACCESS_KEY", ""),
-        CHECKER_SIGNING_KEY_FILE=getenv("CHECKER_SIGNING_KEY_FILE", ""),
+        # Run signing wallet, resolved like the signer does. Leave the hotkey
+        # empty to run unsigned.
+        CHECKER_SIGNING_WALLET=getenv("CHECKER_SIGNING_WALLET", ""),
+        CHECKER_SIGNING_HOTKEY=getenv("CHECKER_SIGNING_HOTKEY", ""),
         # ss58 address the final checker expects on every signed run.
         LATENCY_LOOP_HOTKEY=getenv("LATENCY_LOOP_HOTKEY", ""),
         FINAL_CHECKER_OUTPUT_KEY=getenv(

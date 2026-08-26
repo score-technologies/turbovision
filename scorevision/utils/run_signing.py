@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from json import dumps
 from logging import getLogger
-from pathlib import Path
 from typing import Any
 
 from bittensor_wallet import Keypair
@@ -22,21 +21,6 @@ def canonical_bytes(payload: dict[str, Any]) -> bytes:
     """
     body = {k: v for k, v in payload.items() if k not in (SIGNATURE_FIELD, SIGNER_FIELD)}
     return dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def load_signing_keypair(key_file: str | Path) -> Keypair:
-    """Load the run-signing key from a file the miner worker cannot read (root:0600).
-
-    Accepts a hex seed or a mnemonic; the file never travels through the
-    environment, which is scrubbed before any miner code runs.
-    """
-    raw = Path(key_file).expanduser().read_text(encoding="utf-8").strip()
-    if not raw:
-        raise ValueError(f"empty_signing_key_file:{key_file}")
-    secret = raw.splitlines()[0].strip()
-    if secret.startswith("0x") and len(secret) == 66:
-        return Keypair.create_from_seed(secret)
-    return Keypair.create_from_mnemonic(secret)
 
 
 def sign_run_payload(payload: dict[str, Any], *, run_key: str, keypair: Keypair) -> dict[str, Any]:

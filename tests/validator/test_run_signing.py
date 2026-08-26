@@ -58,3 +58,75 @@ def test_signature_is_bound_to_content_and_object_key(keypair):
     other = Keypair.create_from_uri("//Attacker")
     forged = sign_run_payload(_payload(), run_key=RUN_KEY, keypair=other)
     assert not verify_run_payload(forged, run_key=RUN_KEY, expected_hotkey=hotkey)
+
+
+def test_signing_hotkey_is_resolved_by_name_like_the_signer(monkeypatch, keypair):
+    """Wallet and hotkey names, same resolution as the signer service."""
+    from types import SimpleNamespace
+
+    from scorevision.validator.audit.open_source import compliance as compliance_mod
+
+    seen: dict = {}
+
+    def fake_load(wallet_name, hotkey_name):
+        seen["wallet"], seen["hotkey"] = wallet_name, hotkey_name
+        return keypair
+
+    monkeypatch.setattr(compliance_mod, "load_hotkey_keypair", fake_load)
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            CHECKER_SIGNING_WALLET="manako", CHECKER_SIGNING_HOTKEY="latency-h",
+            BITTENSOR_WALLET_COLD="default",
+        ),
+    )
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR", None)
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR_LOADED", False)
+
+    resolved = compliance_mod._signing_keypair()
+
+    assert seen == {"wallet": "manako", "hotkey": "latency-h"}
+    assert resolved.ss58_address == keypair.ss58_address
+
+
+def test_no_hotkey_configured_means_unsigned_runs(monkeypatch):
+    from types import SimpleNamespace
+
+    from scorevision.validator.audit.open_source import compliance as compliance_mod
+
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(CHECKER_SIGNING_WALLET="", CHECKER_SIGNING_HOTKEY=""),
+    )
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR", None)
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR_LOADED", False)
+
+    assert compliance_mod._signing_keypair() is None
+
+
+def test_a_non_sr25519_signing_hotkey_is_refused(monkeypatch):
+    """The verifier rebuilds from the ss58, which is sr25519: fail loudly, not silently."""
+    from types import SimpleNamespace
+
+    from scorevision.validator.audit.open_source import compliance as compliance_mod
+
+    monkeypatch.setattr(
+        compliance_mod,
+        "load_hotkey_keypair",
+        lambda w, h: SimpleNamespace(crypto_type=0, ss58_address="5Ed25519"),
+    )
+    monkeypatch.setattr(
+        compliance_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            CHECKER_SIGNING_WALLET="manako", CHECKER_SIGNING_HOTKEY="latency-h",
+            BITTENSOR_WALLET_COLD="default",
+        ),
+    )
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR", None)
+    monkeypatch.setattr(compliance_mod, "_SIGNING_KEYPAIR_LOADED", False)
+
+    with pytest.raises(ValueError, match="signing_hotkey_not_sr25519"):
+        compliance_mod._signing_keypair()
