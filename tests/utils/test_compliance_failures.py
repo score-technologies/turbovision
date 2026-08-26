@@ -10,7 +10,7 @@ from scorevision.utils.compliance_failures import (
 )
 
 
-DEPLOYED_FAILING_TUPLES_URL = "https://conformity.scoredata.me/compliance/failing_tuples.json"
+DEPLOYED_FAILING_TUPLES_URL = "https://turbo.scoredata.me/manako/conformity/failing_tuples.json"
 
 
 def test_parse_compliance_failure_tuples_from_public_shape():
