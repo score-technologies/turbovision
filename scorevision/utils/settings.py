@@ -1,3 +1,4 @@
+from logging import getLogger
 from os import getenv
 from functools import lru_cache
 from pathlib import Path
@@ -5,6 +6,32 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr
 
 __version__ = "0.2.0"
+
+logger = getLogger(__name__)
+
+DEFAULT_FAILING_TUPLES_URL = "https://turbo.scoredata.me/manako/conformity/failing_tuples.json"
+# The latency machine no longer writes this file, and anyone holding the conformity
+# key still can. Honouring a stale override would leave a validator reading an
+# attacker-writable ban list, so the value is refused rather than used.
+LEGACY_FAILING_TUPLES_URLS = (
+    "https://conformity.scoredata.me/compliance/failing_tuples.json",
+)
+
+
+def _failing_tuples_url() -> str:
+    configured = (getenv("SCOREVISION_FAILING_TUPLES_URL", "") or "").strip()
+    if not configured:
+        return DEFAULT_FAILING_TUPLES_URL
+    if configured.rstrip("/") in LEGACY_FAILING_TUPLES_URLS:
+        logger.warning(
+            "[settings] SCOREVISION_FAILING_TUPLES_URL points at the retired conformity "
+            "list (%s), which is no longer written and is writable by whoever holds the "
+            "conformity key; using %s instead",
+            configured,
+            DEFAULT_FAILING_TUPLES_URL,
+        )
+        return DEFAULT_FAILING_TUPLES_URL
+    return configured
 
 
 class Settings(BaseModel):
@@ -379,10 +406,7 @@ def get_settings() -> Settings:
         ),
         SCOREVISION_PUBLIC_MIN_CHALLENGES=int(getenv("SCOREVISION_PUBLIC_MIN_CHALLENGES", 30)),
         SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS=float(getenv("SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS", 3.0)),
-        SCOREVISION_FAILING_TUPLES_URL=getenv(
-            "SCOREVISION_FAILING_TUPLES_URL",
-            "https://turbo.scoredata.me/manako/conformity/failing_tuples.json",
-        ),
+        SCOREVISION_FAILING_TUPLES_URL=_failing_tuples_url(),
         # Runner
         RUNNER_GET_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", 15.0)),
         RUNNER_WAIT_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", 15.0)),
