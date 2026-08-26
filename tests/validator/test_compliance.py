@@ -519,3 +519,17 @@ def test_compliance_loop_triggers_run_when_interval_elapsed(monkeypatch):
 
     assert calls["run"] == 1
     assert calls["sleep"] == 1
+
+
+def test_latency_percentile_ignores_the_two_slowest_of_ten():
+    """One unlucky inference should not decide a miner's verdict."""
+    latencies = [80.0, 82.0, 84.0, 86.0, 88.0, 90.0, 92.0, 95.0, 200.0, 250.0]
+
+    assert compliance_mod._p95(latencies) == 95.0  # p80: the 8th of ten
+    assert compliance_mod.LATENCY_PERCENTILE == 0.80
+
+
+def test_latency_percentile_handles_short_and_empty_samples():
+    assert compliance_mod._p95([]) == 0.0
+    assert compliance_mod._p95([100.0]) == 100.0
+    assert compliance_mod._p95([100.0, 200.0]) == 100.0

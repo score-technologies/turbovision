@@ -906,11 +906,14 @@ async def _sample_challenges_for_tuple(
     return sampled
 
 
+LATENCY_PERCENTILE = 0.80
+
+
 def _p95(values: list[float]) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
-    idx = min(len(ordered) - 1, max(0, int(0.95 * (len(ordered) - 1))))
+    idx = min(len(ordered) - 1, max(0, int(LATENCY_PERCENTILE * (len(ordered) - 1))))
     return float(ordered[idx])
 
 
