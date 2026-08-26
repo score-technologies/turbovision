@@ -168,3 +168,94 @@ def test_worker_reports_its_privilege_state_to_the_parent(monkeypatch, fake_repo
 
     assert "privileges=" in caplog.text
     assert "uid=" in caplog.text
+
+
+# --- channel safety: worker output must never be unpickled in the parent --------
+
+def _evil_channel_worker(conn):
+    from scorevision.validator.audit.open_source import security as sec
+
+    payload = sec._recv_json(conn)
+    marker = payload["marker"]
+
+    class Evil:
+        def __reduce__(self):
+            import os as _os
+            return (_os.system, (f"touch {marker}",))
+
+    conn.send(Evil())  # the attack: a pickle payload pushed back to the parent
+
+
+def _echo_channel_worker(conn):
+    from scorevision.validator.audit.open_source import security as sec
+
+    msg = sec._recv_json(conn)
+    sec._send_json(conn, {"ok": True, "echo": msg, "predictions": {"frames": [{"frame_id": 0}]}})
+
+
+def test_worker_channel_never_unpickles_worker_output(tmp_path):
+    """A hostile object sent by the worker must not execute code in the parent."""
+    import multiprocessing as mp
+
+    from scorevision.validator.audit.open_source import security as sec
+
+    marker = tmp_path / "pwned"
+    ctx = mp.get_context("spawn")
+    parent, child = ctx.Pipe(duplex=True)
+    proc = ctx.Process(target=_evil_channel_worker, args=(child,))
+    proc.start()
+    child.close()
+
+    sec._send_json(parent, {"marker": str(marker)})
+    # the parent only ever reads through _recv_json, which decodes JSON and never
+    # unpickles; the malicious frame fails to decode instead of running code
+    with pytest.raises(Exception):
+        sec._recv_json(parent)
+    proc.join(timeout=5)
+
+    assert not marker.exists(), "worker output was deserialized as a pickle in the parent"
+
+
+def test_channel_round_trips_a_normal_result():
+    import multiprocessing as mp
+
+    from scorevision.validator.audit.open_source import security as sec
+
+    ctx = mp.get_context("spawn")
+    parent, child = ctx.Pipe(duplex=True)
+    proc = ctx.Process(target=_echo_channel_worker, args=(child,))
+    proc.start()
+    child.close()
+
+    sec._send_json(parent, {"op": "infer", "n": 3})
+    out = sec._recv_json(parent)
+    proc.join(timeout=5)
+
+    assert out["ok"] is True
+    assert out["echo"] == {"op": "infer", "n": 3}
+    assert out["predictions"]["frames"][0]["frame_id"] == 0
+
+
+def test_worker_refuses_fork_so_the_signing_key_cannot_leak(monkeypatch):
+    """Under fork the worker would inherit the parent's memory, hotkey included."""
+    import multiprocessing as mp
+
+    from scorevision.validator.audit.open_source import security as sec
+
+    real_get_context = mp.get_context
+
+    def fake_get_context(method):
+        # simulate a future edit that switched the worker to fork
+        return real_get_context("fork") if method == "spawn" else real_get_context(method)
+
+    monkeypatch.setattr(sec.mp, "get_context", fake_get_context)
+
+    with pytest.raises(RuntimeError, match="must use spawn"):
+        sec.PersistentInferenceWorker(model_repo="acme/model", revision="rev")
+
+
+def test_a_normal_worker_uses_spawn():
+    from scorevision.validator.audit.open_source import security as sec
+
+    worker = sec.PersistentInferenceWorker(model_repo="acme/model", revision="rev")
+    assert worker._ctx.get_start_method() == "spawn"

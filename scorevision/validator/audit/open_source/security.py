@@ -15,12 +15,13 @@ import sys
 import tempfile
 from base64 import b64decode
 from concurrent.futures import ThreadPoolExecutor
+from json import dumps, loads
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Any
 from urllib.request import Request, urlopen
+from typing import Any
 
 from cv2 import IMREAD_COLOR, imdecode
 from huggingface_hub import snapshot_download
@@ -383,6 +384,22 @@ def _harden_worker_process(tmp_dir: str) -> None:
     _drop_privileges(tmp_dir)
 
 
+class ChannelClosed(Exception):
+    """The pipe was closed by the other end."""
+
+
+def _send_json(conn, obj) -> None:
+    conn.send_bytes(dumps(obj, default=str).encode("utf-8"))
+
+
+def _recv_json(conn):
+    try:
+        raw = conn.recv_bytes()
+    except EOFError as e:
+        raise ChannelClosed() from e
+    return loads(raw.decode("utf-8"))
+
+
 def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
     _ = cpu_seconds  # kept for API compatibility
     tmp_dir = tempfile.mkdtemp(prefix="sv-comp-")
@@ -395,11 +412,14 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
         _harden_worker_process(tmp_dir)
 
         while True:
-            msg = conn.recv()
+            try:
+                msg = _recv_json(conn)
+            except ChannelClosed:
+                return
             op = msg.get("op")
 
             if op == "close":
-                conn.send({"ok": True})
+                _send_json(conn, {"ok": True})
                 return
 
             if op == "init":
@@ -412,13 +432,13 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
 
                 miner_py = repo_path / "miner.py"
                 if not miner_py.exists():
-                    conn.send({"ok": False, "error": "miner.py missing in HF repo"})
+                    _send_json(conn, {"ok": False, "error": "miner.py missing in HF repo"})
                     continue
 
                 miner = _load_miner_from_hf_repo(path_hf_repo=repo_path, filename="miner.py", classname="Miner")
                 _validate_miner_interface(miner)
 
-                conn.send(
+                _send_json(conn, 
                     {
                         "ok": True,
                         "init_ms": (monotonic() - t0) * 1000.0,
@@ -432,7 +452,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
 
             if op == "infer":
                 if miner is None:
-                    conn.send({"ok": False, "error": "worker_not_initialized"})
+                    _send_json(conn, {"ok": False, "error": "worker_not_initialized"})
                     continue
 
                 payload_frames = msg["payload_frames"]
@@ -466,7 +486,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
 
                     _validate_prediction_output(rows)
 
-                    conn.send(
+                    _send_json(conn, 
                         {
                             "ok": True,
                             "challenge_id": challenge_id,
@@ -478,7 +498,7 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                         }
                     )
                 except Exception as e:
-                    conn.send({"ok": False, "error": f"worker_infer_error:{type(e).__name__}:{e}"})
+                    _send_json(conn, {"ok": False, "error": f"worker_infer_error:{type(e).__name__}:{e}"})
                 finally:
                     try:
                         importlib.reload(socket)
@@ -486,11 +506,11 @@ def _worker_main(conn, *, memory_bytes: int, cpu_seconds: int):
                         pass
                 continue
 
-            conn.send({"ok": False, "error": f"unknown_op:{op}"})
+            _send_json(conn, {"ok": False, "error": f"unknown_op:{op}"})
 
     except Exception as e:
         try:
-            conn.send({"ok": False, "error": f"worker_fatal:{type(e).__name__}:{e}"})
+            _send_json(conn, {"ok": False, "error": f"worker_fatal:{type(e).__name__}:{e}"})
         except Exception:
             pass
     finally:
@@ -528,7 +548,13 @@ class PersistentInferenceWorker:
         self.cpu_seconds = cpu_seconds
         self.wall_timeout_seconds = wall_timeout_seconds
 
+        # Must be spawn, never fork. The parent holds the run-signing hotkey and the
+        # R2 credentials in memory; fork would copy that memory into the worker, which
+        # runs untrusted miner code. Spawn starts a fresh interpreter that inherits
+        # nothing, which is the only reason it is safe to keep the key in this process.
         self._ctx = mp.get_context("spawn")
+        if self._ctx.get_start_method() != "spawn":
+            raise RuntimeError("inference worker must use spawn: fork would leak the signing key")
         self._parent_conn = None
         self._proc = None
         self._staging: Path | None = None
@@ -604,7 +630,8 @@ class PersistentInferenceWorker:
         )
 
         t0 = monotonic()
-        self._parent_conn.send(
+        _send_json(
+            self._parent_conn,
             {
                 "op": "init",
                 "repo_path": str(repo_path),
@@ -615,7 +642,7 @@ class PersistentInferenceWorker:
         if not self._parent_conn.poll(self.wall_timeout_seconds):
             self.close()
             raise RuntimeError("worker_init_timeout")
-        out = self._parent_conn.recv()
+        out = _recv_json(self._parent_conn)
         if not out.get("ok"):
             self.close()
             raise RuntimeError(out.get("error", "worker_init_failed"))
@@ -635,7 +662,8 @@ class PersistentInferenceWorker:
             return LocalRunResult(False, None, 0.0, "worker_not_started")
 
         try:
-            self._parent_conn.send(
+            _send_json(
+                self._parent_conn,
                 {
                     "op": "infer",
                     "payload_frames": payload_frames,
@@ -656,7 +684,7 @@ class PersistentInferenceWorker:
             return LocalRunResult(False, None, 0.0, f"worker_infer_timeout:exitcode={exitcode}")
 
         try:
-            out = self._parent_conn.recv()
+            out = _recv_json(self._parent_conn)
         except EOFError:
             exitcode = self._proc.exitcode if self._proc is not None else None
             return LocalRunResult(False, None, 0.0, f"worker_channel_eof:exitcode={exitcode}")
@@ -701,7 +729,7 @@ class PersistentInferenceWorker:
             return
 
         try:
-            self._parent_conn.send({"op": "close"})
+            _send_json(self._parent_conn, {"op": "close"})
             self._parent_conn.poll(1.0)
         except Exception:
             pass
