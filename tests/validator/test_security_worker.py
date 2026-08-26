@@ -1,4 +1,5 @@
 import base64
+import logging
 from pathlib import Path
 
 import cv2
@@ -17,6 +18,18 @@ class Miner:
         return [{"boxes": [{"x1": 1, "y1": 2, "x2": 3, "y2": 4, "cls_id": 0}], "polygons": []}
                 for _ in batch_images]
 """
+
+
+@pytest.fixture(autouse=True)
+def _restore_log_propagation():
+    """setup_logging() detaches the scorevision logger and pins it at WARNING;
+    caplog needs it attached and verbose."""
+    sv_logger = logging.getLogger("scorevision")
+    propagate, level = sv_logger.propagate, sv_logger.level
+    sv_logger.propagate = True
+    sv_logger.setLevel(logging.DEBUG)
+    yield
+    sv_logger.propagate, sv_logger.level = propagate, level
 
 
 @pytest.fixture
@@ -137,6 +150,8 @@ def test_repo_is_staged_readable_and_cleaned_up(monkeypatch, fake_repo):
 def test_drop_privileges_warns_instead_of_failing_when_not_root(tmp_path, caplog):
     with caplog.at_level("WARNING"):
         sec._drop_privileges(str(tmp_path))
+
+    assert "NOT_DROPPED" in sec._PRIVILEGE_STATE
     assert "cannot drop privileges" in caplog.text
 
 

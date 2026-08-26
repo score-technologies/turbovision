@@ -11,7 +11,7 @@ from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
-DEFAULT_FAILING_TUPLES_URL = "https://conformity.scoredata.me/compliance/failing_tuples.json"
+from scorevision.utils.settings import DEFAULT_FAILING_TUPLES_URL  # re-exported
 _FETCH_CACHE: dict[str, tuple[set["ComplianceFailureTuple"], float]] = {}
 _FETCH_TTL_S = 300.0
 

@@ -10,7 +10,7 @@ from scorevision.utils.compliance_failures import (
 )
 
 
-DEPLOYED_FAILING_TUPLES_URL = "https://conformity.scoredata.me/compliance/failing_tuples.json"
+DEPLOYED_FAILING_TUPLES_URL = "https://turbo.scoredata.me/manako/conformity/failing_tuples.json"
 
 
 def test_parse_compliance_failure_tuples_from_public_shape():
@@ -103,3 +103,35 @@ async def test_fetch_compliance_failure_tuples_from_deployed_url():
     assert failures
     assert all(item.hotkey and item.element_id and item.commit_block >= 0 for item in failures)
     assert any(item.element_id.startswith("manak0/") for item in failures)
+
+
+def test_a_stale_conformity_url_in_the_env_is_refused(monkeypatch):
+    """That file is no longer written, and the conformity key can still write it.
+
+    A validator left pointing at it would be reading an attacker-writable ban list,
+    so the override is refused (and a warning is logged).
+    """
+    from scorevision.utils import settings as settings_mod
+
+    monkeypatch.setenv(
+        "SCOREVISION_FAILING_TUPLES_URL",
+        "https://conformity.scoredata.me/compliance/failing_tuples.json",
+    )
+
+    assert settings_mod._failing_tuples_url() == settings_mod.DEFAULT_FAILING_TUPLES_URL
+
+
+def test_an_explicit_url_is_still_honoured(monkeypatch):
+    from scorevision.utils import settings as settings_mod
+
+    monkeypatch.setenv("SCOREVISION_FAILING_TUPLES_URL", "https://example.test/mine.json")
+
+    assert settings_mod._failing_tuples_url() == "https://example.test/mine.json"
+
+
+def test_no_env_falls_back_to_the_owner_bucket(monkeypatch):
+    from scorevision.utils import settings as settings_mod
+
+    monkeypatch.delenv("SCOREVISION_FAILING_TUPLES_URL", raising=False)
+
+    assert settings_mod._failing_tuples_url() == settings_mod.DEFAULT_FAILING_TUPLES_URL

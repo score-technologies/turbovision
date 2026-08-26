@@ -1,3 +1,4 @@
+from logging import getLogger
 from os import getenv
 from functools import lru_cache
 from pathlib import Path
@@ -5,6 +6,32 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr
 
 __version__ = "0.2.0"
+
+logger = getLogger(__name__)
+
+DEFAULT_FAILING_TUPLES_URL = "https://turbo.scoredata.me/manako/conformity/failing_tuples.json"
+# The latency machine no longer writes this file, and anyone holding the conformity
+# key still can. Honouring a stale override would leave a validator reading an
+# attacker-writable ban list, so the value is refused rather than used.
+LEGACY_FAILING_TUPLES_URLS = (
+    "https://conformity.scoredata.me/compliance/failing_tuples.json",
+)
+
+
+def _failing_tuples_url() -> str:
+    configured = (getenv("SCOREVISION_FAILING_TUPLES_URL", "") or "").strip()
+    if not configured:
+        return DEFAULT_FAILING_TUPLES_URL
+    if configured.rstrip("/") in LEGACY_FAILING_TUPLES_URLS:
+        logger.warning(
+            "[settings] SCOREVISION_FAILING_TUPLES_URL points at the retired conformity "
+            "list (%s), which is no longer written and is writable by whoever holds the "
+            "conformity key; using %s instead",
+            configured,
+            DEFAULT_FAILING_TUPLES_URL,
+        )
+        return DEFAULT_FAILING_TUPLES_URL
+    return configured
 
 
 class Settings(BaseModel):
@@ -180,8 +207,6 @@ class Settings(BaseModel):
     CHECKER_R2_CONCURRENCY: int
     CHECKER_R2_BUCKET_PUBLIC_URL: str
     CHECKER_R2_RESULTS_PREFIX: str
-    CHECKER_R2_FAILS_KEY: str
-    CHECKER_R2_LATENCY_STATE_KEY: str
     CHECKER_INTERVAL_BLOCKS: int
     CHECKER_POLL_INTERVAL_S: int
     CHECKER_CHALLENGES_PER_TARGET: int
@@ -197,6 +222,14 @@ class Settings(BaseModel):
     CHECKER_RUNTIME_MEMORY_BYTES: int
     CHECKER_RUNTIME_CPU_SECONDS: int
     CHECKER_RUNTIME_WALL_TIMEOUT_S: int
+    CHECKER_R2_READ_ACCESS_KEY_ID: SecretStr
+    CHECKER_R2_READ_SECRET_ACCESS_KEY: SecretStr
+    CHECKER_SIGNING_WALLET: str
+    CHECKER_SIGNING_HOTKEY: str
+    LATENCY_LOOP_HOTKEY: str
+    FINAL_CHECKER_OUTPUT_KEY: str
+    FINAL_CHECKER_STATE_KEY: str
+    FINAL_CHECKER_POLL_INTERVAL_S: int
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -373,10 +406,7 @@ def get_settings() -> Settings:
         ),
         SCOREVISION_PUBLIC_MIN_CHALLENGES=int(getenv("SCOREVISION_PUBLIC_MIN_CHALLENGES", 30)),
         SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS=float(getenv("SCOREVISION_PUBLIC_EVAL_WINDOW_DAYS", 3.0)),
-        SCOREVISION_FAILING_TUPLES_URL=getenv(
-            "SCOREVISION_FAILING_TUPLES_URL",
-            "https://conformity.scoredata.me/compliance/failing_tuples.json",
-        ),
+        SCOREVISION_FAILING_TUPLES_URL=_failing_tuples_url(),
         # Runner
         RUNNER_GET_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_GET_BLOCK_TIMEOUT_S", 15.0)),
         RUNNER_WAIT_BLOCK_TIMEOUT_S=float(getenv("SUBTENSOR_WAIT_BLOCK_TIMEOUT_S", 15.0)),
@@ -445,8 +475,6 @@ def get_settings() -> Settings:
         CHECKER_R2_CONCURRENCY=int(getenv("CHECKER_R2_CONCURRENCY", shared_r2_concurrency)),
         CHECKER_R2_BUCKET_PUBLIC_URL=getenv("CHECKER_R2_BUCKET_PUBLIC_URL", ""),
         CHECKER_R2_RESULTS_PREFIX=getenv("CHECKER_R2_RESULTS_PREFIX", "manako/compliances"),
-        CHECKER_R2_FAILS_KEY=getenv("CHECKER_R2_FAILS_KEY", ""),
-        CHECKER_R2_LATENCY_STATE_KEY=getenv("CHECKER_R2_LATENCY_STATE_KEY", ""),
         CHECKER_INTERVAL_BLOCKS=int(getenv("CHECKER_INTERVAL_BLOCKS", 360)),
         CHECKER_POLL_INTERVAL_S=int(getenv("CHECKER_POLL_INTERVAL_S", 60)),
         CHECKER_CHALLENGES_PER_TARGET=int(getenv("CHECKER_CHALLENGES_PER_TARGET", 10)),
@@ -462,4 +490,22 @@ def get_settings() -> Settings:
         CHECKER_RUNTIME_MEMORY_BYTES=int(getenv("CHECKER_RUNTIME_MEMORY_BYTES", 8589934592)),
         CHECKER_RUNTIME_CPU_SECONDS=int(getenv("CHECKER_RUNTIME_CPU_SECONDS", 30)),
         CHECKER_RUNTIME_WALL_TIMEOUT_S=int(getenv("CHECKER_RUNTIME_WALL_TIMEOUT_S", 45)),
+        # Path to the run-signing key: a root-only file, never an env variable.
+        # Read-only conformity token, owner side only: lets the final checker
+        # enumerate runs from the bucket instead of trusting a mutable index.
+        CHECKER_R2_READ_ACCESS_KEY_ID=getenv("CHECKER_R2_READ_ACCESS_KEY_ID", ""),
+        CHECKER_R2_READ_SECRET_ACCESS_KEY=getenv("CHECKER_R2_READ_SECRET_ACCESS_KEY", ""),
+        # Run signing wallet, resolved like the signer does. Leave the hotkey
+        # empty to run unsigned.
+        CHECKER_SIGNING_WALLET=getenv("CHECKER_SIGNING_WALLET", ""),
+        CHECKER_SIGNING_HOTKEY=getenv("CHECKER_SIGNING_HOTKEY", ""),
+        # ss58 address the final checker expects on every signed run.
+        LATENCY_LOOP_HOTKEY=getenv("LATENCY_LOOP_HOTKEY", ""),
+        FINAL_CHECKER_OUTPUT_KEY=getenv(
+            "FINAL_CHECKER_OUTPUT_KEY", "manako/conformity/failing_tuples.json"
+        ),
+        FINAL_CHECKER_STATE_KEY=getenv(
+            "FINAL_CHECKER_STATE_KEY", "manako/conformity/latency_state.json"
+        ),
+        FINAL_CHECKER_POLL_INTERVAL_S=int(getenv("FINAL_CHECKER_POLL_INTERVAL_S", 300)),
     )
