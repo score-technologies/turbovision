@@ -228,6 +228,7 @@ def pick_winner_with_tiebreak(
     delta_rel: float,
     first_commit_block_by_hk: dict[str, int],
     min_common_challenges: int = 5,
+    historical_min_failed_challenges_to_reject: int = 4,
 ) -> int:
     legacy_single_batch = recent_challenge_scores_by_miner is None
     if recent_challenge_scores_by_miner is None:
@@ -302,6 +303,7 @@ def pick_winner_with_tiebreak(
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=min_common_challenges,
+            min_failed_challenges_to_reject=historical_min_failed_challenges_to_reject,
         )
         logger.info(
             "[window-tiebreak] historical-sample winner uid=%d hk=%s vs uid=%d hk=%s -> "

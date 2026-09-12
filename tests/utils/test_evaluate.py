@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from scorevision.utils.evaluate import (
     post_vlm_ranking,
     get_element_scores,
@@ -36,6 +38,38 @@ def test_post_vlm_ranking(
     assert isinstance(evaluation.details, dict)
     assert evaluation.latency_ms == 0.0
     assert evaluation.acc > 0.0
+
+
+def test_post_vlm_ranking_does_not_gate_chutes_latency(
+    dummy_manifest,
+    dummy_pseudo_gt_annotations,
+    fake_miner_predictions,
+    fake_payload,
+    fake_challenge,
+    fake_frame_store,
+) -> None:
+    slow_miner_predictions = replace(
+        fake_miner_predictions,
+        latency_ms=60_000.0,
+        latency_p95_ms=60_000.0,
+    )
+    element_id = dummy_manifest.elements[0].id
+
+    evaluation = post_vlm_ranking(
+        payload=fake_payload,
+        miner_run=slow_miner_predictions,
+        challenge=fake_challenge,
+        pseudo_gt_annotations=dummy_pseudo_gt_annotations,
+        frame_store=fake_frame_store,
+        manifest=dummy_manifest,
+        element_id=element_id,
+    )
+
+    assert evaluation.score > 0.0
+    assert evaluation.latency_p95_ms == 60_000.0
+    assert evaluation.latency_pass is True
+    assert evaluation.rtf is None
+    assert evaluation.details["latency"]["service_rate_fps"] == 30
 
 
 def test_get_element_scores(
