@@ -22,7 +22,7 @@ from scorevision.validator.central.private_track.challenges import (
     Challenge,
     get_challenge_with_ground_truth,
 )
-from scorevision.validator.central.private_track.miners import send_challenge
+from scorevision.validator.central.private_track.miners import ChallengeAttempt, send_challenge
 from scorevision.validator.central.private_track.registry import RegisteredMiner, get_registered_miners
 from scorevision.validator.central.private_track.benchmark import (
     BenchmarkResult,
@@ -317,9 +317,12 @@ async def _challenge_miner(
     element_id: str,
     pillar_weights: dict[str, float] | None,
     image_digest: str,
+    *,
+    attempt: ChallengeAttempt | None = None,
 ) -> tuple[dict, list[dict] | None, BenchmarkResult | None]:
     try:
-        attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
+        if attempt is None:
+            attempt = await send_challenge(miner, challenge, keypair, timeout=timeout)
         response = attempt.response
         is_scored = response is not None and not attempt.timed_out
         response_predictions = None
@@ -600,8 +603,19 @@ async def _run_challenge_for_element(
             element_id,
         )
 
-        outcomes = list(await asyncio.gather(*[
-            _challenge_miner(
+        attempts = list(await asyncio.gather(*[
+            send_challenge(
+                miner,
+                challenge,
+                keypair,
+                timeout=settings.PRIVATE_MINER_TIMEOUT_S,
+            )
+            for miner in miners
+        ]))
+
+        outcomes = []
+        for miner, attempt in zip(miners, attempts):
+            outcomes.append(await _challenge_miner(
                 miner,
                 challenge,
                 keypair,
@@ -610,9 +624,8 @@ async def _run_challenge_for_element(
                 element_id,
                 pillar_weights,
                 miner.image_digest,
-            )
-            for miner in miners
-        ]))
+                attempt=attempt,
+            ))
 
         results: list[dict] = []
         for miner, (result, response_predictions, benchmark_result) in zip(miners, outcomes):
