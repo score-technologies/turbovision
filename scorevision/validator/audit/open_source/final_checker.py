@@ -179,8 +179,16 @@ def apply_run(
         except Exception:
             continue
         tuple_id = _tuple_id(hotkey, element_id, commit_block)
+        entry = tuples.get(tuple_id)
+        settled_latency_failure = (
+            entry is not None
+            and entry.get("verdict") == "FAIL_LATENCY"
+            and len(entry.get("run_keys") or []) >= threshold
+        )
 
         if status == "FAIL_OUTPUT":
+            if settled_latency_failure:
+                continue
             tuples[tuple_id] = {
                 "hotkey": hotkey,
                 "element_id": element_id,
@@ -193,10 +201,10 @@ def apply_run(
             continue
 
         if not _is_latency_breach(row):
-            tuples.pop(tuple_id, None)
+            if not settled_latency_failure:
+                tuples.pop(tuple_id, None)
             continue
 
-        entry = tuples.get(tuple_id)
         if entry is None or entry.get("verdict") == "FAIL_OUTPUT":
             entry = {
                 "hotkey": hotkey,

@@ -72,7 +72,7 @@ def test_a_pass_in_between_breaks_the_streak():
     assert rows == []
 
 
-def test_a_later_pass_lifts_an_existing_ban():
+def test_a_later_pass_does_not_lift_an_existing_latency_ban():
     rows = _fold(
         ("runs/1.json", _payload(1.0, _row("PENDING_LATENCY"))),
         ("runs/2.json", _payload(2.0, _row("PENDING_LATENCY"))),
@@ -80,7 +80,23 @@ def test_a_later_pass_lifts_an_existing_ban():
         ("runs/4.json", _payload(4.0, _row("PASS", 88.0))),
     )
 
-    assert rows == []
+    assert len(rows) == 1
+    assert rows[0]["latest_status"] == "FAIL_LATENCY"
+    assert rows[0]["evidence_run_keys"] == ["runs/1.json", "runs/2.json", "runs/3.json"]
+
+
+def test_output_failure_then_pass_does_not_lift_an_existing_latency_ban():
+    rows = _fold(
+        ("runs/1.json", _payload(1.0, _row("PENDING_LATENCY"))),
+        ("runs/2.json", _payload(2.0, _row("PENDING_LATENCY"))),
+        ("runs/3.json", _payload(3.0, _row("PENDING_LATENCY"))),
+        ("runs/4.json", _payload(4.0, _row("FAIL_OUTPUT"))),
+        ("runs/5.json", _payload(5.0, _row("PASS", 88.0))),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["latest_status"] == "FAIL_LATENCY"
+    assert rows[0]["evidence_run_keys"] == ["runs/1.json", "runs/2.json", "runs/3.json"]
 
 
 def test_output_failure_bans_immediately_and_a_pass_clears_it():
