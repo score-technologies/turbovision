@@ -1,8 +1,11 @@
+import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from time import perf_counter
-import asyncio
+
 import httpx
+
 from scorevision.utils.request_signing import build_signed_headers
 from scorevision.utils.schemas import ChallengeRequest, ChallengeResponse
 from scorevision.validator.central.private_track.challenges import Challenge
@@ -12,6 +15,47 @@ logger = logging.getLogger(__name__)
 
 LARGE_RESPONSE_BYTES = 1_000_000
 SLOW_RESPONSE_PARSE_MS = 100.0
+
+
+class ResponseTooLargeError(Exception):
+    def __init__(self, received_bytes: int) -> None:
+        self.received_bytes = received_bytes
+        super().__init__(
+            f"response exceeded {LARGE_RESPONSE_BYTES} bytes "
+            f"(received at least {received_bytes})"
+        )
+
+
+async def _post_with_size_limit(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+) -> tuple[httpx.Response, bytearray]:
+    async with client.stream("POST", url, json=payload, headers=headers) as response:
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_bytes = int(content_length)
+            except ValueError:
+                declared_bytes = None
+            if declared_bytes is not None and declared_bytes > LARGE_RESPONSE_BYTES:
+                raise ResponseTooLargeError(declared_bytes)
+
+        body = bytearray()
+        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+            next_size = len(body) + len(chunk)
+            if next_size > LARGE_RESPONSE_BYTES:
+                raise ResponseTooLargeError(next_size)
+            body.extend(chunk)
+
+        buffered_response = httpx.Response(
+            status_code=response.status_code,
+            headers=response.headers,
+            content=body,
+            request=response.request,
+        )
+        return buffered_response, body
 
 
 @dataclass(frozen=True)
@@ -47,11 +91,12 @@ async def send_challenge(
 
         client_timeout = httpx.Timeout(timeout=timeout)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
-            response = await asyncio.wait_for(
-                client.post(
+            response, response_body = await asyncio.wait_for(
+                _post_with_size_limit(
+                    client,
                     url,
-                    json=request.model_dump(exclude=excluded_fields),
-                    headers=headers,
+                    request.model_dump(exclude=excluded_fields),
+                    headers,
                 ),
                 timeout=timeout,
             )
@@ -70,11 +115,11 @@ async def send_challenge(
                     timed_out=True,
                 )
 
-            body_bytes = len(response.content)
+            body_bytes = len(response_body)
             content_length = response.headers.get("content-length")
             json_started = perf_counter()
             try:
-                response_payload = response.json()
+                response_payload = json.loads(response_body)
             except Exception as exc:
                 json_parse_ms = (perf_counter() - json_started) * 1000.0
                 logger.warning(
@@ -120,7 +165,7 @@ async def send_challenge(
                 if body_bytes >= LARGE_RESPONSE_BYTES
                 or json_parse_ms >= SLOW_RESPONSE_PARSE_MS
                 or validation_ms >= SLOW_RESPONSE_PARSE_MS
-                else logger.debug
+                else logger.info
             )
             diagnostic_log(
                 "Challenge response diagnostics hotkey=%s status=%s body_bytes=%d "
@@ -144,6 +189,21 @@ async def send_challenge(
     except (asyncio.TimeoutError, httpx.TimeoutException):
         elapsed_s = perf_counter() - start
         logger.warning("Challenge to %s timed out after %.2fs", miner.hotkey, elapsed_s)
+        return ChallengeAttempt(
+            response=None,
+            elapsed_s=elapsed_s,
+            timed_out=True,
+        )
+    except ResponseTooLargeError as e:
+        elapsed_s = perf_counter() - start
+        logger.warning(
+            "Challenge response rejected hotkey=%s outcome=response_too_large "
+            "received_bytes=%d max_bytes=%d elapsed_s=%.3f",
+            miner.hotkey,
+            e.received_bytes,
+            LARGE_RESPONSE_BYTES,
+            elapsed_s,
+        )
         return ChallengeAttempt(
             response=None,
             elapsed_s=elapsed_s,

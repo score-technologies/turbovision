@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 from scorevision.utils.manifest import Manifest
@@ -67,11 +68,27 @@ def _miner() -> RegisteredMiner:
     )
 
 
+def _streaming_response(payload: dict, *, content_length: int | None = None):
+    body = json.dumps(payload).encode()
+    response = Mock()
+    response.status_code = 200
+    response.headers = {
+        "content-length": str(content_length if content_length is not None else len(body))
+    }
+    response.request = httpx.Request("POST", "http://127.0.0.1:8000/challenge")
+
+    async def iter_body(chunk_size=None):
+        yield body
+
+    response.aiter_bytes = iter_body
+    stream_context = AsyncMock()
+    stream_context.__aenter__.return_value = response
+    return response, stream_context
+
+
 @pytest.mark.asyncio
 async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
-    response = Mock()
-    response.raise_for_status.return_value = None
-    response.json.return_value = {
+    response_payload = {
         "challenge_id": "tcg-full-manifest-1",
         "prediction": {
             "Header": {"card_grade": 8.9},
@@ -84,11 +101,9 @@ async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
         },
         "processing_time": 1.0,
     }
-    response.content = b"x" * 256
-    response.headers = {"content-length": "256"}
-    response.status_code = 200
-    client = AsyncMock()
-    client.post.return_value = response
+    _, stream_context = _streaming_response(response_payload)
+    client = Mock()
+    client.stream.return_value = stream_context
     client_context = AsyncMock()
     client_context.__aenter__.return_value = client
 
@@ -111,7 +126,7 @@ async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
 
     assert attempt.timed_out is False
     assert attempt.response is not None
-    request_json = client.post.await_args.kwargs["json"]
+    request_json = client.stream.call_args.kwargs["json"]
     assert "groundtruth_type" not in request_json
     assert request_json["image_url"] == "https://example.com/card.png"
     assert attempt.response.prediction.Header.card_grade == 8
@@ -119,9 +134,7 @@ async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
 
 @pytest.mark.asyncio
 async def test_existing_video_request_keeps_legacy_wire_contract(caplog):
-    caplog.set_level("DEBUG")
-    response = Mock()
-    response.raise_for_status.return_value = None
+    caplog.set_level("INFO")
     response_payload = {
         "challenge_id": "soccer-legacy-1",
         "prediction": {
@@ -130,12 +143,9 @@ async def test_existing_video_request_keeps_legacy_wire_contract(caplog):
         },
         "processing_time": 1.0,
     }
-    response.json.return_value = response_payload
-    response.content = b"x" * 321
-    response.headers = {"content-length": "321"}
-    response.status_code = 200
-    client = AsyncMock()
-    client.post.return_value = response
+    _, stream_context = _streaming_response(response_payload)
+    client = Mock()
+    client.stream.return_value = stream_context
     client_context = AsyncMock()
     client_context.__aenter__.return_value = client
     legacy_challenge = Challenge(
@@ -163,16 +173,92 @@ async def test_existing_video_request_keeps_legacy_wire_contract(caplog):
         )
 
     assert attempt.timed_out is False
-    assert client.post.await_args.kwargs["json"] == {
+    assert client.stream.call_args.kwargs["json"] == {
         "challenge_id": "soccer-legacy-1",
         "video_url": "https://example.com/video.mp4",
         "frames": None,
     }
-    assert "body_bytes=321" in caplog.text
-    assert "content_length=321" in caplog.text
+    expected_body_bytes = len(json.dumps(response_payload).encode())
+    assert f"body_bytes={expected_body_bytes}" in caplog.text
+    assert f"content_length={expected_body_bytes}" in caplog.text
     assert "json_parse_ms=" in caplog.text
     assert "validation_ms=" in caplog.text
     assert "outcome=ok prediction_count=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_response_is_rejected_when_declared_size_exceeds_one_megabyte(caplog):
+    caplog.set_level("WARNING")
+    _, stream_context = _streaming_response({}, content_length=1_000_001)
+    client = Mock()
+    client.stream.return_value = stream_context
+    client_context = AsyncMock()
+    client_context.__aenter__.return_value = client
+
+    with (
+        patch(
+            "scorevision.validator.central.private_track.miners.httpx.AsyncClient",
+            return_value=client_context,
+        ),
+        patch(
+            "scorevision.validator.central.private_track.miners.build_signed_headers",
+            return_value={"x-test": "signed"},
+        ),
+    ):
+        attempt = await send_challenge(
+            miner=_miner(),
+            challenge=_tcg_challenge(),
+            hotkey=object(),
+            timeout=30.0,
+        )
+
+    assert attempt.response is None
+    assert attempt.timed_out is True
+    assert "outcome=response_too_large" in caplog.text
+    assert "received_bytes=1000001 max_bytes=1000000" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_response_is_rejected_when_streamed_size_exceeds_one_megabyte(caplog):
+    caplog.set_level("WARNING")
+    response = Mock()
+    response.status_code = 200
+    response.headers = {}
+    response.request = httpx.Request("POST", "http://127.0.0.1:8000/challenge")
+
+    async def oversized_body(chunk_size=None):
+        yield b"x" * 600_000
+        yield b"x" * 400_001
+
+    response.aiter_bytes = oversized_body
+    stream_context = AsyncMock()
+    stream_context.__aenter__.return_value = response
+    client = Mock()
+    client.stream.return_value = stream_context
+    client_context = AsyncMock()
+    client_context.__aenter__.return_value = client
+
+    with (
+        patch(
+            "scorevision.validator.central.private_track.miners.httpx.AsyncClient",
+            return_value=client_context,
+        ),
+        patch(
+            "scorevision.validator.central.private_track.miners.build_signed_headers",
+            return_value={"x-test": "signed"},
+        ),
+    ):
+        attempt = await send_challenge(
+            miner=_miner(),
+            challenge=_tcg_challenge(),
+            hotkey=object(),
+            timeout=30.0,
+        )
+
+    assert attempt.response is None
+    assert attempt.timed_out is True
+    assert "outcome=response_too_large" in caplog.text
+    assert "received_bytes=1000001 max_bytes=1000000" in caplog.text
 
 
 def test_full_manifest_loads_all_private_groundtruth_and_pillar_pairs():
