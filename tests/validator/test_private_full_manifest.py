@@ -84,6 +84,9 @@ async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
         },
         "processing_time": 1.0,
     }
+    response.content = b"x" * 256
+    response.headers = {"content-length": "256"}
+    response.status_code = 200
     client = AsyncMock()
     client.post.return_value = response
     client_context = AsyncMock()
@@ -115,10 +118,11 @@ async def test_tcg_image_is_forwarded_without_expanding_miner_contract():
 
 
 @pytest.mark.asyncio
-async def test_existing_video_request_keeps_legacy_wire_contract():
+async def test_existing_video_request_keeps_legacy_wire_contract(caplog):
+    caplog.set_level("DEBUG")
     response = Mock()
     response.raise_for_status.return_value = None
-    response.json.return_value = {
+    response_payload = {
         "challenge_id": "soccer-legacy-1",
         "prediction": {
             "type": "soccer_action",
@@ -126,6 +130,10 @@ async def test_existing_video_request_keeps_legacy_wire_contract():
         },
         "processing_time": 1.0,
     }
+    response.json.return_value = response_payload
+    response.content = b"x" * 321
+    response.headers = {"content-length": "321"}
+    response.status_code = 200
     client = AsyncMock()
     client.post.return_value = response
     client_context = AsyncMock()
@@ -160,6 +168,11 @@ async def test_existing_video_request_keeps_legacy_wire_contract():
         "video_url": "https://example.com/video.mp4",
         "frames": None,
     }
+    assert "body_bytes=321" in caplog.text
+    assert "content_length=321" in caplog.text
+    assert "json_parse_ms=" in caplog.text
+    assert "validation_ms=" in caplog.text
+    assert "outcome=ok prediction_count=1" in caplog.text
 
 
 def test_full_manifest_loads_all_private_groundtruth_and_pillar_pairs():

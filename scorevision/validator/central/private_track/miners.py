@@ -10,6 +10,9 @@ from scorevision.validator.central.private_track.registry import RegisteredMiner
 
 logger = logging.getLogger(__name__)
 
+LARGE_RESPONSE_BYTES = 1_000_000
+SLOW_RESPONSE_PARSE_MS = 100.0
+
 
 @dataclass(frozen=True)
 class ChallengeAttempt:
@@ -53,22 +56,89 @@ async def send_challenge(
                 timeout=timeout,
             )
             response.raise_for_status()
-            elapsed_s = perf_counter() - start
-            if elapsed_s > timeout:
+            http_elapsed_s = perf_counter() - start
+            if http_elapsed_s > timeout:
                 logger.warning(
                     "Challenge to %s exceeded timeout %.2fs (elapsed %.2fs)",
                     miner.hotkey,
                     timeout,
-                    elapsed_s,
+                    http_elapsed_s,
                 )
                 return ChallengeAttempt(
                     response=None,
-                    elapsed_s=elapsed_s,
+                    elapsed_s=http_elapsed_s,
                     timed_out=True,
                 )
+
+            body_bytes = len(response.content)
+            content_length = response.headers.get("content-length")
+            json_started = perf_counter()
+            try:
+                response_payload = response.json()
+            except Exception as exc:
+                json_parse_ms = (perf_counter() - json_started) * 1000.0
+                logger.warning(
+                    "Challenge response diagnostics hotkey=%s status=%s body_bytes=%d "
+                    "content_length=%s http_s=%.3f json_parse_ms=%.1f "
+                    "validation_ms=not_started total_s=%.3f outcome=json_error error_type=%s",
+                    miner.hotkey,
+                    response.status_code,
+                    body_bytes,
+                    content_length,
+                    http_elapsed_s,
+                    json_parse_ms,
+                    perf_counter() - start,
+                    type(exc).__name__,
+                )
+                raise
+
+            json_parse_ms = (perf_counter() - json_started) * 1000.0
+            validation_started = perf_counter()
+            try:
+                parsed_response = ChallengeResponse(**response_payload)
+            except Exception as exc:
+                validation_ms = (perf_counter() - validation_started) * 1000.0
+                logger.warning(
+                    "Challenge response diagnostics hotkey=%s status=%s body_bytes=%d "
+                    "content_length=%s http_s=%.3f json_parse_ms=%.1f validation_ms=%.1f "
+                    "total_s=%.3f outcome=validation_error error_type=%s",
+                    miner.hotkey,
+                    response.status_code,
+                    body_bytes,
+                    content_length,
+                    http_elapsed_s,
+                    json_parse_ms,
+                    validation_ms,
+                    perf_counter() - start,
+                    type(exc).__name__,
+                )
+                raise
+
+            validation_ms = (perf_counter() - validation_started) * 1000.0
+            diagnostic_log = (
+                logger.warning
+                if body_bytes >= LARGE_RESPONSE_BYTES
+                or json_parse_ms >= SLOW_RESPONSE_PARSE_MS
+                or validation_ms >= SLOW_RESPONSE_PARSE_MS
+                else logger.debug
+            )
+            diagnostic_log(
+                "Challenge response diagnostics hotkey=%s status=%s body_bytes=%d "
+                "content_length=%s http_s=%.3f json_parse_ms=%.1f validation_ms=%.1f "
+                "total_s=%.3f outcome=ok prediction_count=%d",
+                miner.hotkey,
+                response.status_code,
+                body_bytes,
+                content_length,
+                http_elapsed_s,
+                json_parse_ms,
+                validation_ms,
+                perf_counter() - start,
+                parsed_response.prediction_count,
+            )
             return ChallengeAttempt(
-                response=ChallengeResponse(**response.json()),
-                elapsed_s=elapsed_s,
+                response=parsed_response,
+                elapsed_s=http_elapsed_s,
                 timed_out=False,
             )
     except (asyncio.TimeoutError, httpx.TimeoutException):
