@@ -179,6 +179,7 @@ class Miner:
     block: int
     element_id: Optional[str] = None
     registry_skip_reason: Optional[str] = None
+    registry_skip_details: Optional[dict] = None
 
 
 # ------------------------- HF gating & revision checks ------------------------- #
@@ -395,18 +396,60 @@ def _hf_repo_has_only_onnx_models(
 
 
 # ------------------------------ Chutes helpers -------------------------------- #
-async def _chutes_get_json(url: str, headers: Dict[str, str]) -> Optional[dict]:
+class _ChutesInfo(dict):
+    """Chutes metadata with non-sensitive diagnostics for the registry shard."""
+
+    def __init__(self, data: Optional[dict], *, lookup_details: dict):
+        super().__init__(data or {})
+        self.lookup_details = lookup_details
+
+
+async def _chutes_get_json(
+    url: str, headers: Dict[str, str]
+) -> tuple[Optional[dict], dict]:
     timeout = aiohttp.ClientTimeout(total=15)
+    started_at = time.monotonic()
     try:
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(url, headers=headers) as r:
                 if r.status != 200:
                     logger.debug("[Chutes] GET %s -> %s", url, r.status)
-                    return None
+                    return None, {
+                        "category": f"http_{r.status}",
+                        "http_status": r.status,
+                        "latency_ms": round((time.monotonic() - started_at) * 1000, 1),
+                    }
                 try:
                     data = await r.json()
+                    if not isinstance(data, dict):
+                        logger.debug(
+                            "[Chutes] GET %s returned unexpected JSON type %s",
+                            url,
+                            type(data).__name__,
+                        )
+                        return None, {
+                            "category": "invalid_payload_type",
+                            "payload_type": type(data).__name__,
+                            "latency_ms": round(
+                                (time.monotonic() - started_at) * 1000, 1
+                            ),
+                        }
+                    if not data:
+                        logger.debug(
+                            "[Chutes] GET %s returned an empty JSON object", url
+                        )
+                        return None, {
+                            "category": "empty_response",
+                            "latency_ms": round(
+                                (time.monotonic() - started_at) * 1000, 1
+                            ),
+                        }
                     logger.debug("[Chutes] GET %s -> ok", url)
-                    return data
+                    return data, {
+                        "category": "success",
+                        "http_status": r.status,
+                        "latency_ms": round((time.monotonic() - started_at) * 1000, 1),
+                    }
                 except Exception as e:
                     logger.debug(
                         "[Chutes] JSON decode error for %s: %s: %r",
@@ -414,24 +457,64 @@ async def _chutes_get_json(url: str, headers: Dict[str, str]) -> Optional[dict]:
                         type(e).__name__,
                         e,
                     )
-                    return None
+                    return None, {
+                        "category": "invalid_json",
+                        "error_type": type(e).__name__,
+                        "latency_ms": round((time.monotonic() - started_at) * 1000, 1),
+                    }
     except Exception as e:
         logger.info("[Chutes] GET %s failed: %s: %r", url, type(e).__name__, e)
-        return None
+        if isinstance(e, (asyncio.TimeoutError, aiohttp.ServerTimeoutError)):
+            category = "timeout"
+        elif isinstance(e, aiohttp.ClientConnectionError):
+            category = "network_error"
+        elif isinstance(e, aiohttp.ClientError):
+            category = "client_error"
+        else:
+            category = "unexpected_error"
+        return None, {
+            "category": category,
+            "error_type": type(e).__name__,
+            "latency_ms": round((time.monotonic() - started_at) * 1000, 1),
+        }
 
 
 async def fetch_chute_info(chute_id: str) -> Optional[dict]:
+    started_at = time.monotonic()
     token = os.getenv("CHUTES_API_KEY", "")
     if not token or not chute_id:
         logger.debug("[Chutes] missing token or chute_id")
-        return None
+        category = "missing_api_key" if not token else "missing_chute_id"
+        return _ChutesInfo(
+            None,
+            lookup_details={
+                "category": category,
+                "attempt_count": 0,
+                "attempts": [],
+                "total_latency_ms": round(
+                    (time.monotonic() - started_at) * 1000, 1
+                ),
+            },
+        )
     url = f"https://api.chutes.ai/chutes/{chute_id}"
     headers = {"Authorization": token}
+    attempts: list[dict] = []
 
     for attempt in range(1, _CHUTES_FETCH_RETRIES + 1):
-        data = await _chutes_get_json(url, headers=headers)
+        data, attempt_details = await _chutes_get_json(url, headers=headers)
+        attempts.append({"attempt": attempt, **attempt_details})
         if data:
-            return data
+            return _ChutesInfo(
+                data,
+                lookup_details={
+                    "category": "success",
+                    "attempt_count": len(attempts),
+                    "attempts": attempts,
+                    "total_latency_ms": round(
+                        (time.monotonic() - started_at) * 1000, 1
+                    ),
+                },
+            )
         if attempt < _CHUTES_FETCH_RETRIES:
             delay_s = _CHUTES_FETCH_BACKOFF_S * (2 ** (attempt - 1))
             logger.info(
@@ -442,7 +525,15 @@ async def fetch_chute_info(chute_id: str) -> Optional[dict]:
                 delay_s,
             )
             await asyncio.sleep(delay_s)
-    return None
+    return _ChutesInfo(
+        None,
+        lookup_details={
+            "category": attempts[-1]["category"] if attempts else "unknown_error",
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+            "total_latency_ms": round((time.monotonic() - started_at) * 1000, 1),
+        },
+    )
 
 def _pick_latest_miner_commit_for_element(
     arr,
@@ -970,8 +1061,11 @@ async def get_miners_from_registry(
         logger.warning("[Registry] No on-chain candidates")
         return {}, skipped
 
-    def _mark_skipped(uid: int, miner: Miner, reason: str) -> None:
+    def _mark_skipped(
+        uid: int, miner: Miner, reason: str, details: Optional[dict] = None
+    ) -> None:
         miner.registry_skip_reason = reason
+        miner.registry_skip_details = details
         skipped[uid] = miner
 
     # 2) Filter by HF gating/inaccessible + Chutes slug/revision checks
@@ -1041,14 +1135,32 @@ async def get_miners_from_registry(
 
         ok = True
         chute_reason = None
+        chute_lookup_details = None
         if m.chute_id:
             try:
                 info = await fetch_chute_info(m.chute_id)
+                chute_lookup_details = getattr(info, "lookup_details", None)
             except Exception as e:
                 logger.info("[Registry] uid=%s slug=%s: Chutes lookup error: %s", uid, m.slug, e)
                 info = None
+                chute_lookup_details = {
+                    "category": "unexpected_error",
+                    "attempt_count": 0,
+                    "attempts": [],
+                    "error_type": type(e).__name__,
+                }
             if not info:
-                logger.info("[Registry] uid=%s slug=%s: Chutes unfetched", uid, m.slug)
+                lookup_category = (
+                    chute_lookup_details.get("category")
+                    if isinstance(chute_lookup_details, dict)
+                    else "unknown_error"
+                )
+                logger.info(
+                    "[Registry] uid=%s slug=%s: Chutes unfetched (%s)",
+                    uid,
+                    m.slug,
+                    lookup_category,
+                )
                 ok = False
                 chute_reason = "chutes_unfetched"
             else:
@@ -1076,7 +1188,15 @@ async def get_miners_from_registry(
         if ok:
             filtered[uid] = m
         else:
-            _mark_skipped(uid, m, chute_reason or "chutes_validation_failed")
+            details = None
+            if chute_lookup_details is not None:
+                details = {"chutes_lookup": chute_lookup_details}
+            _mark_skipped(
+                uid,
+                m,
+                chute_reason or "chutes_validation_failed",
+                details,
+            )
 
     logger.info("[Registry] %d miners after filtering", len(filtered))
     if not filtered:

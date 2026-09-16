@@ -81,6 +81,102 @@ def test_hf_repo_has_only_onnx_models_false_when_no_model_artifact(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_chute_info_records_each_failed_attempt(monkeypatch):
+    responses = [
+        (None, {"category": "http_429", "http_status": 429, "latency_ms": 12.0}),
+        (
+            None,
+            {
+                "category": "timeout",
+                "error_type": "TimeoutError",
+                "latency_ms": 15_000.0,
+            },
+        ),
+    ]
+
+    async def fake_chutes_get_json(_url, headers):
+        assert headers == {"Authorization": "test-key"}
+        return responses.pop(0)
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setenv("CHUTES_API_KEY", "test-key")
+    monkeypatch.setattr(registry, "_CHUTES_FETCH_RETRIES", 2)
+    monkeypatch.setattr(registry, "_CHUTES_FETCH_BACKOFF_S", 0)
+    monkeypatch.setattr(registry, "_chutes_get_json", fake_chutes_get_json)
+    monkeypatch.setattr(registry.asyncio, "sleep", no_sleep)
+
+    info = await registry.fetch_chute_info("chute1")
+
+    assert not info
+    assert info.lookup_details["category"] == "timeout"
+    assert info.lookup_details["attempt_count"] == 2
+    assert info.lookup_details["attempts"] == [
+        {
+            "attempt": 1,
+            "category": "http_429",
+            "http_status": 429,
+            "latency_ms": 12.0,
+        },
+        {
+            "attempt": 2,
+            "category": "timeout",
+            "error_type": "TimeoutError",
+            "latency_ms": 15_000.0,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_registry_preserves_chutes_lookup_diagnostics(monkeypatch):
+    async def fake_get_subtensor():
+        return _FakeSubtensor()
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return registry._ChutesInfo(
+            None,
+            lookup_details={
+                "category": "http_503",
+                "attempt_count": 2,
+                "attempts": [
+                    {"attempt": 1, "category": "http_503", "http_status": 503},
+                    {"attempt": 2, "category": "http_503", "http_status": 503},
+                ],
+                "total_latency_ms": 125.0,
+            },
+        )
+
+    monkeypatch.setattr(
+        registry,
+        "get_settings",
+        lambda: SimpleNamespace(SCOREVISION_MECHID=1),
+    )
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+
+    kept, skipped = await registry.get_miners_from_registry(18)
+
+    assert kept == {}
+    assert skipped[0].registry_skip_reason == "chutes_unfetched"
+    assert skipped[0].registry_skip_details == {
+        "chutes_lookup": {
+            "category": "http_503",
+            "attempt_count": 2,
+            "attempts": [
+                {"attempt": 1, "category": "http_503", "http_status": 503},
+                {"attempt": 2, "category": "http_503", "http_status": 503},
+            ],
+            "total_latency_ms": 125.0,
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_miners_from_registry_skips_when_onnx_only_enabled_and_repo_not_onnx(monkeypatch):
     async def fake_get_subtensor():
         return _FakeSubtensor()

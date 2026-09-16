@@ -643,6 +643,13 @@ async def runner(
                 str(getattr(miner, "registry_skip_reason", "") or "").strip()
                 or "unknown_registry_filter"
             )
+            evaluation_details = {
+                "registry_skipped": True,
+                "registry_skip_reason": skip_reason,
+            }
+            skip_details = getattr(miner, "registry_skip_details", None)
+            if isinstance(skip_details, dict) and skip_details:
+                evaluation_details["registry_skip_details"] = skip_details
             zero_output = SVRunOutput(
                 success=False,
                 latency_ms=0.0,
@@ -659,10 +666,7 @@ async def runner(
                 acc=0.0,
                 latency_ms=0.0,
                 score=0.0,
-                details={
-                    "registry_skipped": True,
-                    "registry_skip_reason": skip_reason,
-                },
+                details=evaluation_details,
                 latency_p95_ms=0.0,
                 latency_pass=False,
                 rtf=None,
