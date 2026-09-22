@@ -3,6 +3,7 @@ import gc
 import os
 from logging import getLogger
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Optional, Dict
 
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput
@@ -82,7 +83,18 @@ _EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
 
 
 async def _emit_shard_guarded(**kwargs) -> None:
+    queued_at = perf_counter()
+    label = (
+        f"{kwargs.get('element_id') or 'unknown'}:"
+        f"{str(kwargs.get('miner_hotkey_ss58') or 'unknown')[:6]}"
+    )
     async with _EMIT_SHARD_SEM:
+        logger.info(
+            "[emit-queue:%s] status=acquired wait_ms=%.1f concurrency=%d",
+            label,
+            (perf_counter() - queued_at) * 1000.0,
+            _emit_shard_concurrency(),
+        )
         await emit_shard(**kwargs)
 
 

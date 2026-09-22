@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from json import dumps
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Dict, Optional
 import httpx
 from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
@@ -64,8 +65,15 @@ def _emit_shard_concurrency() -> int:
 _EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
 
 
-async def _run_guarded(coro):
+async def _run_guarded(coro, *, label: str = "private"):
+    queued_at = perf_counter()
     async with _EMIT_SHARD_SEM:
+        logger.info(
+            "[emit-queue:%s] status=acquired wait_ms=%.1f concurrency=%d",
+            label,
+            (perf_counter() - queued_at) * 1000.0,
+            _emit_shard_concurrency(),
+        )
         return await coro
 
 
@@ -510,24 +518,27 @@ async def _emit_private_score_to_public_db(
         "image_digest": result.get("image_digest"),
     }
 
-    await _run_guarded(emit_shard(
-        slug=f"private-{miner.uid}",
-        challenge=challenge_obj,
-        miner_run=miner_run,
-        evaluation=evaluation,
-        miner_hotkey_ss58=miner.hotkey,
-        trigger_block=trigger_block,
-        element_id=element_id,
-        manifest_hash=manifest_hash,
-        lane="private",
-        model=miner.image_repo,
-        revision=miner.image_tag,
-        chute_id=None,
-        commitment_meta=commitment_meta,
-        commit_block=miner.commit_block,
-        store_response_blob=False,
-        responses_key_override=private_responses_key,
-    ))
+    await _run_guarded(
+        emit_shard(
+            slug=f"private-{miner.uid}",
+            challenge=challenge_obj,
+            miner_run=miner_run,
+            evaluation=evaluation,
+            miner_hotkey_ss58=miner.hotkey,
+            trigger_block=trigger_block,
+            element_id=element_id,
+            manifest_hash=manifest_hash,
+            lane="private",
+            model=miner.image_repo,
+            revision=miner.image_tag,
+            chute_id=None,
+            commitment_meta=commitment_meta,
+            commit_block=miner.commit_block,
+            store_response_blob=False,
+            responses_key_override=private_responses_key,
+        ),
+        label=f"{element_id}:{miner.hotkey[:6]}",
+    )
 
 
 def _log_runner_task_failure(task: asyncio.Task, element_id: str, block: int) -> None:

@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from json import dumps, loads
 import asyncio
+from logging import getLogger
+from time import perf_counter
 from aiobotocore.session import get_session
 import boto3
 from botocore.config import Config as BotoConfig
@@ -21,6 +23,9 @@ from scorevision.utils.r2_public import (
     normalize_index_url,
 )
 from scorevision.utils.settings import Settings, get_settings
+
+
+logger = getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -121,24 +126,82 @@ async def add_index_key_if_new(
     bucket: str,
     key: str,
     index_key: str = "manako/index.json",
+    trace_id: str | None = None,
 ) -> bool:
+    def stage_start(stage: str) -> float:
+        started = perf_counter()
+        if trace_id:
+            logger.info(
+                "[emit:%s] stage=%s status=start index=%s",
+                trace_id,
+                stage,
+                index_key,
+            )
+        return started
+
+    def stage_done(stage: str, started: float, **fields) -> None:
+        if not trace_id:
+            return
+        suffix = " ".join(f"{name}={value}" for name, value in fields.items())
+        logger.info(
+            "[emit:%s] stage=%s status=done duration_ms=%.1f%s%s",
+            trace_id,
+            stage,
+            (perf_counter() - started) * 1000.0,
+            " " if suffix else "",
+            suffix,
+        )
+
     async with client_factory() as c:
         try:
+            started = stage_start("index_get")
             r = await c.get_object(Bucket=bucket, Key=index_key)
-            items = set(loads(await r["Body"].read()))
+            stage_done("index_get", started)
+
+            started = stage_start("index_read")
+            body = await r["Body"].read()
+            stage_done("index_read", started, bytes=len(body))
+
+            started = stage_start("index_parse")
+            items = set(loads(body))
+            stage_done("index_parse", started, entries=len(items))
         except Exception as e:
             if not is_not_found_error(e):
                 raise
             items = set()
+            if trace_id:
+                logger.info(
+                    "[emit:%s] stage=index_get status=not_found index=%s",
+                    trace_id,
+                    index_key,
+                )
         if key in items:
+            if trace_id:
+                logger.info(
+                    "[emit:%s] stage=index_update status=unchanged entries=%d",
+                    trace_id,
+                    len(items),
+                )
             return False
         items.add(key)
+
+        started = stage_start("index_serialize")
+        payload = dumps(sorted(items))
+        stage_done(
+            "index_serialize",
+            started,
+            entries=len(items),
+            bytes=len(payload.encode()),
+        )
+
+        started = stage_start("index_put")
         await c.put_object(
             Bucket=bucket,
             Key=index_key,
-            Body=dumps(sorted(items)),
+            Body=payload,
             ContentType="application/json",
         )
+        stage_done("index_put", started, entries=len(items))
         return True
 
 

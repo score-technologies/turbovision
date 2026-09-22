@@ -152,6 +152,9 @@ async def test_score_shard_write_retries_twice(monkeypatch):
     assert [call.kwargs["lane"] for call in sink_mock.await_args_list] == [
         "private"
     ] * 3
+    assert [call.kwargs["trace_id"] for call in sink_mock.await_args_list] == [
+        "element:hotkey:challenge:test"
+    ] * 3
     assert [call.args[0] for call in sleep_mock.await_args_list] == [0.5, 1.0]
 
 

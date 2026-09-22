@@ -5,7 +5,7 @@ import uuid
 from json import dumps, loads
 from logging import getLogger
 from pathlib import Path
-from time import time
+from time import perf_counter, time
 from urllib.parse import urljoin, urlparse
 import aiohttp
 from async_substrate_interface.errors import SubstrateRequestException
@@ -219,13 +219,19 @@ def _r2_enabled() -> bool:
     return is_configured(central_r2_config(get_settings()), require_bucket=True)
 
 
-async def _index_add_if_new(key: str, *, index_key: str = "manako/index.json") -> None:
+async def _index_add_if_new(
+    key: str,
+    *,
+    index_key: str = "manako/index.json",
+    trace_id: str | None = None,
+) -> None:
     settings = get_settings()
     await add_index_key_if_new(
         client_factory=get_s3_client,
         bucket=settings.SCOREVISION_BUCKET,
         key=key,
         index_key=index_key,
+        trace_id=trace_id,
     )
 
 
@@ -274,6 +280,7 @@ async def sink_sv_at(
     lines: list[dict],
     *,
     lane: str = "public",
+    trace_id: str | None = None,
 ) -> tuple[str, list[dict]]:
     if not lines:
         return "", []
@@ -281,7 +288,17 @@ async def sink_sv_at(
         dumps(l.get("payload") or {}, sort_keys=True, separators=(",", ":"))
         for l in lines
     ]
+    sign_started = perf_counter()
+    if trace_id:
+        logger.info("[emit:%s] stage=sign status=start", trace_id)
     hk, sigs = await _sign_batch(payloads)
+    if trace_id:
+        logger.info(
+            "[emit:%s] stage=sign status=done duration_ms=%.1f payloads=%d",
+            trace_id,
+            (perf_counter() - sign_started) * 1000.0,
+            len(payloads),
+        )
     signed = []
     for base, sig in zip(lines, sigs):
         rec = dict(base)
@@ -290,15 +307,35 @@ async def sink_sv_at(
         signed.append(rec)
 
     s = get_settings()
+    shard_body = dumps(signed, separators=(",", ":"))
 
     async with get_s3_client() as c:
+        put_started = perf_counter()
+        if trace_id:
+            logger.info(
+                "[emit:%s] stage=shard_put status=start bytes=%d key=%s",
+                trace_id,
+                len(shard_body.encode()),
+                key,
+            )
         await c.put_object(
             Bucket=s.SCOREVISION_BUCKET,
             Key=key,
-            Body=dumps(signed, separators=(",", ":")),
+            Body=shard_body,
             ContentType="application/json",
         )
-        await _index_add_if_new(key, index_key=_lane_index_key(lane))
+        if trace_id:
+            logger.info(
+                "[emit:%s] stage=shard_put status=done duration_ms=%.1f bytes=%d",
+                trace_id,
+                (perf_counter() - put_started) * 1000.0,
+                len(shard_body.encode()),
+            )
+        await _index_add_if_new(
+            key,
+            index_key=_lane_index_key(lane),
+            trace_id=trace_id,
+        )
     return hk, signed
 
 
@@ -313,22 +350,51 @@ async def _sink_sv_at_with_retries(
 ) -> tuple[str, list[dict]]:
     """Write one score shard, retrying transient sink failures in isolation."""
     for attempt in range(retries + 1):
+        attempt_started = perf_counter()
+        logger.info(
+            "[emit:%s] stage=sink_attempt status=start attempt=%d/%d timeout_s=%.1f",
+            rid,
+            attempt + 1,
+            retries + 1,
+            timeout_s,
+        )
         try:
-            return await asyncio.wait_for(
-                sink_sv_at(key, lines, lane=lane), timeout=timeout_s
+            result = await asyncio.wait_for(
+                sink_sv_at(key, lines, lane=lane, trace_id=rid), timeout=timeout_s
             )
+            logger.info(
+                "[emit:%s] stage=sink_attempt status=done attempt=%d/%d duration_ms=%.1f",
+                rid,
+                attempt + 1,
+                retries + 1,
+                (perf_counter() - attempt_started) * 1000.0,
+            )
+            return result
         except Exception as exc:
+            duration_ms = (perf_counter() - attempt_started) * 1000.0
             if attempt >= retries:
+                logger.error(
+                    "[emit:%s] stage=sink_attempt status=failed attempt=%d/%d "
+                    "duration_ms=%.1f error_type=%s error=%r",
+                    rid,
+                    attempt + 1,
+                    retries + 1,
+                    duration_ms,
+                    type(exc).__name__,
+                    exc,
+                )
                 raise
             delay_s = 0.5 * (2**attempt)
             logger.warning(
-                "[emit:%s] score shard write failed (%s); retrying in %.1fs "
-                "(attempt %d/%d)",
+                "[emit:%s] stage=sink_attempt status=retry attempt=%d/%d "
+                "duration_ms=%.1f error_type=%s error=%r retry_in_s=%.1f",
                 rid,
+                attempt + 1,
+                retries + 1,
+                duration_ms,
+                type(exc).__name__,
                 exc,
                 delay_s,
-                attempt + 2,
-                retries + 1,
             )
             await asyncio.sleep(delay_s)
 
