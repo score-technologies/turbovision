@@ -68,13 +68,22 @@ _EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
 async def _run_guarded(coro, *, label: str = "private"):
     queued_at = perf_counter()
     async with _EMIT_SHARD_SEM:
+        acquired_at = perf_counter()
         logger.info(
             "[emit-queue:%s] status=acquired wait_ms=%.1f concurrency=%d",
             label,
-            (perf_counter() - queued_at) * 1000.0,
+            (acquired_at - queued_at) * 1000.0,
             _emit_shard_concurrency(),
         )
-        return await coro
+        try:
+            return await coro
+        finally:
+            logger.info(
+                "[emit-queue:%s] status=released hold_ms=%.1f concurrency=%d",
+                label,
+                (perf_counter() - acquired_at) * 1000.0,
+                _emit_shard_concurrency(),
+            )
 
 
 def _ground_truth_count(challenge: Challenge) -> int:
@@ -112,7 +121,14 @@ def _private_responses_r2_config() -> R2Config:
     )
 
 
-async def _upload_to_private_r2(key: str, index_key: str, payload: dict, label: str) -> str | None:
+async def _upload_to_private_r2(
+    key: str,
+    index_key: str,
+    payload: dict,
+    label: str,
+    *,
+    trace_id: str,
+) -> str | None:
     cfg = _private_responses_r2_config()
     if not (cfg.bucket and cfg.account_id and cfg.access_key_id and cfg.secret_access_key):
         logger.warning("%sPrivate R2 not configured, skipping upload of %s", LOG_PREFIX, label)
@@ -121,22 +137,47 @@ async def _upload_to_private_r2(key: str, index_key: str, payload: dict, label: 
     client_factory = lambda: create_s3_client(cfg, error_message="Private R2 is not configured")
     try:
         async def _upload():
+            serialize_started = perf_counter()
+            logger.info("[emit:%s] stage=object_serialize status=start", trace_id)
+            body = dumps(payload, separators=(",", ":"))
+            body_bytes = len(body.encode())
+            logger.info(
+                "[emit:%s] stage=object_serialize status=done duration_ms=%.1f bytes=%d",
+                trace_id,
+                (perf_counter() - serialize_started) * 1000.0,
+                body_bytes,
+            )
+
             async with client_factory() as client:
+                put_started = perf_counter()
+                logger.info(
+                    "[emit:%s] stage=object_put status=start bytes=%d key=%s",
+                    trace_id,
+                    body_bytes,
+                    key,
+                )
                 await client.put_object(
                     Bucket=cfg.bucket,
                     Key=key,
-                    Body=dumps(payload, separators=(",", ":")),
+                    Body=body,
                     ContentType="application/json",
+                )
+                logger.info(
+                    "[emit:%s] stage=object_put status=done duration_ms=%.1f bytes=%d",
+                    trace_id,
+                    (perf_counter() - put_started) * 1000.0,
+                    body_bytes,
                 )
             await add_index_key_if_new(
                 client_factory=client_factory,
                 bucket=cfg.bucket,
                 key=key,
                 index_key=index_key,
+                trace_id=trace_id,
             )
             return key
 
-        return await _run_guarded(_upload())
+        return await _run_guarded(_upload(), label=trace_id)
     except Exception as e:
         logger.error("%sFailed to upload %s: %s", LOG_PREFIX, label, e)
         return None
@@ -171,7 +212,17 @@ async def _upload_private_response_blob(
     }
     if challenge.image_url:
         payload["image_url"] = challenge.image_url
-    return await _upload_to_private_r2(key, f"{prefix}/index.json", payload, f"response blob for miner {miner.hotkey}")
+    trace_id = (
+        f"private-response:{safe_element}:{miner.hotkey[:6]}:"
+        f"{challenge.challenge_id[:8]}"
+    )
+    return await _upload_to_private_r2(
+        key,
+        f"{prefix}/index.json",
+        payload,
+        f"response blob for miner {miner.hotkey}",
+        trace_id=trace_id,
+    )
 
 
 async def _upload_benchmark_result(
@@ -200,7 +251,17 @@ async def _upload_benchmark_result(
         "map_at_1s": benchmark_result.map_at_1s,
         "per_action_ap": benchmark_result.per_action_ap,
     }
-    return await _upload_to_private_r2(key, f"{prefix}/index.json", payload, f"benchmark for miner {miner.hotkey}")
+    trace_id = (
+        f"private-benchmark:{safe_element}:{miner.hotkey[:6]}:"
+        f"{challenge.challenge_id[:8]}"
+    )
+    return await _upload_to_private_r2(
+        key,
+        f"{prefix}/index.json",
+        payload,
+        f"benchmark for miner {miner.hotkey}",
+        trace_id=trace_id,
+    )
 
 
 _PUBLIC_SHARD_FIELDS = {
@@ -229,26 +290,55 @@ async def _upload_shard(results: list[dict], block: int, hotkey_ss58: str) -> st
     client_factory = lambda: create_s3_client(
         cfg, error_message="Central R2 not configured for private track"
     )
+    trace_id = f"private-final-shard:{hotkey_ss58[:6]}:{block}"
 
     try:
         async def _upload():
+            serialize_started = perf_counter()
+            logger.info("[emit:%s] stage=object_serialize status=start", trace_id)
+            body = dumps(
+                [_strip_for_public_shard(r) for r in results],
+                separators=(",", ":"),
+            )
+            body_bytes = len(body.encode())
+            logger.info(
+                "[emit:%s] stage=object_serialize status=done duration_ms=%.1f bytes=%d",
+                trace_id,
+                (perf_counter() - serialize_started) * 1000.0,
+                body_bytes,
+            )
+
             async with client_factory() as client:
+                put_started = perf_counter()
+                logger.info(
+                    "[emit:%s] stage=object_put status=start bytes=%d key=%s",
+                    trace_id,
+                    body_bytes,
+                    key,
+                )
                 await client.put_object(
                     Bucket=cfg.bucket,
                     Key=key,
-                    Body=dumps([_strip_for_public_shard(r) for r in results], separators=(",", ":")),
+                    Body=body,
                     ContentType="application/json",
+                )
+                logger.info(
+                    "[emit:%s] stage=object_put status=done duration_ms=%.1f bytes=%d",
+                    trace_id,
+                    (perf_counter() - put_started) * 1000.0,
+                    body_bytes,
                 )
             await add_index_key_if_new(
                 client_factory=client_factory,
                 bucket=cfg.bucket,
                 key=key,
                 index_key=index_key,
+                trace_id=trace_id,
             )
             logger.info("Uploaded shard: %s", key)
             return key
 
-        return await _run_guarded(_upload())
+        return await _run_guarded(_upload(), label=trace_id)
     except Exception as e:
         logger.error("Failed to upload shard: %s", e)
         return None

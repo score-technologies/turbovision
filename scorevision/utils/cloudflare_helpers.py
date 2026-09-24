@@ -919,7 +919,22 @@ def _extract_element_miner_commit_tuple_from_key_or_url(
     return element_id, miner_hotkey, commit_block
 
 async def _list_keys_from_remote_index(index_url: str) -> list[str]:
-    idx = await _http_get_json(index_url)
+    for attempt in range(1, 4):
+        try:
+            idx = await _http_get_json(index_url)
+            break
+        except Exception as exc:
+            if attempt == 3:
+                raise
+            delay_s = 2 ** (attempt - 1)
+            logger.warning(
+                "[dataset-multi] index fetch retry url=%s attempt=%d/3 error=%s retry_in_s=%d",
+                index_url,
+                attempt,
+                _exception_summary(exc),
+                delay_s,
+            )
+            await asyncio.sleep(delay_s)
     keys: list[str] = []
     if isinstance(idx, list):
         keys = [_join_key_to_base(index_url, k) for k in idx if isinstance(k, str)]
@@ -955,7 +970,9 @@ async def dataset_sv_multi(
         try:
             keys = await _list_keys_from_remote_index(idx_url)
         except Exception as e:
-            logger.warning(f"[dataset-multi] index fetch failed {idx_url}: {e}")
+            logger.warning(
+                "[dataset-multi] index fetch failed %s: %s", idx_url, _exception_summary(e)
+            )
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="index_fetch").inc()
             continue
         if wanted_seg:

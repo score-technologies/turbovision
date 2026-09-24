@@ -76,6 +76,54 @@ def test_inactive_miners_key_is_next_to_public_index():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["public", "private"])
+async def test_remote_index_recovers_after_two_failures(monkeypatch, lane):
+    url = _select_lane_specific_index_url("https://example.com/manako/index.json", lane)
+    fetch = AsyncMock(side_effect=[TimeoutError(), RuntimeError("HTTP 429"), []])
+    sleep = AsyncMock()
+    monkeypatch.setattr(cloudflare_helpers, "_http_get_json", fetch)
+    monkeypatch.setattr(cloudflare_helpers.asyncio, "sleep", sleep)
+
+    assert await cloudflare_helpers._list_keys_from_remote_index(url) == []
+    assert fetch.await_count == 3
+    assert all(call.args == (url,) for call in fetch.await_args_list)
+    assert [call.args for call in sleep.await_args_list] == [(1,), (2,)]
+
+
+@pytest.mark.asyncio
+async def test_remote_index_stops_after_three_failures(monkeypatch):
+    fetch = AsyncMock(side_effect=TimeoutError())
+    sleep = AsyncMock()
+    monkeypatch.setattr(cloudflare_helpers, "_http_get_json", fetch)
+    monkeypatch.setattr(cloudflare_helpers.asyncio, "sleep", sleep)
+
+    with pytest.raises(TimeoutError):
+        await cloudflare_helpers._list_keys_from_remote_index("https://example.com/manako/index.json")
+    assert fetch.await_count == 3
+    assert sleep.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_remote_index_does_not_retry_success_or_cancellation(monkeypatch):
+    fetch = AsyncMock(return_value=["manako/shard.json"])
+    sleep = AsyncMock()
+    monkeypatch.setattr(cloudflare_helpers, "_http_get_json", fetch)
+    monkeypatch.setattr(cloudflare_helpers.asyncio, "sleep", sleep)
+    url = "https://example.com/manako/index.json"
+
+    assert await cloudflare_helpers._list_keys_from_remote_index(url) == [
+        "https://example.com/manako/shard.json"
+    ]
+    fetch.assert_awaited_once_with(url)
+    fetch.reset_mock(side_effect=True)
+    fetch.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await cloudflare_helpers._list_keys_from_remote_index(url)
+    fetch.assert_awaited_once_with(url)
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_put_inactive_miners_merges_with_existing_list(monkeypatch):
     put_object = AsyncMock()
     existing_body = AsyncMock()

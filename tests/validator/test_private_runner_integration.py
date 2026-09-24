@@ -1,10 +1,12 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+import scorevision.validator.central.private_track.runner as runner_mod
 from scorevision.utils.manifest import Element, Manifest, Metrics, PillarName, Tee
+from scorevision.utils.r2 import R2Config
 from scorevision.utils.schemas import ChallengeResponse, CricketDeliveryPrediction, FramePrediction
 from scorevision.validator.central.private_track.challenges import Challenge
 from scorevision.validator.central.private_track.miners import ChallengeAttempt
@@ -13,6 +15,61 @@ from scorevision.validator.central.private_track.runner import (
     _run_challenge_for_element,
     _trigger_scheduled_runners,
 )
+
+
+class _FakeClientContext:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_private_r2_upload_propagates_diagnostic_trace_to_index():
+    client = SimpleNamespace(put_object=AsyncMock())
+    add_index = AsyncMock(return_value=True)
+    logger = Mock()
+    cfg = R2Config(
+        bucket="private-bucket",
+        account_id="account",
+        access_key_id="access",
+        secret_access_key="secret",
+        concurrency=1,
+    )
+
+    with (
+        patch.object(runner_mod, "_private_responses_r2_config", return_value=cfg),
+        patch.object(
+            runner_mod,
+            "create_s3_client",
+            return_value=_FakeClientContext(client),
+        ),
+        patch.object(runner_mod, "add_index_key_if_new", new=add_index),
+        patch.object(runner_mod, "logger", new=logger),
+    ):
+        result = await runner_mod._upload_to_private_r2(
+            "private_responses/object.json",
+            "private_responses/index.json",
+            {"predictions": [1, 2, 3]},
+            "response blob",
+            trace_id="private-response:element:hotkey:challenge",
+        )
+
+    assert result == "private_responses/object.json"
+    add_index.assert_awaited_once()
+    index_kwargs = add_index.await_args.kwargs
+    assert callable(index_kwargs["client_factory"])
+    assert index_kwargs["bucket"] == "private-bucket"
+    assert index_kwargs["key"] == "private_responses/object.json"
+    assert index_kwargs["index_key"] == "private_responses/index.json"
+    assert index_kwargs["trace_id"] == "private-response:element:hotkey:challenge"
+    messages = [call.args[0] for call in logger.info.call_args_list]
+    assert any("stage=object_put status=start" in message for message in messages)
+    assert any("status=released hold_ms=" in message for message in messages)
 
 
 def _private_manifest() -> Manifest:
