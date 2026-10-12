@@ -12,6 +12,7 @@ from scorevision.utils.request_signing import build_signed_headers
 from scorevision.utils.schemas import (
     CricketDeliveryPrediction,
     FramePrediction,
+    SnookerBallStatePrediction,
     TCGGradingPrediction,
 )
 from scorevision.utils.settings import get_settings
@@ -20,6 +21,7 @@ from scorevision.validator.audit.open_source.spotcheck import calculate_match_pe
 from scorevision.validator.central.private_track.challenges import fetch_ground_truth
 from scorevision.validator.central.private_track.scoring import (
     score_cricket_prediction_with_breakdown,
+    score_snooker_ball_state_with_breakdown,
     score_predictions,
     score_tcg_grading_with_breakdown,
 )
@@ -112,6 +114,10 @@ def _prediction_looks_cricket(prediction: dict) -> bool:
     return bool(keys & _CRICKET_HINT_FIELDS)
 
 
+def _prediction_looks_snooker(prediction: dict) -> bool:
+    return "frame" in prediction and isinstance(prediction.get("balls"), list)
+
+
 def _prediction_looks_tcg(prediction: dict) -> bool:
     return "Header" in prediction and "Grading_Features" in prediction
 
@@ -122,17 +128,20 @@ def _infer_groundtruth_type(
 ) -> str:
     for entry in challenge_results:
         gt = str(entry.get("groundtruth_type") or "").strip()
-        if gt in {"soccer_action", "cricket_delivery", "tcg_grading"}:
+        if gt in {"soccer_action", "cricket_delivery", "snooker_ball_state", "tcg_grading"}:
             return gt
 
     for predictions_raw in miner_responses.values():
         if not predictions_raw:
             continue
         first = predictions_raw[0]
-        if isinstance(first, dict) and _prediction_looks_tcg(first):
-            return "tcg_grading"
-        if isinstance(first, dict) and _prediction_looks_cricket(first):
-            return "cricket_delivery"
+        if isinstance(first, dict):
+            if _prediction_looks_tcg(first):
+                return "tcg_grading"
+            if _prediction_looks_snooker(first):
+                return "snooker_ball_state"
+            if _prediction_looks_cricket(first):
+                return "cricket_delivery"
 
     return "soccer_action"
 
@@ -164,6 +173,15 @@ def rescore_miner_cricket(
         if isinstance(first, dict):
             prediction_obj = CricketDeliveryPrediction(**first)
     score, _ = score_cricket_prediction_with_breakdown(prediction_obj, ground_truth)
+    return score
+
+
+def rescore_miner_snooker(
+    predictions_raw: list[dict],
+    ground_truth: SnookerBallStatePrediction,
+) -> float:
+    prediction_obj = SnookerBallStatePrediction(frames=predictions_raw)
+    score, _ = score_snooker_ball_state_with_breakdown(prediction_obj, ground_truth)
     return score
 
 
@@ -208,6 +226,8 @@ async def run_private_spotcheck(
             audit_score = rescore_miner_tcg(predictions_raw, ground_truth)
         elif groundtruth_type == "cricket_delivery":
             audit_score = rescore_miner_cricket(predictions_raw, ground_truth)
+        elif groundtruth_type == "snooker_ball_state":
+            audit_score = rescore_miner_snooker(predictions_raw, ground_truth)
         else:
             audit_score = rescore_miner_soccer(predictions_raw, ground_truth)
         match_pct = calculate_match_percentage(central_score, audit_score)

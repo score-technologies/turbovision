@@ -77,8 +77,11 @@ async def send_challenge(
         video_url=challenge.video_url,
         image_url=challenge.image_url,
         frames=challenge.payload_frames,
+        target_frames=challenge.target_frames,
     )
     excluded_fields = {"image_url"} if request.image_url is None else set()
+    if request.target_frames is None:
+        excluded_fields.add("target_frames")
     start = perf_counter()
 
     try:

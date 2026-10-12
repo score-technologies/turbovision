@@ -63,6 +63,7 @@ class PillarName(str, Enum):
     RECALL = "recall"
     SOCCER_ACTION = "soccer_action"
     CRICKET_SCORING = "cricket_scoring"
+    SNOOKER_BALL_STATE = "snooker_ball_state"
     TCG_GRADING = "tcg_grading"
     FALSE_POSITIVE = "false_positive"
 
@@ -93,6 +94,7 @@ class ChallengeType(str, Enum):
 class GroundTruthType(str, Enum):
     SOCCER_ACTION = "soccer_action"
     CRICKET_DELIVERY = "cricket_delivery"
+    SNOOKER_BALL_STATE = "snooker_ball_state"
     TCG_GRADING = "tcg_grading"
 
 

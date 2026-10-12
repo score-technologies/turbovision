@@ -5,6 +5,7 @@ from scorevision.miner.private_track.image import delete_image, download_image
 from scorevision.miner.private_track.predictor import (
     predict_actions,
     predict_cricket_delivery,
+    predict_snooker_ball_state,
     predict_tcg_grading,
 )
 from scorevision.miner.private_track.video import delete_video, download_video
@@ -12,7 +13,8 @@ from scorevision.utils.schemas import ChallengeRequest, ChallengeResponse, Predi
 from scorevision.miner.private_track.logging import logger
 
 # TODO: choose a single video mode per deployment: "soccer_action" or
-# "cricket_delivery". TCG requests are identified by their image_url payload.
+# "cricket_delivery" or "snooker_ball_state". TCG requests are identified by
+# their image_url payload.
 MINER_MODE = "soccer_action"
 
 
@@ -49,6 +51,23 @@ async def handle_challenge(request: ChallengeRequest) -> ChallengeResponse:
             return ChallengeResponse(
                 challenge_id=request.challenge_id,
                 prediction=PredictionPayload(type="cricket_delivery", item=prediction),
+                processing_time=processing_time,
+            )
+
+        if MINER_MODE == "snooker_ball_state":
+            prediction = predict_snooker_ball_state(request)
+            processing_time = time.perf_counter() - start_time
+            logger.info(
+                "Snooker ball-state challenge completed: %s, time: %.1fs",
+                request.challenge_id,
+                processing_time,
+            )
+            return ChallengeResponse(
+                challenge_id=request.challenge_id,
+                prediction=PredictionPayload(
+                    type="snooker_ball_state",
+                    frames=prediction.frames,
+                ),
                 processing_time=processing_time,
             )
 
