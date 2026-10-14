@@ -256,7 +256,8 @@ Keep one deployment per mode. Do not expect one running container to handle both
 }
 ```
 
-For full cricket field guidance, see `scorevision/miner/CRICKET_MINER_SPEC.md`.
+For the cricket contract, scored fields, and published ground-truth training
+data, see [CRICKET_MINER_SPEC.md](CRICKET_MINER_SPEC.md).
 For the TCG contract and scoring, see `scorevision/miner/private_track/TCG_GRADING_MINER_SPEC.md`.
 
 ### 1.3 On-Chain Commitment Must Match Element

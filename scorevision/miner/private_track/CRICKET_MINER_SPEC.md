@@ -6,6 +6,67 @@ This file is miner-facing and describes the current cricket private-track respon
 
 - Release date: mid May
 
+## Published Ground-Truth Training Data
+
+A large cricket training set is published at:
+
+- [Training index](https://manako.scoredata.me/train/index.json)
+
+The index is a JSON array of challenge paths, for example:
+
+```json
+[
+  "train/train1.json",
+  "train/train2.json"
+]
+```
+
+Resolve each path against `https://manako.scoredata.me/` to retrieve the
+corresponding challenge. Each challenge JSON contains the video URL and its
+scored ground truth:
+
+```json
+{
+  "video_url": "https://scoredata.me/cricket/training/v2/<video>.mp4",
+  "groundtruth": {
+    "kph": 87.89,
+    "bounce_x": 5.317,
+    "stump_y": 0.333,
+    "stump_z": 0.674,
+    "impact_x": null,
+    "deviation": 0.449,
+    "swing_angle": 2.8,
+    "release_y": -0.419,
+    "release_z": 2.009,
+    "impact_y": null,
+    "bounce_y": 0.044,
+    "impact_z": null
+  }
+}
+```
+
+For example, the index entry `train/train1.json` is available at
+`https://manako.scoredata.me/train/train1.json`. Do not resolve it relative to
+the index directory, which would incorrectly produce `/train/train/train1.json`.
+
+The complete dataset can be enumerated with Python:
+
+```python
+import requests
+
+origin = "https://manako.scoredata.me/"
+index = requests.get(f"{origin}train/index.json", timeout=30).json()
+
+for challenge_path in index:
+    challenge = requests.get(f"{origin}{challenge_path}", timeout=30).json()
+    video_url = challenge["video_url"]
+    scored_ground_truth = challenge["groundtruth"]
+    # Download/process video_url and use scored_ground_truth as the label.
+```
+
+Some ground-truth values may be `null`; consumers should preserve or explicitly
+handle missing values rather than coercing them to zero.
+
 ## Response Envelope
 
 For cricket challenges, miners should return exactly one delivery prediction in this envelope:
