@@ -28,6 +28,11 @@ from scorevision.utils.settings import Settings, get_settings
 logger = getLogger(__name__)
 
 
+_INDEX_RANGE_SIZE = 512 * 1024
+_INDEX_RANGE_TIMEOUT_SECONDS = 10.0
+_INDEX_RANGE_ATTEMPTS = 3
+
+
 @dataclass(frozen=True)
 class R2Config:
     bucket: str
@@ -98,6 +103,92 @@ def is_not_found_error(exc: Exception) -> bool:
     return code in {"404", "NoSuchKey", "NotFound"} or "Not Found" in str(exc)
 
 
+async def _read_object_in_ranges(
+    *,
+    client_factory,
+    bucket: str,
+    key: str,
+    trace_id: str | None = None,
+) -> bytes:
+    async with client_factory() as client:
+        head = await asyncio.wait_for(
+            client.head_object(Bucket=bucket, Key=key),
+            timeout=_INDEX_RANGE_TIMEOUT_SECONDS,
+        )
+
+    size = int(head["ContentLength"])
+    etag = head.get("ETag")
+    if size == 0:
+        return b""
+    if not etag:
+        raise RuntimeError(f"R2 object {key} has no ETag")
+
+    chunks: list[bytes] = []
+    for start in range(0, size, _INDEX_RANGE_SIZE):
+        end = min(start + _INDEX_RANGE_SIZE, size) - 1
+        expected = end - start + 1
+
+        for attempt in range(1, _INDEX_RANGE_ATTEMPTS + 1):
+            response = None
+            try:
+                async with client_factory() as client:
+                    response = await asyncio.wait_for(
+                        client.get_object(
+                            Bucket=bucket,
+                            Key=key,
+                            Range=f"bytes={start}-{end}",
+                            IfMatch=etag,
+                        ),
+                        timeout=_INDEX_RANGE_TIMEOUT_SECONDS,
+                    )
+                    data = await asyncio.wait_for(
+                        response["Body"].read(),
+                        timeout=_INDEX_RANGE_TIMEOUT_SECONDS,
+                    )
+
+                if len(data) != expected:
+                    raise IOError(
+                        f"Incomplete R2 range {start}-{end} for {key}: "
+                        f"received {len(data)} of {expected} bytes"
+                    )
+                chunks.append(data)
+                if trace_id:
+                    logger.info(
+                        "[emit:%s] stage=index_read_range status=done "
+                        "range=%d-%d bytes=%d attempt=%d",
+                        trace_id,
+                        start,
+                        end,
+                        len(data),
+                        attempt,
+                    )
+                break
+            except (TimeoutError, OSError) as exc:
+                if trace_id:
+                    logger.warning(
+                        "[emit:%s] stage=index_read_range status=retry "
+                        "range=%d-%d attempt=%d/%d error=%s",
+                        trace_id,
+                        start,
+                        end,
+                        attempt,
+                        _INDEX_RANGE_ATTEMPTS,
+                        type(exc).__name__,
+                    )
+                if attempt == _INDEX_RANGE_ATTEMPTS:
+                    raise
+            finally:
+                if response is not None:
+                    response["Body"].close()
+
+    body = b"".join(chunks)
+    if len(body) != size:
+        raise IOError(
+            f"Incomplete R2 object {key}: received {len(body)} of {size} bytes"
+        )
+    return body
+
+
 async def ensure_index_exists(
     *,
     client_factory,
@@ -152,29 +243,33 @@ async def add_index_key_if_new(
             suffix,
         )
 
+    try:
+        started = stage_start("index_get")
+        read_started = stage_start("index_read")
+        body = await _read_object_in_ranges(
+            client_factory=client_factory,
+            bucket=bucket,
+            key=index_key,
+            trace_id=trace_id,
+        )
+        stage_done("index_get", started)
+        stage_done("index_read", read_started, bytes=len(body))
+
+        started = stage_start("index_parse")
+        items = set(loads(body))
+        stage_done("index_parse", started, entries=len(items))
+    except Exception as e:
+        if not is_not_found_error(e):
+            raise
+        items = set()
+        if trace_id:
+            logger.info(
+                "[emit:%s] stage=index_get status=not_found index=%s",
+                trace_id,
+                index_key,
+            )
+
     async with client_factory() as c:
-        try:
-            started = stage_start("index_get")
-            r = await c.get_object(Bucket=bucket, Key=index_key)
-            stage_done("index_get", started)
-
-            started = stage_start("index_read")
-            body = await r["Body"].read()
-            stage_done("index_read", started, bytes=len(body))
-
-            started = stage_start("index_parse")
-            items = set(loads(body))
-            stage_done("index_parse", started, entries=len(items))
-        except Exception as e:
-            if not is_not_found_error(e):
-                raise
-            items = set()
-            if trace_id:
-                logger.info(
-                    "[emit:%s] stage=index_get status=not_found index=%s",
-                    trace_id,
-                    index_key,
-                )
         if key in items:
             if trace_id:
                 logger.info(
