@@ -275,7 +275,7 @@ async def test_emit_shard_uses_trigger_block_without_subtensor(monkeypatch):
         scored_frame_numbers=[],
     )
 
-    await emit_shard(
+    emitted_key = await emit_shard(
         slug="slug",
         challenge=challenge,
         miner_run=miner_run,
@@ -283,11 +283,14 @@ async def test_emit_shard_uses_trigger_block_without_subtensor(monkeypatch):
         miner_hotkey_ss58="5FminerHotkey",
         trigger_block=123,
         element_id="PlayerDetect_v1@1.0",
+        update_index=False,
     )
 
     sink_mock.assert_awaited_once()
     eval_key = sink_mock.await_args.args[0]
     assert eval_key.endswith("/evaluation/000000123-challenge-1.json")
+    assert emitted_key == eval_key
+    assert sink_mock.await_args.kwargs["update_index"] is False
 
 
 @pytest.mark.asyncio

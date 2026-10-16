@@ -211,14 +211,18 @@ async def ensure_index_exists(
             return True
 
 
-async def add_index_key_if_new(
+async def add_index_keys_if_new(
     *,
     client_factory,
     bucket: str,
-    key: str,
+    keys: list[str] | set[str] | tuple[str, ...],
     index_key: str = "manako/index.json",
     trace_id: str | None = None,
 ) -> bool:
+    requested_keys = {str(key).strip() for key in keys if str(key).strip()}
+    if not requested_keys:
+        return False
+
     def stage_start(stage: str) -> float:
         started = perf_counter()
         if trace_id:
@@ -270,7 +274,8 @@ async def add_index_key_if_new(
             )
 
     async with client_factory() as c:
-        if key in items:
+        new_keys = requested_keys - items
+        if not new_keys:
             if trace_id:
                 logger.info(
                     "[emit:%s] stage=index_update status=unchanged entries=%d",
@@ -278,7 +283,7 @@ async def add_index_key_if_new(
                     len(items),
                 )
             return False
-        items.add(key)
+        items.update(new_keys)
 
         started = stage_start("index_serialize")
         payload = dumps(sorted(items))
@@ -298,6 +303,23 @@ async def add_index_key_if_new(
         )
         stage_done("index_put", started, entries=len(items))
         return True
+
+
+async def add_index_key_if_new(
+    *,
+    client_factory,
+    bucket: str,
+    key: str,
+    index_key: str = "manako/index.json",
+    trace_id: str | None = None,
+) -> bool:
+    return await add_index_keys_if_new(
+        client_factory=client_factory,
+        bucket=bucket,
+        keys=[key],
+        index_key=index_key,
+        trace_id=trace_id,
+    )
 
 
 def _r2_sync_client():
@@ -365,6 +387,7 @@ def r2_delete_object(bucket: str, key: str) -> None:
 __all__ = [
     "R2Config",
     "add_index_key_if_new",
+    "add_index_keys_if_new",
     "audit_r2_config",
     "build_index_url",
     "build_public_index_url_from_base",

@@ -69,6 +69,43 @@ async def test_add_index_key_logs_each_stage_for_traced_emission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_add_index_keys_writes_all_new_keys_in_one_put():
+    existing = b'["manako/existing.json"]'
+    body = SimpleNamespace(read=AsyncMock(return_value=existing), close=Mock())
+    client = SimpleNamespace(
+        head_object=AsyncMock(
+            return_value={"ContentLength": len(existing), "ETag": '"etag-1"'}
+        ),
+        get_object=AsyncMock(return_value={"Body": body}),
+        put_object=AsyncMock(),
+    )
+
+    class ClientContext:
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    changed = await r2.add_index_keys_if_new(
+        client_factory=ClientContext,
+        bucket="bucket",
+        keys=[
+            "manako/existing.json",
+            "manako/new-1.json",
+            "manako/new-2.json",
+        ],
+    )
+
+    assert changed is True
+    client.put_object.assert_awaited_once()
+    payload = client.put_object.await_args.kwargs["Body"]
+    assert "manako/existing.json" in payload
+    assert "manako/new-1.json" in payload
+    assert "manako/new-2.json" in payload
+
+
+@pytest.mark.asyncio
 async def test_read_object_in_ranges_retries_a_stalled_range(monkeypatch):
     monkeypatch.setattr(r2, "_INDEX_RANGE_SIZE", 4)
     monkeypatch.setattr(r2, "_INDEX_RANGE_TIMEOUT_SECONDS", 0.01)

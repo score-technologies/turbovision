@@ -18,6 +18,7 @@ from scorevision.utils.prometheus import (
 )
 from scorevision.utils.r2 import (
     add_index_key_if_new,
+    add_index_keys_if_new,
     build_public_index_url_from_base as _build_index_url_from_public_base,
     central_r2_config,
     create_s3_client,
@@ -235,6 +236,22 @@ async def _index_add_if_new(
     )
 
 
+async def index_shard_keys(
+    keys: list[str],
+    *,
+    lane: str = "public",
+    trace_id: str | None = None,
+) -> bool:
+    settings = get_settings()
+    return await add_index_keys_if_new(
+        client_factory=get_s3_client,
+        bucket=settings.SCOREVISION_BUCKET,
+        keys=keys,
+        index_key=_lane_index_key(lane),
+        trace_id=trace_id,
+    )
+
+
 async def sink_sv(block: int, lines: list[dict]) -> tuple[str, list[dict]]:
     settings = get_settings()
 
@@ -281,6 +298,7 @@ async def sink_sv_at(
     *,
     lane: str = "public",
     trace_id: str | None = None,
+    update_index: bool = True,
 ) -> tuple[str, list[dict]]:
     if not lines:
         return "", []
@@ -331,11 +349,12 @@ async def sink_sv_at(
                 (perf_counter() - put_started) * 1000.0,
                 len(shard_body.encode()),
             )
-        await _index_add_if_new(
-            key,
-            index_key=_lane_index_key(lane),
-            trace_id=trace_id,
-        )
+        if update_index:
+            await _index_add_if_new(
+                key,
+                index_key=_lane_index_key(lane),
+                trace_id=trace_id,
+            )
     return hk, signed
 
 
@@ -346,6 +365,7 @@ async def _sink_sv_at_with_retries(
     lane: str,
     timeout_s: float,
     rid: str,
+    update_index: bool = True,
     retries: int = 2,
 ) -> tuple[str, list[dict]]:
     """Write one score shard, retrying transient sink failures in isolation."""
@@ -360,7 +380,14 @@ async def _sink_sv_at_with_retries(
         )
         try:
             result = await asyncio.wait_for(
-                sink_sv_at(key, lines, lane=lane, trace_id=rid), timeout=timeout_s
+                sink_sv_at(
+                    key,
+                    lines,
+                    lane=lane,
+                    trace_id=rid,
+                    update_index=update_index,
+                ),
+                timeout=timeout_s,
             )
             logger.info(
                 "[emit:%s] stage=sink_attempt status=done attempt=%d/%d duration_ms=%.1f",
@@ -421,7 +448,8 @@ async def emit_shard(
     commit_block: int | None = None,
     store_response_blob: bool = True,
     responses_key_override: str | None = None,
-) -> None:
+    update_index: bool = True,
+) -> str:
     rid = f"{(element_id or 'na')}:{miner_hotkey_ss58[:6]}:{challenge.challenge_id[:8]}:{uuid.uuid4().hex[:6]}"
 
     if trigger_block is not None:
@@ -655,6 +683,7 @@ async def emit_shard(
             lane=lane,
             timeout_s=timeout_s,
             rid=rid,
+            update_index=update_index,
         )
     except asyncio.TimeoutError:
         logger.error(f"[emit:{rid}] sink_sv_at timed out after {timeout_s}s")
@@ -677,6 +706,7 @@ async def emit_shard(
     if rtf_value is not None:
         logger.info(f"rtf          : {rtf_value:.3f}")
     logger.info("")
+    return eval_key
 
 
 async def dataset_sv(tail: int, *, max_concurrency: int = None, lane: str = "public"):

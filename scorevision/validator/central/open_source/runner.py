@@ -26,6 +26,7 @@ from scorevision.utils.cloudflare_helpers import (
     build_public_index_url_from_public_base,
     emit_shard,
     ensure_index_exists,
+    index_shard_keys,
 )
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.evaluate import post_vlm_ranking
@@ -82,7 +83,7 @@ def _emit_shard_concurrency() -> int:
 _EMIT_SHARD_SEM = asyncio.Semaphore(_emit_shard_concurrency())
 
 
-async def _emit_shard_guarded(**kwargs) -> None:
+async def _emit_shard_guarded(**kwargs) -> str:
     queued_at = perf_counter()
     label = (
         f"{kwargs.get('element_id') or 'unknown'}:"
@@ -95,7 +96,53 @@ async def _emit_shard_guarded(**kwargs) -> None:
             (perf_counter() - queued_at) * 1000.0,
             _emit_shard_concurrency(),
         )
-        await emit_shard(**kwargs)
+        return await emit_shard(**kwargs)
+
+
+async def _index_shards_guarded(keys: list[str], *, element_id: str) -> None:
+    if not keys:
+        return
+    label = f"index-batch:{element_id}"
+    timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+    queued_at = perf_counter()
+    async with _EMIT_SHARD_SEM:
+        acquired_at = perf_counter()
+        logger.info(
+            "[emit-queue:%s] status=acquired wait_ms=%.1f concurrency=%d",
+            label,
+            (acquired_at - queued_at) * 1000.0,
+            _emit_shard_concurrency(),
+        )
+        try:
+            for attempt in range(1, 4):
+                try:
+                    await asyncio.wait_for(
+                        index_shard_keys(
+                            keys,
+                            lane="public",
+                            trace_id=label,
+                        ),
+                        timeout=timeout_s,
+                    )
+                    return
+                except Exception:
+                    if attempt == 3:
+                        raise
+                    logger.warning(
+                        "[emit:%s] stage=index_batch status=retry "
+                        "attempt=%d/3 keys=%d",
+                        label,
+                        attempt,
+                        len(keys),
+                    )
+                    await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+        finally:
+            logger.info(
+                "[emit-queue:%s] status=released hold_ms=%.1f concurrency=%d",
+                label,
+                (perf_counter() - acquired_at) * 1000.0,
+                _emit_shard_concurrency(),
+            )
 
 
 async def _build_pgt_with_retries(
@@ -541,6 +588,7 @@ async def runner(
             RUNNER_LAST_PGT_DURATION_SECONDS.set(pgt_duration)
 
         emissions_queue: list[dict[str, Any]] = []
+        emitted_index_keys: list[str] = []
 
         for miner in miner_list:
             miner_label = miner.slug or str(getattr(miner, "uid", "?"))
@@ -611,7 +659,7 @@ async def runner(
             }
 
             try:
-                await _emit_shard_guarded(
+                emitted_key = await _emit_shard_guarded(
                     slug=miner.slug,
                     challenge=challenge,
                     miner_run=miner_output,
@@ -630,12 +678,16 @@ async def runner(
                     chute_id=miner.chute_id,
                     commitment_meta=commitment_meta,
                     commit_block=miner.block,
+                    update_index=False,
                 )
             except Exception:
                 emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
                 logger.exception("[emit] FAILED for %s in %.1fms", miner_label, emit_duration_ms)
                 RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
+
+            if isinstance(emitted_key, str) and emitted_key:
+                emitted_index_keys.append(emitted_key)
 
             emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
             logger.info("[emit] success for %s in %.1fms", miner_label, emit_duration_ms)
@@ -695,7 +747,7 @@ async def runner(
             }
 
             try:
-                await _emit_shard_guarded(
+                emitted_key = await _emit_shard_guarded(
                     slug=miner.slug or f"skipped-{miner.uid}",
                     challenge=challenge,
                     miner_run=zero_output,
@@ -714,6 +766,7 @@ async def runner(
                     chute_id=miner.chute_id,
                     commitment_meta=commitment_meta,
                     commit_block=miner.block,
+                    update_index=False,
                 )
             except Exception:
                 emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
@@ -725,10 +778,18 @@ async def runner(
                 RUNNER_SHARDS_EMITTED_TOTAL.labels(status="error").inc()
                 continue
 
+            if isinstance(emitted_key, str) and emitted_key:
+                emitted_index_keys.append(emitted_key)
+
             emit_duration_ms = (event_loop.time() - emit_start) * 1000.0
             logger.info("[emit] success zero-score for %s in %.1fms", miner_label, emit_duration_ms)
             RUNNER_SHARDS_EMITTED_TOTAL.labels(status="success").inc()
             RUNNER_MINER_CALLS_TOTAL.labels(outcome="registry_skipped").inc()
+
+        await _index_shards_guarded(
+            emitted_index_keys,
+            element_id=str(element_id),
+        )
 
     except Exception:
         logger.exception(

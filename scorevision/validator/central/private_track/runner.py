@@ -12,10 +12,16 @@ import httpx
 from scorevision.miner.open_source.chute_template.schemas import TVFrame, TVPredictInput
 from scorevision.utils.bittensor_helpers import get_subtensor, load_hotkey_keypair, reset_subtensor
 from scorevision.utils.blacklist import BlacklistAPI, fetch_blacklisted_hotkeys
-from scorevision.utils.cloudflare_helpers import emit_shard
+from scorevision.utils.cloudflare_helpers import emit_shard, index_shard_keys
 from scorevision.utils.data_models import SVChallenge, SVEvaluation, SVRunOutput
 from scorevision.utils.manifest import Manifest
-from scorevision.utils.r2 import R2Config, add_index_key_if_new, central_r2_config, create_s3_client
+from scorevision.utils.r2 import (
+    R2Config,
+    add_index_key_if_new,
+    add_index_keys_if_new,
+    central_r2_config,
+    create_s3_client,
+)
 from scorevision.utils.r2_public import fetch_index_keys, filter_keys_by_tail, fetch_shard_lines
 from scorevision.utils.signing import build_validator_query_params
 from scorevision.utils.settings import get_settings
@@ -123,7 +129,6 @@ def _private_responses_r2_config() -> R2Config:
 
 async def _upload_to_private_r2(
     key: str,
-    index_key: str,
     payload: dict,
     label: str,
     *,
@@ -168,13 +173,6 @@ async def _upload_to_private_r2(
                     (perf_counter() - put_started) * 1000.0,
                     body_bytes,
                 )
-            await add_index_key_if_new(
-                client_factory=client_factory,
-                bucket=cfg.bucket,
-                key=key,
-                index_key=index_key,
-                trace_id=trace_id,
-            )
             return key
 
         return await _run_guarded(_upload(), label=trace_id)
@@ -218,7 +216,6 @@ async def _upload_private_response_blob(
     )
     return await _upload_to_private_r2(
         key,
-        f"{prefix}/index.json",
         payload,
         f"response blob for miner {miner.hotkey}",
         trace_id=trace_id,
@@ -257,7 +254,6 @@ async def _upload_benchmark_result(
     )
     return await _upload_to_private_r2(
         key,
-        f"{prefix}/index.json",
         payload,
         f"benchmark for miner {miner.hotkey}",
         trace_id=trace_id,
@@ -545,7 +541,7 @@ async def _emit_private_score_to_public_db(
     result: dict,
     private_responses_key: str | None,
     trigger_block: int,
-) -> None:
+) -> str:
     payload_frames = None
     if challenge.payload_frames:
         payload_frames = [TVFrame(**frame.model_dump(mode="json")) for frame in challenge.payload_frames]
@@ -608,7 +604,7 @@ async def _emit_private_score_to_public_db(
         "image_digest": result.get("image_digest"),
     }
 
-    await _run_guarded(
+    return await _run_guarded(
         emit_shard(
             slug=f"private-{miner.uid}",
             challenge=challenge_obj,
@@ -626,9 +622,72 @@ async def _emit_private_score_to_public_db(
             commit_block=miner.commit_block,
             store_response_blob=False,
             responses_key_override=private_responses_key,
+            update_index=False,
         ),
         label=f"{element_id}:{miner.hotkey[:6]}",
     )
+
+
+async def _index_private_keys(
+    keys: list[str],
+    *,
+    index_key: str,
+    trace_id: str,
+) -> None:
+    if not keys:
+        return
+    cfg = _private_responses_r2_config()
+    client_factory = lambda: create_s3_client(
+        cfg,
+        error_message="Private R2 is not configured",
+    )
+    timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+    for attempt in range(1, 4):
+        try:
+            await asyncio.wait_for(
+                add_index_keys_if_new(
+                    client_factory=client_factory,
+                    bucket=cfg.bucket,
+                    keys=keys,
+                    index_key=index_key,
+                    trace_id=trace_id,
+                ),
+                timeout=timeout_s,
+            )
+            return
+        except Exception:
+            if attempt == 3:
+                raise
+            logger.warning(
+                "[emit:%s] stage=index_batch status=retry attempt=%d/3 keys=%d",
+                trace_id,
+                attempt,
+                len(keys),
+            )
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+
+
+async def _index_private_evaluations(keys: list[str], *, trace_id: str) -> None:
+    if not keys:
+        return
+    timeout_s = float(os.getenv("SV_R2_TIMEOUT_S", "60"))
+    for attempt in range(1, 4):
+        try:
+            await asyncio.wait_for(
+                index_shard_keys(keys, lane="private", trace_id=trace_id),
+                timeout=timeout_s,
+            )
+            return
+        except Exception:
+            if attempt == 3:
+                raise
+            logger.warning(
+                "[emit:%s] stage=index_batch status=retry attempt=%d/3 keys=%d",
+                trace_id,
+                attempt,
+                len(keys),
+            )
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
 
 
 def _log_runner_task_failure(task: asyncio.Task, element_id: str, block: int) -> None:
@@ -729,6 +788,8 @@ async def _run_challenge_for_element(
             ))
 
         results: list[dict] = []
+        evaluation_index_keys: list[str] = []
+        benchmark_index_keys: list[str] = []
         for miner, (result, response_predictions, benchmark_result) in zip(miners, outcomes):
             private_responses_key = await _upload_private_response_blob(
                 element_id=element_id,
@@ -743,15 +804,17 @@ async def _run_challenge_for_element(
             results.append(result)
 
             if benchmark_result is not None:
-                await _upload_benchmark_result(
+                benchmark_key = await _upload_benchmark_result(
                     element_id=element_id,
                     miner=miner,
                     challenge=challenge,
                     block=block,
                     benchmark_result=benchmark_result,
                 )
+                if isinstance(benchmark_key, str) and benchmark_key:
+                    benchmark_index_keys.append(benchmark_key)
             try:
-                await _emit_private_score_to_public_db(
+                evaluation_key = await _emit_private_score_to_public_db(
                     element_id=element_id,
                     manifest_hash=manifest.hash,
                     challenge=challenge,
@@ -760,6 +823,8 @@ async def _run_challenge_for_element(
                     private_responses_key=private_responses_key,
                     trigger_block=block,
                 )
+                if isinstance(evaluation_key, str) and evaluation_key:
+                    evaluation_index_keys.append(evaluation_key)
             except Exception as e:
                 logger.error(
                     "%sFailed to emit private score to public db for miner=%s: %s",
@@ -767,6 +832,29 @@ async def _run_challenge_for_element(
                     miner.hotkey,
                     e,
                 )
+
+        safe_element = (element_id or "unknown-element").replace("/", "_")
+        if evaluation_index_keys:
+            await _run_guarded(
+                _index_private_evaluations(
+                    evaluation_index_keys,
+                    trace_id=f"private-index-batch:{safe_element}:{block}",
+                ),
+                label=f"private-index-batch:{safe_element}:{block}",
+            )
+
+        if benchmark_index_keys:
+            benchmark_prefix = (
+                settings.PRIVATE_BENCHMARK_R2_PREFIX or "private_benchmark"
+            ).strip().strip("/")
+            await _run_guarded(
+                _index_private_keys(
+                    benchmark_index_keys,
+                    index_key=f"{benchmark_prefix}/index.json",
+                    trace_id=f"private-benchmark-index-batch:{safe_element}:{block}",
+                ),
+                label=f"private-benchmark-index-batch:{safe_element}:{block}",
+            )
 
         await _upload_shard(results, block, keypair.ss58_address)
     except Exception:

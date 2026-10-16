@@ -29,9 +29,8 @@ class _FakeClientContext:
 
 
 @pytest.mark.asyncio
-async def test_private_r2_upload_propagates_diagnostic_trace_to_index():
+async def test_private_r2_upload_writes_object_without_updating_an_index():
     client = SimpleNamespace(put_object=AsyncMock())
-    add_index = AsyncMock(return_value=True)
     logger = Mock()
     cfg = R2Config(
         bucket="private-bucket",
@@ -48,25 +47,17 @@ async def test_private_r2_upload_propagates_diagnostic_trace_to_index():
             "create_s3_client",
             return_value=_FakeClientContext(client),
         ),
-        patch.object(runner_mod, "add_index_key_if_new", new=add_index),
         patch.object(runner_mod, "logger", new=logger),
     ):
         result = await runner_mod._upload_to_private_r2(
             "private_responses/object.json",
-            "private_responses/index.json",
             {"predictions": [1, 2, 3]},
             "response blob",
             trace_id="private-response:element:hotkey:challenge",
         )
 
     assert result == "private_responses/object.json"
-    add_index.assert_awaited_once()
-    index_kwargs = add_index.await_args.kwargs
-    assert callable(index_kwargs["client_factory"])
-    assert index_kwargs["bucket"] == "private-bucket"
-    assert index_kwargs["key"] == "private_responses/object.json"
-    assert index_kwargs["index_key"] == "private_responses/index.json"
-    assert index_kwargs["trace_id"] == "private-response:element:hotkey:challenge"
+    client.put_object.assert_awaited_once()
     messages = [call.args[0] for call in logger.info.call_args_list]
     assert any("stage=object_put status=start" in message for message in messages)
     assert any("status=released hold_ms=" in message for message in messages)
@@ -193,6 +184,8 @@ async def test_run_challenge_for_element_soccer_uses_soccer_pillars_and_uploads_
         )
     )
     upload_shard_mock = AsyncMock(return_value="privatevision_results/shard.json")
+    emit_score_mock = AsyncMock(return_value="manako/evaluation-1.json")
+    index_evaluations_mock = AsyncMock()
 
     with (
         patch("scorevision.validator.central.private_track.runner.get_settings", return_value=settings),
@@ -218,7 +211,11 @@ async def test_run_challenge_for_element_soccer_uses_soccer_pillars_and_uploads_
         ),
         patch(
             "scorevision.validator.central.private_track.runner._emit_private_score_to_public_db",
-            new=AsyncMock(),
+            new=emit_score_mock,
+        ),
+        patch(
+            "scorevision.validator.central.private_track.runner._index_private_evaluations",
+            new=index_evaluations_mock,
         ),
         patch(
             "scorevision.validator.central.private_track.runner._upload_benchmark_result",
@@ -241,6 +238,8 @@ async def test_run_challenge_for_element_soccer_uses_soccer_pillars_and_uploads_
     args = challenge_miner_mock.await_args.args
     assert args[6] == {"soccer_action": 1.0}
     assert upload_shard_mock.await_count == 1
+    index_evaluations_mock.assert_awaited_once()
+    assert index_evaluations_mock.await_args.args[0] == ["manako/evaluation-1.json"]
 
 
 @pytest.mark.asyncio
