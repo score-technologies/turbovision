@@ -228,7 +228,7 @@ def pick_winner_with_tiebreak(
     delta_rel: float,
     first_commit_block_by_hk: dict[str, int],
     min_common_challenges: int = 5,
-    historical_min_failed_challenges_to_reject: int = 4,
+    historical_min_failed_challenges_to_reject: int = 3,
 ) -> int:
     legacy_single_batch = recent_challenge_scores_by_miner is None
     if recent_challenge_scores_by_miner is None:

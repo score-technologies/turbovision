@@ -235,7 +235,7 @@ def test_historical_sample_is_deterministic_and_ignores_input_order():
     assert set(first_winner) <= (set(winner_history) & set(candidate_history))
 
 
-def test_tiebreak_rejects_candidate_after_four_historical_differences():
+def test_tiebreak_rejects_candidate_after_three_historical_differences():
     winner_recent = {f"recent-{i}": 0.8 for i in range(10)}
     candidate_recent = dict(winner_recent)
     winner_previous = {f"previous-{i}": 0.8 for i in range(10)}
@@ -243,7 +243,6 @@ def test_tiebreak_rejects_candidate_after_four_historical_differences():
     candidate_previous["previous-0"] = 0.5
     candidate_previous["previous-1"] = 0.5
     candidate_previous["previous-2"] = 0.5
-    candidate_previous["previous-3"] = 0.5
 
     winner_uid = pick_winner_with_tiebreak(
         1,
@@ -261,14 +260,13 @@ def test_tiebreak_rejects_candidate_after_four_historical_differences():
     assert winner_uid == 1
 
 
-def test_tiebreak_tolerates_three_historical_differences():
+def test_tiebreak_tolerates_two_historical_differences():
     winner_recent = {f"recent-{i}": 0.8 for i in range(10)}
     candidate_recent = dict(winner_recent)
     winner_previous = {f"previous-{i}": 0.8 for i in range(10)}
     candidate_previous = dict(winner_previous)
     candidate_previous["previous-0"] = 0.5
     candidate_previous["previous-1"] = 0.5
-    candidate_previous["previous-2"] = 0.5
 
     winner_uid = pick_winner_with_tiebreak(
         1,
