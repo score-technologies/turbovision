@@ -18,6 +18,7 @@ from scorevision.validator.scoring import (
     are_similar_by_challenges,
     pick_winner_with_tiebreak,
     select_deterministic_historical_challenges,
+    select_recent_common_challenges,
 )
 from scorevision.validator.core.weights import (
     _commit_block_for_hotkey,
@@ -198,15 +199,83 @@ def test_are_similar_by_challenges_two_failed_challenges_is_not_similar():
 
 
 def test_aggregate_challenge_score_batches_returns_recent_ten_and_full_history():
-    rows = deque((f"c{i}", float(i)) for i in range(1, 21))
+    rows = deque((f"c{i}", float(i), 100 + i) for i in range(1, 21))
 
-    recent, history = aggregate_challenge_score_batches_by_miner(
+    recent, history, blocks = aggregate_challenge_score_batches_by_miner(
         {("validator", 1): rows},
         batch_size=10,
     )
 
     assert list(history[1]) == [f"c{i}" for i in range(1, 21)]
     assert list(recent[1]) == [f"c{i}" for i in range(11, 21)]
+    assert blocks[1]["c1"] == 101
+    assert blocks[1]["c20"] == 120
+
+
+def test_recent_common_sample_uses_latest_common_blocks():
+    winner_history = {
+        **{f"common-{i}": 0.8 for i in range(12)},
+        "winner-only": 0.9,
+    }
+    candidate_history = {
+        **{f"common-{i}": 0.8 for i in range(12)},
+        "candidate-only": 0.9,
+    }
+    winner_blocks = {
+        **{f"common-{i}": 100 + i for i in range(12)},
+        "winner-only": 999,
+    }
+    candidate_blocks = {
+        **{f"common-{i}": 100 + i for i in range(12)},
+        "candidate-only": 998,
+    }
+
+    winner_sample, candidate_sample = select_recent_common_challenges(
+        winner_history,
+        candidate_history,
+        winner_blocks=winner_blocks,
+        candidate_blocks=candidate_blocks,
+        sample_size=10,
+    )
+
+    expected = {f"common-{i}" for i in range(2, 12)}
+    assert set(winner_sample) == expected
+    assert set(candidate_sample) == expected
+    assert "winner-only" not in winner_sample
+    assert "candidate-only" not in candidate_sample
+
+
+def test_recent_common_sample_excludes_zero_scores_before_taking_latest_ten():
+    valid_scores = {f"valid-{i}": 0.8 for i in range(12)}
+    winner_history = {
+        **valid_scores,
+        "winner-zero": 0.0,
+        "candidate-zero": 0.8,
+    }
+    candidate_history = {
+        **valid_scores,
+        "winner-zero": 0.8,
+        "candidate-zero": 0.0,
+    }
+    blocks = {
+        **{f"valid-{i}": 100 + i for i in range(12)},
+        "winner-zero": 1_000,
+        "candidate-zero": 1_001,
+    }
+
+    winner_sample, candidate_sample = select_recent_common_challenges(
+        winner_history,
+        candidate_history,
+        winner_blocks=blocks,
+        candidate_blocks=blocks,
+        sample_size=10,
+    )
+
+    expected = {f"valid-{i}" for i in range(2, 12)}
+    assert set(winner_sample) == expected
+    assert set(candidate_sample) == expected
+    assert "winner-zero" not in winner_sample
+    assert "candidate-zero" not in candidate_sample
 
 
 def test_historical_sample_is_deterministic_and_ignores_input_order():
@@ -243,12 +312,20 @@ def test_tiebreak_rejects_candidate_after_three_historical_differences():
     candidate_previous["previous-0"] = 0.5
     candidate_previous["previous-1"] = 0.5
     candidate_previous["previous-2"] = 0.5
+    challenge_blocks = {
+        **{f"previous-{i}": 100 + i for i in range(10)},
+        **{f"recent-{i}": 200 + i for i in range(10)},
+    }
 
     winner_uid = pick_winner_with_tiebreak(
         1,
         uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
         recent_challenge_scores_by_miner={1: winner_recent, 2: candidate_recent},
-        historical_challenge_scores_by_miner={1: winner_previous, 2: candidate_previous},
+        historical_challenge_scores_by_miner={
+            1: {**winner_previous, **winner_recent},
+            2: {**candidate_previous, **candidate_recent},
+        },
+        challenge_blocks_by_miner={1: challenge_blocks, 2: challenge_blocks},
         current_window_id="block-12000",
         candidate_uids={1, 2},
         delta_abs=0.003,
@@ -267,12 +344,20 @@ def test_tiebreak_tolerates_two_historical_differences():
     candidate_previous = dict(winner_previous)
     candidate_previous["previous-0"] = 0.5
     candidate_previous["previous-1"] = 0.5
+    challenge_blocks = {
+        **{f"previous-{i}": 100 + i for i in range(10)},
+        **{f"recent-{i}": 200 + i for i in range(10)},
+    }
 
     winner_uid = pick_winner_with_tiebreak(
         1,
         uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
         recent_challenge_scores_by_miner={1: winner_recent, 2: candidate_recent},
-        historical_challenge_scores_by_miner={1: winner_previous, 2: candidate_previous},
+        historical_challenge_scores_by_miner={
+            1: {**winner_previous, **winner_recent},
+            2: {**candidate_previous, **candidate_recent},
+        },
+        challenge_blocks_by_miner={1: challenge_blocks, 2: challenge_blocks},
         current_window_id="block-12000",
         candidate_uids={1, 2},
         delta_abs=0.003,
@@ -287,18 +372,63 @@ def test_tiebreak_tolerates_two_historical_differences():
 def test_tiebreak_uses_commit_block_when_recent_and_historical_are_similar():
     winner_recent = {f"recent-{i}": 0.8 for i in range(10)}
     winner_previous = {f"previous-{i}": 0.8 for i in range(10)}
+    challenge_blocks = {
+        **{f"previous-{i}": 100 + i for i in range(10)},
+        **{f"recent-{i}": 200 + i for i in range(10)},
+    }
 
     winner_uid = pick_winner_with_tiebreak(
         1,
         uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
         recent_challenge_scores_by_miner={1: winner_recent, 2: dict(winner_recent)},
-        historical_challenge_scores_by_miner={1: winner_previous, 2: dict(winner_previous)},
+        historical_challenge_scores_by_miner={
+            1: {**winner_previous, **winner_recent},
+            2: {**winner_previous, **winner_recent},
+        },
+        challenge_blocks_by_miner={1: challenge_blocks, 2: challenge_blocks},
         current_window_id="block-12000",
         candidate_uids={1, 2},
         delta_abs=0.003,
         delta_rel=0.03,
         first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
         min_common_challenges=6,
+    )
+
+    assert winner_uid == 2
+
+
+def test_tiebreak_uses_latest_common_challenges_instead_of_each_miners_latest():
+    common_recent = {f"common-recent-{i}": 0.8 for i in range(10)}
+    common_previous = {f"common-previous-{i}": 0.8 for i in range(10)}
+    winner_only = {f"winner-only-{i}": 0.1 for i in range(10)}
+    candidate_only = {f"candidate-only-{i}": 0.1 for i in range(10)}
+    winner_history = {**common_previous, **common_recent, **winner_only}
+    candidate_history = {**common_previous, **common_recent, **candidate_only}
+    common_blocks = {
+        **{f"common-previous-{i}": 100 + i for i in range(10)},
+        **{f"common-recent-{i}": 200 + i for i in range(10)},
+    }
+    winner_blocks = {
+        **common_blocks,
+        **{f"winner-only-{i}": 300 + i for i in range(10)},
+    }
+    candidate_blocks = {
+        **common_blocks,
+        **{f"candidate-only-{i}": 300 + i for i in range(10)},
+    }
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        recent_challenge_scores_by_miner={1: winner_only, 2: candidate_only},
+        historical_challenge_scores_by_miner={1: winner_history, 2: candidate_history},
+        challenge_blocks_by_miner={1: winner_blocks, 2: candidate_blocks},
+        current_window_id="block-12000",
+        candidate_uids={1, 2},
+        delta_abs=0.003,
+        delta_rel=0.03,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        min_common_challenges=8,
     )
 
     assert winner_uid == 2

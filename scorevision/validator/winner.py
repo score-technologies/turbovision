@@ -51,13 +51,13 @@ def _drop_initial_zero_scores(scores: list[float], *, max_dropped: int = 5) -> t
 
 
 def _drop_initial_zero_challenge_rows(
-    rows: list[tuple[str, float]],
+    rows: list[tuple],
     *,
     max_dropped: int = 5,
-) -> tuple[list[tuple[str, float]], int]:
+) -> tuple[list[tuple], int]:
     """Drop only the leading zero-score challenge rows, preserving their IDs."""
     _filtered_scores, dropped = _drop_initial_zero_scores(
-        [float(score) for _challenge_id, score in rows],
+        [float(row[1]) for row in rows],
         max_dropped=max_dropped,
     )
     return list(rows[dropped:]), dropped
@@ -309,7 +309,10 @@ async def collect_recent_challenge_scores_by_validator_miner(
             if not challenge_id:
                 continue
             challenge_key = f"{validator_hk}:{challenge_id}"
-            challenge_scores[(validator_hk, miner_uid)].append((challenge_key, float(score)))
+            challenge_block = _extract_sample_block(line, payload, telemetry) or 0
+            challenge_scores[(validator_hk, miner_uid)].append(
+                (challenge_key, float(score), int(challenge_block))
+            )
         except Exception:
             continue
     return challenge_scores
@@ -656,6 +659,7 @@ async def get_winner_for_element(
             (
                 recent_challenge_scores_by_miner,
                 historical_challenge_scores_by_miner,
+                challenge_blocks_by_miner,
             ) = aggregate_challenge_score_batches_by_miner(
                 challenge_scores_by_validator_miner,
                 batch_size=challenge_batch_size,
@@ -696,6 +700,7 @@ async def get_winner_for_element(
                 uid_to_hk=uid_to_hk,
                 recent_challenge_scores_by_miner=recent_challenge_scores_by_miner,
                 historical_challenge_scores_by_miner=historical_challenge_scores_by_miner,
+                challenge_blocks_by_miner=challenge_blocks_by_miner,
                 current_window_id=current_window_id,
                 historical_sample_size=challenge_batch_size,
                 candidate_uids=candidate_uids,

@@ -676,7 +676,7 @@ async def _find_miner_commit_via_archive_backfill(
         try:
             hist = await st_archive.get_revealed_commitment_by_hotkey(
                 netuid=netuid,
-                hotkey_ss58_address=hotkey,
+                hotkey_ss58=hotkey,
                 block=cursor,
             )
         except Exception as e:

@@ -158,7 +158,8 @@ def aggregate_challenge_scores_by_miner(
     for (_validator_hk, miner_uid), dq in challenge_scores_by_validator_miner.items():
         if miner_uid not in result:
             result[miner_uid] = {}
-        for challenge_id, score in dq:
+        for row in dq:
+            challenge_id, score = row[:2]
             result[miner_uid][challenge_id] = float(score)
     return result
 
@@ -167,10 +168,15 @@ def aggregate_challenge_score_batches_by_miner(
     challenge_scores_by_validator_miner: dict[tuple[str, int], deque],
     *,
     batch_size: int,
-) -> tuple[dict[int, dict[str, float]], dict[int, dict[str, float]]]:
-    """Return each miner's recent batch and complete evaluation-window history."""
+) -> tuple[
+    dict[int, dict[str, float]],
+    dict[int, dict[str, float]],
+    dict[int, dict[str, int]],
+]:
+    """Return recent scores, full history, and each challenge's evaluation block."""
     recent: dict[int, dict[str, float]] = {}
     history: dict[int, dict[str, float]] = {}
+    blocks: dict[int, dict[str, int]] = {}
     size = max(1, int(batch_size))
 
     for (_validator_hk, miner_uid), dq in challenge_scores_by_validator_miner.items():
@@ -179,12 +185,54 @@ def aggregate_challenge_score_batches_by_miner(
 
         recent.setdefault(miner_uid, {})
         history.setdefault(miner_uid, {})
-        for challenge_id, score in recent_rows:
+        blocks.setdefault(miner_uid, {})
+        for row in recent_rows:
+            challenge_id, score = row[:2]
             recent[miner_uid][challenge_id] = float(score)
-        for challenge_id, score in rows:
+        for row in rows:
+            challenge_id, score = row[:2]
+            block = row[2] if len(row) >= 3 else 0
             history[miner_uid][challenge_id] = float(score)
+            blocks[miner_uid][challenge_id] = int(block or 0)
 
-    return recent, history
+    return recent, history, blocks
+
+
+def select_recent_common_challenges(
+    winner_history: dict[str, float],
+    candidate_history: dict[str, float],
+    *,
+    winner_blocks: dict[str, int] | None,
+    candidate_blocks: dict[str, int] | None,
+    sample_size: int,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Select the most recent common challenges with non-zero scores for both miners."""
+    winner_blocks = winner_blocks or {}
+    candidate_blocks = candidate_blocks or {}
+    common_ids = {
+        challenge_id
+        for challenge_id in set(winner_history) & set(candidate_history)
+        if abs(float(winner_history.get(challenge_id, 0.0) or 0.0)) > 1e-9
+        and abs(float(candidate_history.get(challenge_id, 0.0) or 0.0)) > 1e-9
+    }
+
+    def common_block(challenge_id: str) -> int:
+        winner_block = int(winner_blocks.get(challenge_id, 0) or 0)
+        candidate_block = int(candidate_blocks.get(challenge_id, 0) or 0)
+        if winner_block and candidate_block:
+            return min(winner_block, candidate_block)
+        return winner_block or candidate_block
+
+    ranked_ids = sorted(
+        common_ids,
+        key=lambda challenge_id: (common_block(challenge_id), challenge_id),
+        reverse=True,
+    )
+    selected_ids = ranked_ids[: max(1, int(sample_size))]
+    return (
+        {challenge_id: winner_history[challenge_id] for challenge_id in selected_ids},
+        {challenge_id: candidate_history[challenge_id] for challenge_id in selected_ids},
+    )
 
 
 def select_deterministic_historical_challenges(
@@ -222,6 +270,7 @@ def pick_winner_with_tiebreak(
     *,
     recent_challenge_scores_by_miner: dict[int, dict[str, float]] | None = None,
     historical_challenge_scores_by_miner: dict[int, dict[str, float]] | None = None,
+    challenge_blocks_by_miner: dict[int, dict[str, int]] | None = None,
     current_window_id: str = "",
     historical_sample_size: int = 10,
     delta_abs: float,
@@ -237,6 +286,7 @@ def pick_winner_with_tiebreak(
         historical_challenge_scores_by_miner = (
             recent_challenge_scores_by_miner if legacy_single_batch else {}
         )
+    challenge_blocks_by_miner = challenge_blocks_by_miner or {}
     candidate_uids = set(candidate_uids or set())
 
     if winner_uid not in recent_challenge_scores_by_miner:
@@ -246,9 +296,23 @@ def pick_winner_with_tiebreak(
     for miner_uid in candidate_uids:
         if miner_uid == winner_uid:
             continue
-        recent_scores = recent_challenge_scores_by_miner.get(miner_uid)
-        if not recent_scores:
+        candidate_recent_scores = recent_challenge_scores_by_miner.get(miner_uid)
+        if not candidate_recent_scores:
             continue
+        if legacy_single_batch:
+            recent_scores = candidate_recent_scores
+        else:
+            winner_history = historical_challenge_scores_by_miner.get(winner_uid)
+            candidate_history = historical_challenge_scores_by_miner.get(miner_uid)
+            if not winner_history or not candidate_history:
+                continue
+            winner_recent_scores, recent_scores = select_recent_common_challenges(
+                winner_history,
+                candidate_history,
+                winner_blocks=challenge_blocks_by_miner.get(winner_uid),
+                candidate_blocks=challenge_blocks_by_miner.get(miner_uid),
+                sample_size=historical_sample_size,
+            )
         recent_is_similar, recent_debug = _are_similar_by_challenges_debug(
             winner_recent_scores,
             recent_scores,
@@ -258,7 +322,7 @@ def pick_winner_with_tiebreak(
         )
 
         logger.info(
-            "[window-tiebreak] recent-batch winner uid=%d hk=%s vs uid=%d hk=%s -> "
+            "[window-tiebreak] recent-common winner uid=%d hk=%s vs uid=%d hk=%s -> "
             "similar=%s reason=%s all=%s compared=%s min_common=%s failed_score=%s "
             "max_abs_diff=%s max_abs_diff_threshold=%s max_diff_challenge=%s "
             "failed_examples=%s",
@@ -283,11 +347,7 @@ def pick_winner_with_tiebreak(
             similar_uids.append(miner_uid)
             continue
 
-        winner_history = historical_challenge_scores_by_miner.get(winner_uid)
-        candidate_history = historical_challenge_scores_by_miner.get(miner_uid)
-        if not winner_history or not candidate_history:
-            continue
-        excluded_recent_ids = set(winner_recent_scores) | set(recent_scores)
+        excluded_recent_ids = set(winner_recent_scores)
         winner_historical_sample, candidate_historical_sample = (
             select_deterministic_historical_challenges(
                 winner_history,

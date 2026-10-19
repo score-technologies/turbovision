@@ -613,7 +613,7 @@ async def _first_commit_block_by_miner(
                             while cursor >= resolved_first_block and hops < _TIEBREAK_COMMIT_BACKFILL_MAX_HOPS:
                                 hist = await st_archive.get_revealed_commitment_by_hotkey(
                                     netuid=netuid,
-                                    hotkey_ss58_address=hk_i,
+                                    hotkey_ss58=hk_i,
                                     block=cursor,
                                 )
                                 hist = list(hist or [])

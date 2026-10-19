@@ -81,6 +81,50 @@ def test_hf_repo_has_only_onnx_models_false_when_no_model_artifact(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_archive_backfill_uses_bittensor_hotkey_parameter():
+    calls = []
+
+    class ArchiveSubtensor:
+        async def get_revealed_commitment_by_hotkey(
+            self, netuid, hotkey_ss58=None, block=None
+        ):
+            calls.append((netuid, hotkey_ss58, block))
+            return [
+                (
+                    90,
+                    json.dumps(
+                        {
+                            "role": "miner",
+                            "model": "org/model",
+                            "revision": "rev1",
+                            "slug": "slug1",
+                            "element_id": "element-a",
+                        }
+                    ),
+                )
+            ]
+
+    initial_arr = [
+        (block, json.dumps({"role": "miner", "element_id": "element-b"}))
+        for block in range(100, 110)
+    ]
+
+    block, commitment = await registry._find_miner_commit_via_archive_backfill(
+        ArchiveSubtensor(),
+        netuid=18,
+        hotkey="hk1",
+        initial_arr=initial_arr,
+        wanted_element_id="element-a",
+        max_hops=1,
+        first_block=0,
+    )
+
+    assert calls == [(18, "hk1", 99)]
+    assert block == 90
+    assert commitment["element_id"] == "element-a"
+
+
+@pytest.mark.asyncio
 async def test_fetch_chute_info_records_each_failed_attempt(monkeypatch):
     responses = [
         (None, {"category": "http_429", "http_status": 429, "latency_ms": 12.0}),
