@@ -206,15 +206,10 @@ def select_recent_common_challenges(
     candidate_blocks: dict[str, int] | None,
     sample_size: int,
 ) -> tuple[dict[str, float], dict[str, float]]:
-    """Select the most recent common challenges with non-zero scores for both miners."""
+    """Select the most recent common challenges before zero-score filtering."""
     winner_blocks = winner_blocks or {}
     candidate_blocks = candidate_blocks or {}
-    common_ids = {
-        challenge_id
-        for challenge_id in set(winner_history) & set(candidate_history)
-        if abs(float(winner_history.get(challenge_id, 0.0) or 0.0)) > 1e-9
-        and abs(float(candidate_history.get(challenge_id, 0.0) or 0.0)) > 1e-9
-    }
+    common_ids = set(winner_history) & set(candidate_history)
 
     def common_block(challenge_id: str) -> int:
         winner_block = int(winner_blocks.get(challenge_id, 0) or 0)

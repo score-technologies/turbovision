@@ -245,7 +245,7 @@ def test_recent_common_sample_uses_latest_common_blocks():
     assert "candidate-only" not in candidate_sample
 
 
-def test_recent_common_sample_excludes_zero_scores_before_taking_latest_ten():
+def test_recent_common_sample_takes_latest_ten_before_zero_score_filtering():
     valid_scores = {f"valid-{i}": 0.8 for i in range(12)}
     winner_history = {
         **valid_scores,
@@ -271,11 +271,60 @@ def test_recent_common_sample_excludes_zero_scores_before_taking_latest_ten():
         sample_size=10,
     )
 
-    expected = {f"valid-{i}" for i in range(2, 12)}
+    expected = {
+        *{f"valid-{i}" for i in range(4, 12)},
+        "winner-zero",
+        "candidate-zero",
+    }
     assert set(winner_sample) == expected
     assert set(candidate_sample) == expected
-    assert "winner-zero" not in winner_sample
-    assert "candidate-zero" not in candidate_sample
+    assert len(winner_sample) == 10
+    assert len(candidate_sample) == 10
+    assert are_similar_by_challenges(
+        winner_sample,
+        candidate_sample,
+        delta_abs=0.003,
+        delta_rel=0.03,
+        min_common_challenges=8,
+    )
+
+
+def test_tiebreak_does_not_backfill_older_non_zero_scores_past_latest_ten():
+    valid_scores = {f"valid-{i}": 0.8 for i in range(10)}
+    winner_history = {
+        **valid_scores,
+        "zero-1": 0.0,
+        "zero-2": 0.0,
+        "zero-3": 0.0,
+    }
+    candidate_history = {
+        **valid_scores,
+        "zero-1": 0.8,
+        "zero-2": 0.8,
+        "zero-3": 0.8,
+    }
+    blocks = {
+        **{f"valid-{i}": 100 + i for i in range(10)},
+        "zero-1": 1_000,
+        "zero-2": 1_001,
+        "zero-3": 1_002,
+    }
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        recent_challenge_scores_by_miner={1: winner_history, 2: candidate_history},
+        historical_challenge_scores_by_miner={1: winner_history, 2: candidate_history},
+        challenge_blocks_by_miner={1: blocks, 2: blocks},
+        current_window_id="block-12000",
+        candidate_uids={1, 2},
+        delta_abs=0.003,
+        delta_rel=0.03,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        min_common_challenges=8,
+    )
+
+    assert winner_uid == 1
 
 
 def test_historical_sample_is_deterministic_and_ignores_input_order():
