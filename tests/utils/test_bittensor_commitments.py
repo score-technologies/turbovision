@@ -5,6 +5,7 @@ import pytest
 from scorevision.utils.bittensor_commitments import (
     _decode_commitment_payload,
     get_all_revealed_commitments,
+    get_revealed_commitments_by_hotkey,
 )
 
 
@@ -33,3 +34,29 @@ async def test_commitment_reader_falls_back_to_raw_query_map():
     result = await get_all_revealed_commitments(subtensor, 44)
 
     assert result == {"hotkey": ((123, '{"role":"miner"}'),)}
+
+
+@pytest.mark.asyncio
+async def test_hotkey_commitment_reader_falls_back_to_raw_query():
+    payload = '\x19\x05{"role":"miner"}'
+    query = type("Query", (), {"value_serialized": [(payload, 123)]})()
+    subtensor = type("Subtensor", (), {})()
+    subtensor.get_revealed_commitment_by_hotkey = AsyncMock(
+        side_effect=ValueError("not hex")
+    )
+    subtensor.query_module = AsyncMock(return_value=query)
+
+    result = await get_revealed_commitments_by_hotkey(
+        subtensor,
+        44,
+        "hotkey",
+        block=456,
+    )
+
+    assert result == ((123, '{"role":"miner"}'),)
+    subtensor.query_module.assert_awaited_once_with(
+        module="Commitments",
+        name="RevealedCommitments",
+        params=[44, "hotkey"],
+        block=456,
+    )

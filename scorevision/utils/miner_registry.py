@@ -15,7 +15,10 @@ from scorevision.utils.bittensor_helpers import (
     reset_subtensor,
     get_validator_indexes_from_chain,
 )
-from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
+from scorevision.utils.bittensor_commitments import (
+    get_all_revealed_commitments,
+    get_revealed_commitments_by_hotkey,
+)
 from scorevision.utils.commit_recovery import (
     is_recovery_commit,
     recover_commitments_from_shards,
@@ -674,9 +677,10 @@ async def _find_miner_commit_via_archive_backfill(
 
     while cursor >= first_block and hops < max_hops:
         try:
-            hist = await st_archive.get_revealed_commitment_by_hotkey(
-                netuid=netuid,
-                hotkey_ss58=hotkey,
+            hist = await get_revealed_commitments_by_hotkey(
+                st_archive,
+                netuid,
+                hotkey,
                 block=cursor,
             )
         except Exception as e:

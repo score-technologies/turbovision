@@ -12,7 +12,10 @@ from bittensor import AsyncSubtensor, Wallet
 
 from scorevision.utils.settings import get_settings
 from scorevision.utils.huggingface_helpers import get_huggingface_repo_name
-from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
+from scorevision.utils.bittensor_commitments import (
+    get_all_revealed_commitments,
+    get_revealed_commitments_by_hotkey,
+)
 from scorevision.utils.commit_recovery import (
     RECOVERY_COMMIT_ROLE,
     is_recovery_commit,
@@ -595,31 +598,35 @@ async def _first_commit_block_by_miner(
                     await asyncio.wait_for(st_archive.initialize(), timeout=20.0)
                     sem = asyncio.Semaphore(_TIEBREAK_COMMIT_BACKFILL_CONCURRENCY)
 
-                    async def _resolve_one(item: tuple[str, list]) -> tuple[str, int | None]:
+                    async def _resolve_one(
+                        item: tuple[str, list],
+                    ) -> tuple[str, int | None, bool]:
                         hk_i, arr_i = item
                         if len(arr_i or []) < 10:
-                            return hk_i, None
+                            return hk_i, None, False
                         try:
                             oldest_visible = min(int(x[0]) for x in arr_i)
                         except Exception:
-                            return hk_i, None
+                            return hk_i, None, False
                         if oldest_visible < resolved_first_block:
-                            return hk_i, None
+                            return hk_i, None, False
 
                         cursor = oldest_visible - 1
                         prev_oldest = oldest_visible
                         hops = 0
                         async with sem:
                             while cursor >= resolved_first_block and hops < _TIEBREAK_COMMIT_BACKFILL_MAX_HOPS:
-                                hist = await st_archive.get_revealed_commitment_by_hotkey(
-                                    netuid=netuid,
-                                    hotkey_ss58=hk_i,
+                                hist = await get_revealed_commitments_by_hotkey(
+                                    st_archive,
+                                    netuid,
+                                    hk_i,
                                     block=cursor,
                                 )
                                 hist = list(hist or [])
                                 if not hist:
-                                    return hk_i, None
+                                    return hk_i, None, False
                                 best_blk_i = None
+                                best_is_recovery_i = False
                                 for tup in hist:
                                     try:
                                         blk_i, data_i = tup
@@ -628,7 +635,12 @@ async def _first_commit_block_by_miner(
                                         continue
                                     if not isinstance(obj_i, dict):
                                         continue
-                                    if obj_i.get("role") != "miner":
+                                    is_recovery_i = is_recovery_commit(
+                                        obj_i,
+                                        wanted_element_id,
+                                        hotkey=hk_i,
+                                    )
+                                    if obj_i.get("role") != "miner" and not is_recovery_i:
                                         continue
                                     committed_eid_i = obj_i.get("element_id")
                                     committed_eid_i = (
@@ -644,36 +656,63 @@ async def _first_commit_block_by_miner(
                                         continue
                                     if best_blk_i is None or blk_int_i > best_blk_i:
                                         best_blk_i = blk_int_i
+                                        best_is_recovery_i = is_recovery_i
                                 if best_blk_i is not None:
-                                    return hk_i, int(best_blk_i)
+                                    return hk_i, int(best_blk_i), best_is_recovery_i
                                 if len(hist) < 10:
-                                    return hk_i, None
+                                    return hk_i, None, False
                                 try:
                                     oldest_hist = min(int(x[0]) for x in hist)
                                 except Exception:
-                                    return hk_i, None
+                                    return hk_i, None, False
                                 if oldest_hist < resolved_first_block:
-                                    return hk_i, None
+                                    return hk_i, None, False
                                 if oldest_hist >= prev_oldest:
-                                    return hk_i, None
+                                    return hk_i, None, False
                                 prev_oldest = oldest_hist
                                 cursor = oldest_hist - 1
                                 hops += 1
-                        return hk_i, None
+                        return hk_i, None, False
 
                     results = await asyncio.gather(
                         *[_resolve_one(item) for item in unresolved_for_backfill],
                         return_exceptions=True,
                     )
                     added = 0
+                    archived_recoveries: list[tuple[str, int]] = []
                     for item in results:
                         if isinstance(item, Exception):
                             continue
-                        hk_i, blk_i = item
+                        hk_i, blk_i, is_recovery_i = item
                         if blk_i is None:
+                            continue
+                        if is_recovery_i:
+                            archived_recoveries.append((hk_i, blk_i))
                             continue
                         last_block_by_hk[hk_i] = int(blk_i)
                         added += 1
+                    if archived_recoveries:
+                        validator_indexes = await get_validator_indexes_from_chain(netuid)
+                        recovered = await recover_commitments_from_shards(
+                            {
+                                (hk_i, wanted_element_id)
+                                for hk_i, _block in archived_recoveries
+                            },
+                            validator_indexes,
+                        )
+                        for hk_i, recovery_block in archived_recoveries:
+                            recovered_commitment = recovered.get((hk_i, wanted_element_id))
+                            if recovered_commitment is None:
+                                logger.warning(
+                                    "[first_commit_block_by_miner] archive recovery unresolved "
+                                    "hotkey=%s element=%s recovery_block=%s",
+                                    hk_i,
+                                    wanted_element_id,
+                                    recovery_block,
+                                )
+                                continue
+                            last_block_by_hk[hk_i] = recovered_commitment.commit_block
+                            added += 1
                     if added:
                         logger.info(
                             "[first_commit_block_by_miner] archive backfill added %d hotkey(s) for element=%s",

@@ -50,3 +50,33 @@ async def get_all_revealed_commitments(subtensor, netuid: int):
                 for payload, block in values
             )
         return result
+
+
+async def get_revealed_commitments_by_hotkey(
+    subtensor,
+    netuid: int,
+    hotkey: str,
+    *,
+    block: int | None = None,
+):
+    """Read one hotkey's commitments across SDK and ASI 2 payload formats."""
+    try:
+        return await subtensor.get_revealed_commitment_by_hotkey(
+            netuid=netuid,
+            hotkey_ss58=hotkey,
+            block=block,
+        )
+    except ValueError:
+        query = await subtensor.query_module(
+            module="Commitments",
+            name="RevealedCommitments",
+            params=[netuid, hotkey],
+            block=block,
+        )
+        values = getattr(query, "value_serialized", None)
+        if values is None:
+            return ()
+        return tuple(
+            (int(reveal_block), _decode_commitment_payload(payload))
+            for payload, reveal_block in values
+        )

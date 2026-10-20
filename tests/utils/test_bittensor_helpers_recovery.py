@@ -185,3 +185,100 @@ async def test_first_commit_block_archive_backfill_uses_bittensor_hotkey_paramet
 
     assert archive_calls == [(18, "hk1", 99)]
     assert blocks == {"hk1": 90}
+
+
+@pytest.mark.asyncio
+async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(monkeypatch):
+    class LiveSubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1"])
+
+    class ArchiveSubtensor:
+        def __init__(self, network):
+            self.network = network
+
+        async def initialize(self):
+            return None
+
+        async def close(self):
+            return None
+
+        async def get_revealed_commitment_by_hotkey(
+            self, netuid, hotkey_ss58=None, block=None
+        ):
+            return [
+                (
+                    90,
+                    json.dumps(
+                        {
+                            "role": "miner_recover",
+                            "element_id": "element-a",
+                            "hotkey": "hk1",
+                        }
+                    ),
+                )
+            ]
+
+    async def fake_get_subtensor():
+        return LiveSubtensor()
+
+    async def fake_commitments(_subtensor, _netuid):
+        return {
+            "hk1": [
+                (block, json.dumps({"role": "miner", "element_id": "element-b"}))
+                for block in range(100, 110)
+            ]
+        }
+
+    async def fake_validator_indexes(_netuid):
+        return {"validator": "https://validator.example/manako/index.json"}
+
+    async def fake_recover(requests, _indexes):
+        assert requests == {("hk1", "element-a")}
+        return {
+            ("hk1", "element-a"): RecoveredCommitment(
+                model="org/model",
+                revision="rev1",
+                slug="slug1",
+                chute_id="chute1",
+                element_id="element-a",
+                commit_block=42,
+                shard_block=89,
+                shard_key="shard.json",
+            )
+        }
+
+    monkeypatch.setattr(bittensor_helpers, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(bittensor_helpers, "get_all_revealed_commitments", fake_commitments)
+    monkeypatch.setattr(bittensor_helpers, "AsyncSubtensor", ArchiveSubtensor)
+    monkeypatch.setattr(
+        bittensor_helpers,
+        "get_settings",
+        lambda: SimpleNamespace(SCOREVISION_MECHID=1),
+    )
+    monkeypatch.setattr(
+        bittensor_helpers,
+        "get_validator_indexes_from_chain",
+        fake_validator_indexes,
+    )
+    monkeypatch.setattr(
+        bittensor_helpers,
+        "recover_commitments_from_shards",
+        fake_recover,
+    )
+    monkeypatch.setattr(bittensor_helpers, "_TIEBREAK_COMMIT_BACKFILL_ENABLE", True)
+    monkeypatch.setattr(
+        bittensor_helpers,
+        "_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT",
+        "wss://archive.example",
+    )
+
+    blocks = await bittensor_helpers._first_commit_block_by_miner(
+        18,
+        element_id="element-a",
+        candidate_hotkeys={"hk1"},
+        backfill_allowed_hotkeys={"hk1"},
+        first_block=95,
+    )
+
+    assert blocks == {"hk1": 42}
