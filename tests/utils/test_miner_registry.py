@@ -125,6 +125,44 @@ async def test_archive_backfill_uses_bittensor_hotkey_parameter():
 
 
 @pytest.mark.asyncio
+async def test_archive_backfill_rejects_recovery_for_another_hotkey():
+    class ArchiveSubtensor:
+        async def get_revealed_commitment_by_hotkey(
+            self, netuid, hotkey_ss58=None, block=None
+        ):
+            return [
+                (
+                    90,
+                    json.dumps(
+                        {
+                            "role": "miner_recover",
+                            "element_id": "element-a",
+                            "hotkey": "different-hotkey",
+                        }
+                    ),
+                )
+            ]
+
+    initial_arr = [
+        (block, json.dumps({"role": "miner", "element_id": "element-b"}))
+        for block in range(100, 110)
+    ]
+
+    block, commitment = await registry._find_miner_commit_via_archive_backfill(
+        ArchiveSubtensor(),
+        netuid=18,
+        hotkey="hk1",
+        initial_arr=initial_arr,
+        wanted_element_id="element-a",
+        max_hops=1,
+        first_block=0,
+    )
+
+    assert block is None
+    assert commitment is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_chute_info_records_each_failed_attempt(monkeypatch):
     responses = [
         (None, {"category": "http_429", "http_status": 429, "latency_ms": 12.0}),
@@ -573,5 +611,112 @@ async def test_get_miners_from_registry_recovers_commitment_from_public_shard(mo
     )
 
     assert kept[0].block == 123
+    assert kept[0].model == "org/model"
+    assert skipped == {}
+
+
+@pytest.mark.asyncio
+async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch):
+    class LiveSubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1"])
+
+        async def get_all_revealed_commitments(self, netuid):
+            return {
+                "hk1": [
+                    (
+                        block,
+                        json.dumps(
+                            {
+                                "role": "miner",
+                                "track": "private",
+                                "element_id": "private-element",
+                            }
+                        ),
+                    )
+                    for block in range(100, 110)
+                ]
+            }
+
+    class ArchiveSubtensor:
+        def __init__(self, network):
+            self.network = network
+
+        async def initialize(self):
+            return None
+
+        async def close(self):
+            return None
+
+        async def get_revealed_commitment_by_hotkey(
+            self, netuid, hotkey_ss58=None, block=None
+        ):
+            return [
+                (
+                    90,
+                    json.dumps(
+                        {
+                            "role": "miner_recover",
+                            "element_id": "element-a",
+                            "hotkey": "hk1",
+                        }
+                    ),
+                )
+            ]
+
+    async def fake_get_subtensor():
+        return LiveSubtensor()
+
+    async def fake_scored_hotkeys(**_kwargs):
+        return {"hk1"}
+
+    async def fake_validator_indexes(_netuid):
+        return {"validator": "https://validator.example/manako/index.json"}
+
+    async def fake_recover(requests, _indexes):
+        assert requests == {("hk1", "element-a")}
+        return {
+            ("hk1", "element-a"): RecoveredCommitment(
+                model="org/model",
+                revision="rev1",
+                slug="slug1",
+                chute_id="chute1",
+                element_id="element-a",
+                commit_block=42,
+                shard_block=89,
+                shard_key="shard.json",
+            )
+        }
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev1"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "AsyncSubtensor", ArchiveSubtensor)
+    monkeypatch.setattr(registry, "_hotkeys_with_prior_scores_for_element", fake_scored_hotkeys)
+    monkeypatch.setattr(registry, "get_validator_indexes_from_chain", fake_validator_indexes)
+    monkeypatch.setattr(registry, "recover_commitments_from_shards", fake_recover)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+    monkeypatch.setattr(registry, "_REGISTRY_COMMIT_BACKFILL_ENABLE", True)
+    monkeypatch.setattr(
+        registry,
+        "_REGISTRY_COMMIT_BACKFILL_ARCHIVE_ENDPOINT",
+        "wss://archive.example",
+    )
+
+    kept, skipped = await registry.get_miners_from_registry(
+        18,
+        element_id="element-a",
+        first_block=95,
+        compliance_failure_tuples=set(),
+        inactive_miner_tuples=set(),
+    )
+
+    assert kept[0].block == 42
     assert kept[0].model == "org/model"
     assert skipped == {}

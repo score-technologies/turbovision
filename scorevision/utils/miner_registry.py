@@ -612,6 +612,7 @@ def _pick_latest_miner_commit_for_element(
     wanted_element_id: str | None,
     *,
     include_recovery: bool = True,
+    recovery_hotkey: str | None = None,
 ):
     best_blk = None
     best_data = None
@@ -632,7 +633,11 @@ def _pick_latest_miner_commit_for_element(
         if role != "miner" and not (
             include_recovery
             and wanted_element_id is not None
-            and is_recovery_commit(obj, wanted_element_id)
+            and is_recovery_commit(
+                obj,
+                wanted_element_id,
+                hotkey=recovery_hotkey,
+            )
         ):
             continue
 
@@ -699,7 +704,8 @@ async def _find_miner_commit_via_archive_backfill(
         blk, _data, obj = _pick_latest_miner_commit_for_element(
             hist,
             wanted_element_id,
-            include_recovery=False,
+            include_recovery=True,
+            recovery_hotkey=hotkey,
         )
         if obj is not None:
             return int(blk or 0), obj
@@ -1075,7 +1081,8 @@ async def get_miners_from_registry(
                     return_exceptions=True,
                 )
 
-                added = 0
+                resolved_archive_commits: list[tuple[int, str, int, dict]] = []
+                archived_recoveries: list[tuple[int, str, int]] = []
                 for item in results:
                     if isinstance(item, Exception):
                         logger.debug("[Registry] archive backfill worker failed: %s", item)
@@ -1084,6 +1091,52 @@ async def get_miners_from_registry(
                     if obj_i is None or blk_i is None:
                         continue
 
+                    if is_recovery_commit(obj_i, wanted, hotkey=hk_i):
+                        archived_recoveries.append((uid_i, hk_i, int(blk_i)))
+                        continue
+                    resolved_archive_commits.append((uid_i, hk_i, int(blk_i), obj_i))
+
+                if archived_recoveries:
+                    try:
+                        validator_indexes = await get_validator_indexes_from_chain(netuid)
+                        recovered = await recover_commitments_from_shards(
+                            {(hk_i, wanted) for _uid, hk_i, _block in archived_recoveries},
+                            validator_indexes,
+                        )
+                        for uid_i, hk_i, recovery_block in archived_recoveries:
+                            recovered_commitment = recovered.get((hk_i, wanted))
+                            if recovered_commitment is None:
+                                logger.warning(
+                                    "[Registry] archive recovery unresolved uid=%s hotkey=%s "
+                                    "element_id=%s recovery_block=%s",
+                                    uid_i,
+                                    hk_i,
+                                    wanted,
+                                    recovery_block,
+                                )
+                                continue
+                            resolved_archive_commits.append(
+                                (
+                                    uid_i,
+                                    hk_i,
+                                    recovered_commitment.commit_block,
+                                    recovered_commitment.as_miner_commitment(hk_i),
+                                )
+                            )
+                            logger.info(
+                                "[Registry] archive recovered uid=%s hotkey=%s element_id=%s "
+                                "original_commit_block=%s recovery_block=%s",
+                                uid_i,
+                                hk_i,
+                                wanted,
+                                recovered_commitment.commit_block,
+                                recovery_block,
+                            )
+                    except Exception as e:
+                        logger.warning("[Registry] archive recovery disabled due to error: %s", e)
+
+                added = 0
+                for uid_i, hk_i, blk_i, obj_i in resolved_archive_commits:
                     cand = _build_miner_candidate(uid_i, hk_i, obj_i, int(blk_i))
                     if cand is not None:
                         if is_inactive_miner_tuple(
