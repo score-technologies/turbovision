@@ -668,13 +668,18 @@ async def weights_loop(
                             tail_for_element = public_tail_blocks
                         max_tail_used = max(max_tail_used, tail_for_element)
                         baseline_theta = None
+                        tiebreak_profile = 3
                         first_block = None
                         try:
                             elem = manifest.get_element(id=element_id)
                             baseline_theta = getattr(elem, "baseline_theta", None) if elem is not None else None
+                            tiebreak_profile = (
+                                getattr(elem, "tiebreak_profile", 3) if elem is not None else 3
+                            )
                             first_block = getattr(elem, "first_block", None) if elem is not None else None
                         except Exception:
                             baseline_theta = None
+                            tiebreak_profile = 3
                             first_block = None
 
                         logger.info(
@@ -696,6 +701,7 @@ async def weights_loop(
                             tail=tail_for_element,
                             m_min=min_samples,
                             baseline_theta=baseline_theta,
+                            tiebreak_profile=tiebreak_profile,
                             first_block=first_block,
                             blacklisted_hotkeys=blacklisted_hotkeys,
                             compliance_failure_tuples=None if is_private else compliance_failure_tuples,

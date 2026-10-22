@@ -6,6 +6,19 @@ from scorevision.utils.settings import get_settings
 
 logger = getLogger(__name__)
 
+TIEBREAK_THRESHOLD_BY_PROFILE = {
+    1: 0.039,
+    2: 0.045,
+    3: 0.05,
+}
+
+
+def tiebreak_threshold_for_profile(profile: int) -> float:
+    try:
+        return TIEBREAK_THRESHOLD_BY_PROFILE[int(profile)]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Unsupported tiebreak profile: {profile!r}") from exc
+
 
 def weighted_median(values: list[float], weights: list[float]) -> float:
     pairs = sorted(zip(values, weights), key=lambda x: x[0])
@@ -62,8 +75,7 @@ def are_similar_by_challenges(
         return False
     failed_count = 0
     for _cid, s1, s2 in common:
-        max_score = max(abs(s1), abs(s2))
-        thr = max(min_threshold_abs, delta_abs, delta_rel * max_score)
+        thr = float(min_threshold_abs)
         if abs(s1 - s2) > thr:
             failed_count += 1
             if failed_count >= min_failed_challenges_to_reject:
@@ -98,7 +110,7 @@ def _are_similar_by_challenges_debug(
         "max_abs_diff_challenge_id": None,
         "max_abs_diff_threshold": 0.0,
         "failed_examples": [],
-        "min_threshold_abs": min_threshold_abs,
+        "min_threshold_abs": float(min_threshold_abs),
         "min_failed_challenges_to_reject": min_failed_challenges_to_reject,
     }
 
@@ -115,8 +127,7 @@ def _are_similar_by_challenges_debug(
     for challenge_id in common_challenges:
         score1 = float(challenge_scores1.get(challenge_id, 0.0) or 0.0)
         score2 = float(challenge_scores2.get(challenge_id, 0.0) or 0.0)
-        max_score = max(abs(score1), abs(score2))
-        threshold = max(min_threshold_abs, delta_abs, delta_rel * max_score)
+        threshold = float(min_threshold_abs)
         abs_diff = abs(score1 - score2)
 
         if abs_diff > max_abs_diff:
@@ -273,6 +284,7 @@ def pick_winner_with_tiebreak(
     first_commit_block_by_hk: dict[str, int],
     min_common_challenges: int = 5,
     historical_min_failed_challenges_to_reject: int = 3,
+    similarity_threshold: float = 0.05,
 ) -> int:
     legacy_single_batch = recent_challenge_scores_by_miner is None
     if recent_challenge_scores_by_miner is None:
@@ -314,6 +326,7 @@ def pick_winner_with_tiebreak(
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=min_common_challenges,
+            min_threshold_abs=similarity_threshold,
         )
 
         logger.info(
@@ -358,6 +371,7 @@ def pick_winner_with_tiebreak(
             delta_abs=delta_abs,
             delta_rel=delta_rel,
             min_common_challenges=min_common_challenges,
+            min_threshold_abs=similarity_threshold,
             min_failed_challenges_to_reject=historical_min_failed_challenges_to_reject,
         )
         logger.info(

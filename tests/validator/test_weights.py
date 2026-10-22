@@ -19,6 +19,7 @@ from scorevision.validator.scoring import (
     pick_winner_with_tiebreak,
     select_deterministic_historical_challenges,
     select_recent_common_challenges,
+    tiebreak_threshold_for_profile,
 )
 from scorevision.validator.core.weights import (
     _commit_block_for_hotkey,
@@ -196,6 +197,49 @@ def test_are_similar_by_challenges_two_failed_challenges_is_not_similar():
     scores2["c0"] = 0.11
     scores2["c1"] = 0.11
     assert are_similar_by_challenges(scores1, scores2, delta_abs=0.003, delta_rel=0.03) is False
+
+
+def test_are_similar_by_challenges_uses_configured_threshold():
+    scores1 = {f"c{i}": 0.8 for i in range(10)}
+    scores2 = dict(scores1)
+    scores2["c0"] = 0.86
+    scores2["c1"] = 0.86
+
+    assert are_similar_by_challenges(
+        scores1,
+        scores2,
+        delta_abs=1.0,
+        delta_rel=1.0,
+        min_threshold_abs=0.05,
+    ) is False
+
+
+@pytest.mark.parametrize(
+    ("profile", "threshold"),
+    [(1, 0.039), (2, 0.045), (3, 0.05)],
+)
+def test_tiebreak_threshold_for_profile(profile, threshold):
+    assert tiebreak_threshold_for_profile(profile) == threshold
+
+
+def test_tiebreak_uses_profile_threshold():
+    winner_scores = {f"c{i}": 0.8 for i in range(10)}
+    candidate_scores = dict(winner_scores)
+    candidate_scores["c0"] = 0.84
+    candidate_scores["c1"] = 0.84
+
+    winner_uid = pick_winner_with_tiebreak(
+        1,
+        uid_to_hk={1: "hk-winner", 2: "hk-candidate"},
+        challenge_scores_by_miner={1: winner_scores, 2: candidate_scores},
+        candidate_uids={1, 2},
+        delta_abs=1.0,
+        delta_rel=1.0,
+        first_commit_block_by_hk={"hk-winner": 200, "hk-candidate": 100},
+        similarity_threshold=0.039,
+    )
+
+    assert winner_uid == 1
 
 
 def test_aggregate_challenge_score_batches_returns_recent_ten_and_full_history():

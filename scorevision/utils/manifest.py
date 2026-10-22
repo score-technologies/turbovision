@@ -19,6 +19,7 @@ from functools import cached_property
 from hashlib import sha256
 from json import dumps, loads
 from pathlib import Path
+from typing import Literal
 import aiohttp
 import hashlib
 
@@ -321,6 +322,10 @@ class Element(BaseModel):
     baseline_theta: float = Field(
         default=0.0, ge=0.0, description="Score threshold for emissions (min 0.0)"
     )
+    tiebreak_profile: Literal[1, 2, 3] = Field(
+        default=3,
+        description="Tie-break similarity profile: 1=0.039, 2=0.045, 3=0.050",
+    )
     delta_floor: float = Field(
         default=0.0,
         ge=0.0,
@@ -469,7 +474,13 @@ class Manifest(BaseModel):
         """
         payload = self.model_dump(mode="json")
         elements_sorted = sorted(self.elements, key=lambda e: e.id)
-        payload["elements"] = [e.model_dump(mode="json") for e in elements_sorted]
+        canonical_elements = []
+        for element in elements_sorted:
+            element_payload = element.model_dump(mode="json")
+            if "tiebreak_profile" not in element.model_fields_set:
+                element_payload.pop("tiebreak_profile", None)
+            canonical_elements.append(element_payload)
+        payload["elements"] = canonical_elements
         payload.pop("signature", None)
         return dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 

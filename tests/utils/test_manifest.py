@@ -146,6 +146,28 @@ def test_private_track_element_minimal():
     assert elem.clips == []
     assert elem.metrics is None
     assert elem.preproc is None
+    assert elem.tiebreak_profile == 3
+
+
+@pytest.mark.parametrize("profile", [1, 2, 3])
+def test_element_accepts_tiebreak_profiles(profile):
+    elem = Element(id="ActionSpot_v1", track="private", tiebreak_profile=profile)
+    assert elem.tiebreak_profile == profile
+
+
+def test_element_rejects_unknown_tiebreak_profile():
+    with pytest.raises(ValueError):
+        Element(id="ActionSpot_v1", track="private", tiebreak_profile=4)
+
+
+def test_omitted_tiebreak_profile_does_not_change_canonical_manifest(dummy_manifest):
+    assert all(element.tiebreak_profile == 3 for element in dummy_manifest.elements)
+    assert "tiebreak_profile" not in dummy_manifest.to_canonical_json()
+
+
+def test_explicit_tiebreak_profile_is_signed_in_manifest(dummy_manifest):
+    dummy_manifest.elements[0].tiebreak_profile = 1
+    assert '"tiebreak_profile":1' in dummy_manifest.to_canonical_json()
 
 
 def test_private_track_element_in_manifest():

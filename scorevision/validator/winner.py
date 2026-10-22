@@ -31,6 +31,7 @@ from scorevision.validator.scoring import (
     aggregate_challenge_score_batches_by_miner,
     days_to_blocks,
     pick_winner_with_tiebreak,
+    tiebreak_threshold_for_profile,
 )
 
 logger = getLogger(__name__)
@@ -325,6 +326,7 @@ async def get_winner_for_element(
     tail: int,
     m_min: int,
     baseline_theta: float | None = None,
+    tiebreak_profile: int = 3,
     first_block: int | None = None,
     blacklisted_hotkeys: set[str] | None = None,
     validator_hotkey_ss58: str | None = None,
@@ -594,16 +596,12 @@ async def get_winner_for_element(
     tiebreak_enabled_for_lane = settings.SCOREVISION_WINDOW_TIEBREAK_ENABLE and normalized_lane != "private"
     if tiebreak_enabled_for_lane:
         try:
-            adaptive_delta_rel = compute_adaptive_delta_rel(
-                default_delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
-                baseline_theta=baseline_theta,
-            )
+            similarity_threshold = tiebreak_threshold_for_profile(tiebreak_profile)
             logger.info(
-                "[window-tiebreak] Element=%s | baseline_theta=%s -> delta_rel=%.6f (default=%.6f)",
+                "[window-tiebreak] Element=%s | profile=%d -> threshold=%.3f",
                 element_id,
-                baseline_theta,
-                adaptive_delta_rel,
-                settings.SCOREVISION_WINDOW_DELTA_REL,
+                tiebreak_profile,
+                similarity_threshold,
             )
             zero_score_eps = 1e-12
             eligible_non_zero_uids = {
@@ -705,9 +703,10 @@ async def get_winner_for_element(
                 historical_sample_size=challenge_batch_size,
                 candidate_uids=candidate_uids,
                 delta_abs=settings.SCOREVISION_WINDOW_DELTA_ABS,
-                delta_rel=adaptive_delta_rel,
+                delta_rel=settings.SCOREVISION_WINDOW_DELTA_REL,
                 first_commit_block_by_hk=first_commit_block_by_hk_tiebreak,
                 min_common_challenges=8,
+                similarity_threshold=similarity_threshold,
             )
             if final_uid != winner_uid:
                 logger.info(
