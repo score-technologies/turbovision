@@ -8,8 +8,9 @@ from scorevision.utils.evaluate import (
 from scorevision.vlm_pipeline.domain_specific_schemas.challenge_types import (
     ChallengeType,
 )
-from scorevision.utils.manifest import ElementPrefix, PillarName
+from scorevision.utils.manifest import ElementPrefix, Manifest, Metrics, PillarName, Tee
 from scorevision.utils.data_models import SVRunOutput
+from scorevision.utils.challenges import _parse_ground_truth_payload
 from scorevision.vlm_pipeline.utils.response_models import (
     TEAM1_SHIRT_COLOUR,
     TEAM2_SHIRT_COLOUR,
@@ -88,6 +89,112 @@ def test_get_element_scores(
     assert isinstance(breakdown, dict)
     assert "mean_weighted" in breakdown
     assert breakdown["mean_weighted"] > 0.0
+
+
+def test_negative_ground_truth_weights_only_false_positive(
+    dummy_detect_element,
+    fake_payload,
+    fake_challenge,
+):
+    element = dummy_detect_element.model_copy(
+        update={
+            "metrics": Metrics(
+                pillars={
+                    PillarName.MAP50: 0.5,
+                    PillarName.FALSE_POSITIVE: 0.5,
+                }
+            ),
+            "baseline_theta": 0.0,
+            "delta_floor": 0.0,
+        }
+    )
+    manifest = Manifest(
+        window_id="2026-10-23",
+        version="1.3",
+        expiry_block=123456,
+        elements=[element],
+        tee=Tee(trusted_share_gamma=0.2),
+    )
+    negative_gt = _parse_ground_truth_payload(
+        {"annotations": [], "generation": {"no_target_objects": True}},
+        challenge_id=91969,
+    )
+
+    no_detections = SVRunOutput(
+        success=True,
+        latency_ms=0.0,
+        predictions={"frames": [{"frame_id": 0, "boxes": []}]},
+        error=None,
+    )
+    perfect = get_element_scores(
+        manifest=manifest,
+        pseudo_gt_annotations=negative_gt,
+        miner_run=no_detections,
+        frame_store=None,
+        challenge_type_id=369,
+        element_id=element.id,
+    )
+
+    element_scores = perfect[element.category]
+    assert element_scores[PillarName.MAP50]["score"] == 0.0
+    assert element_scores[PillarName.MAP50]["weighted_score"] == 0.0
+    assert element_scores[PillarName.FALSE_POSITIVE]["score"] == 1.0
+    assert element_scores[PillarName.FALSE_POSITIVE]["weighted_score"] == 1.0
+    assert perfect["mean_weighted"] == 1.0
+
+    one_false_positive = SVRunOutput(
+        success=True,
+        latency_ms=0.0,
+        predictions={
+            "frames": [
+                {
+                    "frame_id": 0,
+                    "boxes": [
+                        {
+                            "x1": 10,
+                            "y1": 10,
+                            "x2": 20,
+                            "y2": 20,
+                            "cls_id": 0,
+                            "conf": 1.0,
+                        }
+                    ],
+                }
+            ]
+        },
+        error=None,
+    )
+    penalized = get_element_scores(
+        manifest=manifest,
+        pseudo_gt_annotations=negative_gt,
+        miner_run=one_false_positive,
+        frame_store=None,
+        challenge_type_id=369,
+        element_id=element.id,
+    )
+
+    assert penalized[element.category][PillarName.FALSE_POSITIVE]["score"] == 0.9
+    assert penalized["mean_weighted"] == 0.9
+
+    null_response = SVRunOutput(
+        success=True,
+        latency_ms=0.0,
+        predictions=None,
+        error=None,
+    )
+    fake_payload.meta["min_frames_required"] = 1
+    null_evaluation = post_vlm_ranking(
+        payload=fake_payload,
+        miner_run=null_response,
+        challenge=fake_challenge,
+        pseudo_gt_annotations=negative_gt,
+        frame_store=None,
+        manifest=manifest,
+        element_id=element.id,
+    )
+
+    assert null_evaluation.acc_breakdown == {}
+    assert null_evaluation.score == 0.0
 
 
 def test_get_element_scores_one_pillar_with_zero_weight(

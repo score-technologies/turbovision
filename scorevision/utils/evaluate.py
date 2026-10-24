@@ -80,6 +80,20 @@ def _normalize_cluster_id(raw_cluster: object) -> ShirtColor | None:
     return None
 
 
+def _is_negative_detection_ground_truth(
+    pseudo_gt_annotations: list[PseudoGroundTruth],
+) -> bool:
+    """Return true for explicit GT frames containing no target detections."""
+    if not pseudo_gt_annotations:
+        return False
+    return all(
+        not (getattr(getattr(pgt, "annotation", None), "bboxes", None) or [])
+        and getattr(getattr(pgt, "annotation", None), "reason", None)
+        == "ScoreVision API negative ground truth"
+        for pgt in pseudo_gt_annotations
+    )
+
+
 def parse_miner_prediction(
     miner_run: SVRunOutput, object_names: list[str]
 ) -> dict[int, dict]:
@@ -314,6 +328,9 @@ def get_element_scores(
     element_id: str | None = None
 ) -> dict:
     settings = get_settings()
+    negative_detection_gt = _is_negative_detection_ground_truth(
+        pseudo_gt_annotations
+    )
 
     elements = manifest.elements
     if element_id:
@@ -328,7 +345,25 @@ def get_element_scores(
             miner_run=miner_run, object_names=element.objects or []
         )
         pillar_scores = {}
-        for pillar, weight in element.metrics.pillars.items():
+        pillar_weights = element.metrics.pillars
+        if negative_detection_gt:
+            if PillarName.FALSE_POSITIVE not in pillar_weights:
+                raise ValueError(
+                    f"Negative detection ground truth for element={element.id}, "
+                    "but the manifest has no false_positive pillar"
+                )
+
+        for pillar, configured_weight in pillar_weights.items():
+            if negative_detection_gt and pillar != PillarName.FALSE_POSITIVE:
+                # Preserve the configured breakdown shape for downstream
+                # consumers, but do not let positive-object metrics contribute.
+                pillar_scores[pillar] = dict(score=0.0, weighted_score=0.0)
+                continue
+
+            # A negative sample has no positive objects from which to derive
+            # mAP/IoU/recall. Give the full scoring weight to false-positive
+            # suppression for this challenge.
+            weight = 1.0 if negative_detection_gt else configured_weight
             metric_fn = METRIC_REGISTRY.get((element.category, pillar))
             if metric_fn is None:
                 raise NotImplementedError(

@@ -56,6 +56,38 @@ def _parse_ground_truth_payload(
     if not isinstance(annotations, list):
         return []
 
+    # An explicitly empty annotation list is a valid negative detection sample,
+    # not a missing ground truth.  Keep one canonical challenge frame so the
+    # false-positive metric can evaluate miner detections on that image.
+    if not annotations:
+        generation = ground_truth.get("generation")
+        is_explicit_negative = (
+            isinstance(generation, dict)
+            and generation.get("no_target_objects") is True
+        )
+        if not is_explicit_negative:
+            raise ScoreVisionChallengeError(
+                "Ground truth has no annotations and is not marked as an "
+                "explicit negative sample."
+            )
+
+        spatial_stub = zeros((1, 1, 3), dtype=uint8)
+        temporal_stub = zeros((1, 1, 3), dtype=uint8)
+        return [
+            PseudoGroundTruth(
+                video_name=str(challenge_id),
+                frame_number=0,
+                spatial_image=spatial_stub,
+                temporal_image=temporal_stub,
+                annotation=FrameAnnotation(
+                    bboxes=[],
+                    category=Action.NONE,
+                    confidence=100,
+                    reason="ScoreVision API negative ground truth",
+                ),
+            )
+        ]
+
     def _parse_polygon(raw_polygon: Any) -> list[tuple[int, int]] | None:
         if not isinstance(raw_polygon, (list, tuple)):
             return None
