@@ -8,7 +8,7 @@ logger = getLogger(__name__)
 
 TIEBREAK_THRESHOLD_BY_PROFILE = {
     1: 0.039,
-    2: 0.045,
+    2: 0.041,
     3: 0.05,
 }
 

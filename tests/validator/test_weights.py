@@ -216,7 +216,7 @@ def test_are_similar_by_challenges_uses_configured_threshold():
 
 @pytest.mark.parametrize(
     ("profile", "threshold"),
-    [(1, 0.039), (2, 0.045), (3, 0.05)],
+    [(1, 0.039), (2, 0.041), (3, 0.05)],
 )
 def test_tiebreak_threshold_for_profile(profile, threshold):
     assert tiebreak_threshold_for_profile(profile) == threshold
