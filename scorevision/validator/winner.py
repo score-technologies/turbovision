@@ -173,12 +173,17 @@ def _apply_recent_commit_initial_zero_filter(
             and int(max_block) - int(commit_block) <= int(recent_commit_blocks)
         )
 
-        if not should_filter or not ordered_scores:
+        if not enabled or not ordered_scores:
             filtered_scores_by_uid[uid] = ordered_scores
             dropped_zero_scores_by_uid[uid] = 0
             continue
 
-        filtered_scores, initial_dropped = _drop_initial_zero_scores(ordered_scores)
+        filtered_scores = ordered_scores
+        initial_dropped = 0
+        if should_filter:
+            filtered_scores, initial_dropped = _drop_initial_zero_scores(
+                filtered_scores
+            )
         filtered_scores, additional_dropped = _drop_zero_scores(filtered_scores)
         filtered_scores_by_uid[uid] = filtered_scores
         dropped_zero_scores_by_uid[uid] = initial_dropped + additional_dropped

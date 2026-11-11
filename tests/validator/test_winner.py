@@ -186,11 +186,11 @@ def test_select_representative_commit_block_prefers_count_then_latest():
     assert _select_representative_commit_block({100: 2, 120: 2, 130: 1}) == 120
 
 
-def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits():
+def test_public_zero_filter_applies_two_zero_allowance_to_old_and_recent_commits():
     samples_by_uid = {
         1: [(100, 0.0), (101, 0.0), (102, 0.8), (103, 1.0)],
         2: [(100, 0.0), (101, 0.6), (102, 0.7)],
-        3: [(100, 0.0), (101, 0.0), (102, 0.9)],
+        3: [(100, 0.0), (101, 0.0), (102, 0.9), (103, 0.0)],
         4: [(100, 0.2), (101, 0.0), (102, 0.9)],
     }
     uid_to_hk = {1: "hk1", 2: "hk2", 3: "hk3", 4: "hk4"}
@@ -214,8 +214,8 @@ def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits(
     assert filtered[2] == [0.6, 0.7]
     assert dropped[2] == 1
 
-    assert filtered[3] == [0.0, 0.0, 0.9]
-    assert dropped[3] == 0
+    assert filtered[3] == [0.9, 0.0]
+    assert dropped[3] == 2
 
     assert filtered[4] == [0.2, 0.9]
     assert dropped[4] == 1
