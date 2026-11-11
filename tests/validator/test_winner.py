@@ -5,26 +5,38 @@ from scorevision.validator.winner import (
     _apply_recent_commit_initial_zero_filter,
     _drop_initial_zero_challenge_rows,
     _drop_initial_zero_scores,
-    _extract_sample_commit_block,
+    _drop_zero_scores,
     _extract_sample_block,
+    _extract_sample_commit_block,
     _select_representative_commit_block,
     compute_adaptive_delta_rel,
 )
 
 
 def test_compute_adaptive_delta_rel_with_baseline_theta():
-    delta_rel = compute_adaptive_delta_rel(default_delta_rel=0.03, baseline_theta=0.3755112726134544)
+    delta_rel = compute_adaptive_delta_rel(
+        default_delta_rel=0.03, baseline_theta=0.3755112726134544
+    )
     assert round(delta_rel, 6) == 0.090694
 
 
 def test_compute_adaptive_delta_rel_clamps_to_bounds():
-    assert compute_adaptive_delta_rel(default_delta_rel=0.03, baseline_theta=-1.0) == 0.04
-    assert compute_adaptive_delta_rel(default_delta_rel=0.03, baseline_theta=2.0) == 0.175
+    assert (
+        compute_adaptive_delta_rel(default_delta_rel=0.03, baseline_theta=-1.0) == 0.04
+    )
+    assert (
+        compute_adaptive_delta_rel(default_delta_rel=0.03, baseline_theta=2.0) == 0.175
+    )
 
 
 def test_compute_adaptive_delta_rel_falls_back_to_default():
-    assert compute_adaptive_delta_rel(default_delta_rel=0.05, baseline_theta=None) == 0.05
-    assert compute_adaptive_delta_rel(default_delta_rel=0.05, baseline_theta=float("nan")) == 0.05
+    assert (
+        compute_adaptive_delta_rel(default_delta_rel=0.05, baseline_theta=None) == 0.05
+    )
+    assert (
+        compute_adaptive_delta_rel(default_delta_rel=0.05, baseline_theta=float("nan"))
+        == 0.05
+    )
 
 
 def test_drop_initial_zero_scores_only_prefix():
@@ -43,6 +55,13 @@ def test_drop_initial_zero_scores_caps_at_five():
     filtered, dropped = _drop_initial_zero_scores([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8])
     assert filtered == [0.0, 0.8]
     assert dropped == 5
+
+
+def test_drop_zero_scores_removes_at_most_two_zeros_anywhere():
+    filtered, dropped = _drop_zero_scores([0.7, 0.0, 0.8, 0.0, 0.0, 0.9])
+
+    assert filtered == [0.7, 0.8, 0.0, 0.9]
+    assert dropped == 2
 
 
 def test_drop_initial_zero_challenge_rows_only_removes_zero_prefix():
@@ -109,16 +128,43 @@ def test_tiebreak_zero_filter_keeps_zeros_when_commit_block_is_unknown():
     assert dropped == 0
 
 
+def test_tiebreak_zero_filter_keeps_non_prefix_zeros_for_recent_commitments():
+    histories = {
+        ("validator", 1): deque([("c1", 0.8, 100), ("c2", 0.0, 101), ("c3", 0.9, 102)]),
+    }
+
+    filtered, dropped = _apply_recent_commit_initial_zero_challenge_filter(
+        challenge_scores_by_validator_miner=histories,
+        uid_to_hk={1: "recent-hk"},
+        first_commit_block_by_hk={"recent-hk": 95},
+        max_block=102,
+        recent_commit_blocks=10,
+    )
+
+    assert list(filtered[("validator", 1)]) == [
+        ("c1", 0.8, 100),
+        ("c2", 0.0, 101),
+        ("c3", 0.9, 102),
+    ]
+    assert dropped == 0
+
+
 def test_extract_sample_block_prefers_payload_block():
-    assert _extract_sample_block(
-        {"block": 98},
-        {"block": 100, "telemetry": {"block": 99}},
-        {"block": 99},
-    ) == 100
+    assert (
+        _extract_sample_block(
+            {"block": 98},
+            {"block": 100, "telemetry": {"block": 99}},
+            {"block": 99},
+        )
+        == 100
+    )
 
 
 def test_extract_sample_block_uses_telemetry_block():
-    assert _extract_sample_block({}, {"telemetry": {"block": "101"}}, {"block": "101"}) == 101
+    assert (
+        _extract_sample_block({}, {"telemetry": {"block": "101"}}, {"block": "101"})
+        == 101
+    )
 
 
 def test_extract_sample_block_falls_back_to_line_block():
@@ -171,8 +217,8 @@ def test_apply_recent_commit_initial_zero_filter_applies_only_to_recent_commits(
     assert filtered[3] == [0.0, 0.0, 0.9]
     assert dropped[3] == 0
 
-    assert filtered[4] == [0.2, 0.0, 0.9]
-    assert dropped[4] == 0
+    assert filtered[4] == [0.2, 0.9]
+    assert dropped[4] == 1
 
 
 def test_apply_recent_commit_initial_zero_filter_can_be_disabled_for_private_lane():
@@ -198,5 +244,31 @@ def test_apply_recent_commit_initial_zero_filter_orders_scores_by_block():
         recent_commit_blocks=10,
     )
 
-    assert filtered[1] == [0.8, 0.0]
-    assert dropped[1] == 2
+    assert filtered[1] == [0.8]
+    assert dropped[1] == 3
+
+
+def test_apply_recent_commit_zero_filter_reduces_challenge_count_by_seven():
+    filtered, dropped = _apply_recent_commit_initial_zero_filter(
+        samples_by_uid={
+            1: [
+                (100, 0.0),
+                (101, 0.0),
+                (102, 0.0),
+                (103, 0.0),
+                (104, 0.0),
+                (105, 0.8),
+                (106, 0.0),
+                (107, 0.9),
+                (108, 0.0),
+            ]
+        },
+        uid_to_hk={1: "hk1"},
+        first_commit_block_by_hk={"hk1": 95},
+        max_block=108,
+        recent_commit_blocks=20,
+    )
+
+    assert filtered[1] == [0.8, 0.9]
+    assert dropped[1] == 7
+    assert len(filtered[1]) == 9 - dropped[1]
