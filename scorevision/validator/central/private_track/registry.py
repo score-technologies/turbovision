@@ -113,12 +113,9 @@ async def get_registered_miners(
             )
             continue
 
-        image_repo = obj.get("image_repo")
-        image_tag = obj.get("image_tag")
-        image_digest = obj.get("image_digest", "")
-
-        if not image_repo or not image_tag:
-            continue
+        image_repo = str(obj.get("image_repo") or "")
+        image_tag = str(obj.get("image_tag") or "")
+        image_digest = str(obj.get("image_digest") or "")
 
         miners.append(RegisteredMiner(
             uid=uid,

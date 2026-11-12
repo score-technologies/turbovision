@@ -24,7 +24,7 @@ def _private_commit(
     block: int,
     *,
     element_id: str,
-    image_tag: str = "v1",
+    image_tag: str | None = "v1",
 ) -> tuple[int, str]:
     payload = {
         "role": "miner",
@@ -35,6 +35,30 @@ def _private_commit(
         "hotkey": "ignored-in-test",
     }
     return (block, json.dumps(payload))
+
+
+@pytest.mark.asyncio
+async def test_private_registry_keeps_commit_without_image_tag(monkeypatch):
+    monkeypatch.setattr(
+        "scorevision.validator.central.private_track.registry.get_settings",
+        lambda: SimpleNamespace(SCOREVISION_NETUID=18),
+    )
+    metagraph = _build_metagraph(["hk1"])
+    subtensor = _FakeSubtensor(
+        {"hk1": [_private_commit(100, element_id="E1", image_tag=None)]}
+    )
+
+    miners = await get_registered_miners(
+        subtensor,
+        metagraph,
+        set(),
+        element_id="E1",
+    )
+
+    assert len(miners) == 1
+    assert miners[0].hotkey == "hk1"
+    assert miners[0].image_repo == "ghcr.io/mine/pt-solution"
+    assert miners[0].image_tag == ""
 
 
 @pytest.mark.asyncio
