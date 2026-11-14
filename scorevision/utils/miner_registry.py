@@ -21,6 +21,7 @@ from scorevision.utils.bittensor_commitments import (
 )
 from scorevision.utils.commit_recovery import (
     is_recovery_commit,
+    is_timely_recovery,
     recover_commitments_from_shards,
 )
 from scorevision.utils.compliance_failures import (
@@ -1123,6 +1124,10 @@ async def get_miners_from_registry(
             recovered = await recover_commitments_from_shards(
                 {(hk, wanted) for _uid, hk, _recovery_block in unresolved_for_recovery},
                 validator_indexes,
+                recovery_blocks={
+                    (hk, wanted): block
+                    for _uid, hk, block in unresolved_for_recovery
+                },
             )
             for uid, hk, recovery_block in unresolved_for_recovery:
                 recovered_commitment = recovered.get((hk, wanted))
@@ -1134,6 +1139,16 @@ async def get_miners_from_registry(
                         hk,
                         wanted,
                         recovery_block,
+                    )
+                    continue
+                if not is_timely_recovery(
+                    recovered_commitment.shard_block,
+                    recovery_block,
+                    recovered_commitment.observed_trigger_blocks,
+                ):
+                    logger.info(
+                        "[Registry] expired recovery uid=%s hotkey=%s element_id=%s recovery_block=%s shard_block=%s",
+                        uid, hk, wanted, recovery_block, recovered_commitment.shard_block,
                     )
                     continue
                 cand = _build_miner_candidate(
@@ -1261,6 +1276,10 @@ async def get_miners_from_registry(
                         recovered = await recover_commitments_from_shards(
                             {(hk_i, wanted) for _uid, hk_i, _block in archived_recoveries},
                             validator_indexes,
+                            recovery_blocks={
+                                (hk_i, wanted): block
+                                for _uid, hk_i, block in archived_recoveries
+                            },
                         )
                         for uid_i, hk_i, recovery_block in archived_recoveries:
                             recovered_commitment = recovered.get((hk_i, wanted))
@@ -1272,6 +1291,16 @@ async def get_miners_from_registry(
                                     hk_i,
                                     wanted,
                                     recovery_block,
+                                )
+                                continue
+                            if not is_timely_recovery(
+                                recovered_commitment.shard_block,
+                                recovery_block,
+                                recovered_commitment.observed_trigger_blocks,
+                            ):
+                                logger.info(
+                                    "[Registry] expired archive recovery uid=%s hotkey=%s element_id=%s recovery_block=%s shard_block=%s",
+                                    uid_i, hk_i, wanted, recovery_block, recovered_commitment.shard_block,
                                 )
                                 continue
                             resolved_archive_commits.append(

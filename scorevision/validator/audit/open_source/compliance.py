@@ -28,6 +28,7 @@ from scorevision.utils.bittensor_commitments import get_all_revealed_commitments
 from scorevision.utils.commit_recovery import (
     RecoveredCommitment,
     is_recovery_commit,
+    is_timely_recovery,
     recover_commitments_from_shards,
 )
 from scorevision.utils.r2 import (
@@ -651,38 +652,48 @@ async def _recover_target_commitments(
     *,
     netuid: int,
 ) -> dict[tuple[str, str], RecoveredCommitment]:
-    recovery_requests: set[tuple[str, str]] = set()
+    recovery_blocks: dict[tuple[str, str], int] = {}
     for target in targets:
         element_id = str(target.get("element_id") or "").strip()
         hotkey = str(target.get("hotkey") or "").strip()
         if not element_id or not hotkey:
             continue
-        _block, obj = _pick_latest_miner_commit_for_element(
+        block, obj = _pick_latest_miner_commit_for_element(
             commits_by_hotkey.get(hotkey),
             element_id,
             hotkey=hotkey,
         )
-        if is_recovery_commit(obj, element_id, hotkey=hotkey):
-            recovery_requests.add((hotkey, element_id))
+        if block is not None and is_recovery_commit(obj, element_id, hotkey=hotkey):
+            recovery_blocks[(hotkey, element_id)] = int(block)
 
-    if not recovery_requests:
+    if not recovery_blocks:
         return {}
 
     try:
         validator_indexes = await get_validator_indexes_from_chain(netuid)
         recovered = await recover_commitments_from_shards(
-            recovery_requests,
+            recovery_blocks,
             validator_indexes,
+            recovery_blocks=recovery_blocks,
         )
     except Exception as e:
         logger.warning("[compliance] commitment recovery unavailable: %s", e)
         return {}
+    timely = {
+        request: commitment
+        for request, commitment in recovered.items()
+        if is_timely_recovery(
+            commitment.shard_block,
+            recovery_blocks[request],
+            commitment.observed_trigger_blocks,
+        )
+    }
     logger.info(
         "[compliance] recovered %d/%d target commitment(s) from public shards",
-        len(recovered),
-        len(recovery_requests),
+        len(timely),
+        len(recovery_blocks),
     )
-    return recovered
+    return timely
 
 
 async def _resolve_target_commit(

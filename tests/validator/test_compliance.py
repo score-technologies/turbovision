@@ -5,6 +5,7 @@ import pytest
 
 from scorevision.validator.audit.open_source import compliance as compliance_mod
 from scorevision.validator.audit.open_source import security as security_mod
+from scorevision.utils import commit_recovery
 from scorevision.utils.commit_recovery import RecoveredCommitment
 
 
@@ -209,7 +210,12 @@ def test_resolve_target_commit_uses_recovered_original_commitment():
 
 
 @pytest.mark.asyncio
-async def test_recover_target_commitments_batches_recovery_requests(monkeypatch):
+@pytest.mark.parametrize("activation_block, accepted", [(1, False), (1000, True)])
+async def test_recover_target_commitments_batches_recovery_requests(
+    monkeypatch, activation_block, accepted
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", activation_block)
+
     async def fake_validator_indexes(netuid):
         assert netuid == 18
         return {"validator": "https://validator.example/manako/index.json"}
@@ -221,13 +227,15 @@ async def test_recover_target_commitments_batches_recovery_requests(monkeypatch)
         chute_id="chute1",
         element_id="E1",
         commit_block=100,
-        shard_block=499,
+        shard_block=200,
         shard_key="shard.json",
+        observed_trigger_blocks=(220, 250, 300, 350, 400, 450, 480),
     )
 
-    async def fake_recover(requests, indexes):
-        assert requests == {("hk1", "E1")}
+    async def fake_recover(requests, indexes, **kwargs):
+        assert set(requests) == {("hk1", "E1")}
         assert indexes == {"validator": "https://validator.example/manako/index.json"}
+        assert kwargs["recovery_blocks"] == {("hk1", "E1"): 500}
         return {("hk1", "E1"): recovered}
 
     monkeypatch.setattr(
@@ -258,7 +266,7 @@ async def test_recover_target_commitments_batches_recovery_requests(monkeypatch)
         netuid=18,
     )
 
-    assert result == {("hk1", "E1"): recovered}
+    assert result == ({("hk1", "E1"): recovered} if accepted else {})
 
 
 def test_compare_predictions_iou_success_when_boxes_match():

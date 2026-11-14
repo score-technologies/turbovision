@@ -19,6 +19,7 @@ from scorevision.utils.bittensor_commitments import (
 from scorevision.utils.commit_recovery import (
     RECOVERY_COMMIT_ROLE,
     is_recovery_commit,
+    is_timely_recovery,
     recover_commitments_from_shards,
 )
 
@@ -473,6 +474,8 @@ async def _first_commit_block_by_miner(
     candidate_hotkeys: set[str] | None = None,
     backfill_allowed_hotkeys: set[str] | None = None,
     first_block: int | None = None,
+    expired_recovery_hotkeys: set[str] | None = None,
+    index_keys_by_url: dict[str, list[str]] | None = None,
     retries: int = 2,
 ) -> dict[str, int]:
     """"""
@@ -554,16 +557,35 @@ async def _first_commit_block_by_miner(
                     recovered = await recover_commitments_from_shards(
                         {(hk, wanted_element_id) for hk, _block in unresolved_for_recovery},
                         validator_indexes,
+                        recovery_blocks={
+                            (hk, wanted_element_id): block
+                            for hk, block in unresolved_for_recovery
+                        },
+                        index_keys_by_url=index_keys_by_url,
                     )
                     for hk, recovery_block in unresolved_for_recovery:
                         recovered_commitment = recovered.get((hk, wanted_element_id))
                         if recovered_commitment is None:
+                            if expired_recovery_hotkeys is not None:
+                                expired_recovery_hotkeys.add(hk)
                             logger.warning(
                                 "[first_commit_block_by_miner] recovery unresolved "
                                 "hotkey=%s element=%s recovery_block=%s",
                                 hk,
                                 wanted_element_id,
                                 recovery_block,
+                            )
+                            continue
+                        if not is_timely_recovery(
+                            recovered_commitment.shard_block,
+                            recovery_block,
+                            recovered_commitment.observed_trigger_blocks,
+                        ):
+                            if expired_recovery_hotkeys is not None:
+                                expired_recovery_hotkeys.add(hk)
+                            logger.info(
+                                "[first_commit_block_by_miner] expired recovery hotkey=%s element=%s recovery_block=%s shard_block=%s",
+                                hk, wanted_element_id, recovery_block, recovered_commitment.shard_block,
                             )
                             continue
                         last_block_by_hk[hk] = recovered_commitment.commit_block
@@ -579,6 +601,10 @@ async def _first_commit_block_by_miner(
                         wanted_element_id,
                     )
                 except Exception as e:
+                    if expired_recovery_hotkeys is not None:
+                        expired_recovery_hotkeys.update(
+                            hk for hk, _block in unresolved_for_recovery
+                        )
                     logger.warning(
                         "[first_commit_block_by_miner] shard recovery error: %s",
                         e,
@@ -591,6 +617,7 @@ async def _first_commit_block_by_miner(
                 and _TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
             ):
                 st_archive = None
+                archived_recoveries: list[tuple[str, int]] = []
                 try:
                     st_archive = AsyncSubtensor(
                         network=_TIEBREAK_COMMIT_BACKFILL_ARCHIVE_ENDPOINT
@@ -679,7 +706,6 @@ async def _first_commit_block_by_miner(
                         return_exceptions=True,
                     )
                     added = 0
-                    archived_recoveries: list[tuple[str, int]] = []
                     for item in results:
                         if isinstance(item, Exception):
                             continue
@@ -699,16 +725,35 @@ async def _first_commit_block_by_miner(
                                 for hk_i, _block in archived_recoveries
                             },
                             validator_indexes,
+                            recovery_blocks={
+                                (hk_i, wanted_element_id): block
+                                for hk_i, block in archived_recoveries
+                            },
+                            index_keys_by_url=index_keys_by_url,
                         )
                         for hk_i, recovery_block in archived_recoveries:
                             recovered_commitment = recovered.get((hk_i, wanted_element_id))
                             if recovered_commitment is None:
+                                if expired_recovery_hotkeys is not None:
+                                    expired_recovery_hotkeys.add(hk_i)
                                 logger.warning(
                                     "[first_commit_block_by_miner] archive recovery unresolved "
                                     "hotkey=%s element=%s recovery_block=%s",
                                     hk_i,
                                     wanted_element_id,
                                     recovery_block,
+                                )
+                                continue
+                            if not is_timely_recovery(
+                                recovered_commitment.shard_block,
+                                recovery_block,
+                                recovered_commitment.observed_trigger_blocks,
+                            ):
+                                if expired_recovery_hotkeys is not None:
+                                    expired_recovery_hotkeys.add(hk_i)
+                                logger.info(
+                                    "[first_commit_block_by_miner] expired archive recovery hotkey=%s element=%s recovery_block=%s shard_block=%s",
+                                    hk_i, wanted_element_id, recovery_block, recovered_commitment.shard_block,
                                 )
                                 continue
                             last_block_by_hk[hk_i] = recovered_commitment.commit_block
@@ -720,6 +765,10 @@ async def _first_commit_block_by_miner(
                             wanted_element_id,
                         )
                 except Exception as e:
+                    if expired_recovery_hotkeys is not None:
+                        expired_recovery_hotkeys.update(
+                            hk for hk, _block in archived_recoveries
+                        )
                     logger.debug(
                         "[first_commit_block_by_miner] archive backfill error: %s",
                         e,

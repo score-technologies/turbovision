@@ -108,6 +108,13 @@ the one used for model-copy tiebreaks. The same recovered tuple is used by publi
 compliance and latency checks. Use `--no-commit` to print the recovery payload without
 submitting it.
 
+Submit recovery before seven further evaluation triggers for that element have
+appeared in the public index since your latest shard. Periods without an indexed
+evaluation do not count. After seven observed triggers, publish a normal miner
+commitment; an expired recovery is excluded from public evaluations and weights.
+Recoveries published before the validator's policy activation block keep the
+previous recovery behavior.
+
 ## 6. Validate Deployment Health
 Use Chutes dashboard and instance logs:
 

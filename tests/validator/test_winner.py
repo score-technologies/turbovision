@@ -1,4 +1,9 @@
 from collections import deque
+from types import SimpleNamespace
+
+import pytest
+
+from scorevision.validator import winner as winner_mod
 
 from scorevision.validator.winner import (
     _apply_recent_commit_initial_zero_challenge_filter,
@@ -18,6 +23,83 @@ def test_compute_adaptive_delta_rel_with_baseline_theta():
         default_delta_rel=0.03, baseline_theta=0.3755112726134544
     )
     assert round(delta_rel, 6) == 0.090694
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tiebreak_enabled", [False, True])
+async def test_public_winner_excludes_expired_recovery_scores(
+    monkeypatch, tiebreak_enabled
+):
+    tiebreak_calls = []
+    async def fake_subtensor():
+        return SimpleNamespace(
+            metagraph=lambda _netuid, mechid=None: fake_metagraph()
+        )
+
+    async def fake_metagraph():
+        return SimpleNamespace(hotkeys=["expired", "active"])
+
+    async def fake_indexes(_netuid):
+        return {"validator": "index"}
+
+    async def fake_dataset(*_args, **_kwargs):
+        _kwargs["index_keys_out"]["index"] = ["already-loaded"]
+        for hotkey, score in (("expired", 0.99), ("active", 0.5)):
+            yield {
+                "payload": {
+                    "element_id": "element-a",
+                    "lane": "public",
+                    "telemetry": {"miner": {"hotkey": hotkey}},
+                    "metrics": {"composite_score": score},
+                    "block": 900,
+                }
+            }
+
+    async def fake_first_commit(_netuid, **kwargs):
+        assert kwargs["index_keys_by_url"] == {"index": ["already-loaded"]}
+        kwargs["expired_recovery_hotkeys"].add("expired")
+        return {"expired": 100, "active": 100}
+
+    async def fake_challenge_scores(**kwargs):
+        assert kwargs["excluded_uids"] == {0}
+        return {}
+
+    def fake_pick_winner(winner_uid, **kwargs):
+        tiebreak_calls.append(kwargs["candidate_uids"])
+        return winner_uid
+
+    monkeypatch.setattr(winner_mod, "get_settings", lambda: SimpleNamespace(
+        SCOREVISION_NETUID=18,
+        SCOREVISION_MECHID=1,
+        VALIDATOR_FALLBACK_UID=99,
+        SCOREVISION_WINDOW_TIEBREAK_ENABLE=tiebreak_enabled,
+        SCOREVISION_WINDOW_K_PER_VALIDATOR=3,
+        SCOREVISION_WINDOW_DELTA_ABS=0.003,
+        SCOREVISION_WINDOW_DELTA_REL=0.03,
+    ))
+    monkeypatch.setattr(winner_mod, "get_subtensor", fake_subtensor)
+    monkeypatch.setattr(winner_mod, "get_validator_indexes_from_chain", fake_indexes)
+    monkeypatch.setattr(winner_mod, "dataset_sv_multi", fake_dataset)
+    monkeypatch.setattr(winner_mod, "_first_commit_block_by_miner", fake_first_commit)
+    monkeypatch.setattr(
+        winner_mod,
+        "collect_recent_challenge_scores_by_validator_miner",
+        fake_challenge_scores,
+    )
+    monkeypatch.setattr(winner_mod, "pick_winner_with_tiebreak", fake_pick_winner)
+
+    winner_uid, scores, _meta, rows = await winner_mod.get_winner_for_element(
+        element_id="element-a",
+        current_window_id="block-900",
+        tail=900,
+        m_min=1,
+        lane="public",
+    )
+
+    assert winner_uid == 1
+    assert scores == {1: 0.5}
+    assert [row["hotkey"] for row in rows] == ["active"]
+    assert tiebreak_calls == ([{1}] if tiebreak_enabled else [])
 
 
 def test_compute_adaptive_delta_rel_clamps_to_bounds():

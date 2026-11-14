@@ -393,6 +393,18 @@ async def get_winner_for_element(
             "[winner] No central validator registry found on-chain for element_id=%s",
             element_id,
         )
+        unavailable_recoveries: set[str] = set()
+        if normalized_lane == "public":
+            await _first_commit_block_by_miner(
+                netuid,
+                element_id=element_id,
+                candidate_hotkeys=set(hk_to_uid),
+                first_block=first_block,
+                expired_recovery_hotkeys=unavailable_recoveries,
+            )
+        fallback_hk_to_uid = {
+            hk: uid for hk, uid in hk_to_uid.items() if hk not in unavailable_recoveries
+        }
         (
             winner_uid,
             scores_by_uid,
@@ -402,7 +414,7 @@ async def get_winner_for_element(
             current_window_id=current_window_id,
             tail=tail,
             m_min=m_min,
-            hk_to_uid=hk_to_uid,
+            hk_to_uid=fallback_hk_to_uid,
             lane=lane,
             compliance_failure_tuples=compliance_failure_tuples,
         )
@@ -418,9 +430,14 @@ async def get_winner_for_element(
     source_indexes: set[str] = set()
     max_observed_block: int | None = None
     commit_blocks_by_uid: dict[int, Counter[int]] = defaultdict(Counter)
+    index_keys_by_url: dict[str, list[str]] = {}
 
     async for line in dataset_sv_multi(
-        tail, validator_indexes, element_id=element_id, lane=lane
+        tail,
+        validator_indexes,
+        element_id=element_id,
+        lane=lane,
+        index_keys_out=index_keys_by_url,
     ):
         diagnostics["lines_total"] += 1
         src_index = str(line.get("_src_index") or "").strip()
@@ -487,6 +504,7 @@ async def get_winner_for_element(
             len(compliance_failed_hotkeys),
         )
 
+    unavailable_recoveries: set[str] = set()
     first_commit_block_by_hk = await _first_commit_block_by_miner(
         netuid,
         element_id=element_id,
@@ -494,7 +512,23 @@ async def get_winner_for_element(
             uid_to_hk[uid] for uid in samples_by_miner.keys() if uid in uid_to_hk
         },
         first_block=first_block,
+        expired_recovery_hotkeys=(
+            unavailable_recoveries if normalized_lane == "public" else None
+        ),
+        index_keys_by_url=index_keys_by_url,
     )
+    if unavailable_recoveries:
+        excluded_uids = {
+            hk_to_uid[hk] for hk in unavailable_recoveries if hk in hk_to_uid
+        }
+        for uid in excluded_uids:
+            samples_by_miner.pop(uid, None)
+            commit_blocks_by_uid.pop(uid, None)
+        logger.info(
+            "[winner] excluded %d unavailable public recoveries for element=%s",
+            len(excluded_uids),
+            element_id,
+        )
     recent_commit_blocks = days_to_blocks(3) or 0
     initial_zero_filter_enabled = normalized_lane != "private"
     filtered_scores_by_uid, dropped_zero_scores_by_uid = (
@@ -683,6 +717,9 @@ async def get_winner_for_element(
             excluded_uids_for_tiebreak: set[int] = set()
             if validator_uid is not None:
                 excluded_uids_for_tiebreak.add(validator_uid)
+            excluded_uids_for_tiebreak.update(
+                hk_to_uid[hk] for hk in unavailable_recoveries if hk in hk_to_uid
+            )
 
             challenge_batch_size = settings.SCOREVISION_WINDOW_K_PER_VALIDATOR
             challenge_scores_by_validator_miner = (
@@ -755,6 +792,13 @@ async def get_winner_for_element(
                     if uid in uid_to_hk
                 },
                 first_block=first_block,
+                expired_recovery_hotkeys=(
+                    unavailable_recoveries if normalized_lane == "public" else None
+                ),
+                index_keys_by_url=index_keys_by_url,
+            )
+            candidate_uids.difference_update(
+                hk_to_uid[hk] for hk in unavailable_recoveries if hk in hk_to_uid
             )
             final_uid = pick_winner_with_tiebreak(
                 winner_uid,

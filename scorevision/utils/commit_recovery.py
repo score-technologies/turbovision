@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from bisect import bisect_left, bisect_right
+from dataclasses import dataclass, replace
 from json import dumps
 from time import monotonic
-from typing import Iterable
+from typing import Iterable, Sequence
 from urllib.parse import urlparse
 
 from scorevision.utils.r2_public import (
@@ -18,6 +19,29 @@ from scorevision.utils.r2_public import (
 
 RECOVERY_COMMIT_ROLE = "miner_recover"
 RECOVERY_CACHE_TTL_S = 300.0
+MAX_RECOVERY_MISSED_TRIGGERS = 6
+RECOVERY_ACTIVATION_BLOCK = 9_504_379
+
+
+def is_timely_recovery(
+    shard_block: int,
+    recovery_block: int,
+    observed_trigger_blocks: Sequence[int],
+    *,
+    activation_block: int | None = None,
+) -> bool:
+    """Grandfather recoveries before activation; then count indexed triggers."""
+    if shard_block >= recovery_block:
+        return False
+    if activation_block is None:
+        activation_block = RECOVERY_ACTIVATION_BLOCK
+    if recovery_block < activation_block:
+        return True
+    return (
+        bisect_left(observed_trigger_blocks, recovery_block)
+        - bisect_right(observed_trigger_blocks, shard_block)
+        <= MAX_RECOVERY_MISSED_TRIGGERS
+    )
 
 
 @dataclass(frozen=True)
@@ -30,6 +54,7 @@ class RecoveredCommitment:
     commit_block: int
     shard_block: int
     shard_key: str
+    observed_trigger_blocks: tuple[int, ...] = ()
 
     def as_miner_commitment(self, hotkey: str) -> dict:
         return {
@@ -43,7 +68,9 @@ class RecoveredCommitment:
         }
 
 
-_RECOVERY_CACHE: dict[tuple[str, str], tuple[RecoveredCommitment, float]] = {}
+_RECOVERY_CACHE: dict[
+    tuple[str, str], tuple[RecoveredCommitment, float, int | None]
+] = {}
 
 
 def is_recovery_commit(
@@ -177,6 +204,8 @@ async def recover_commitments_from_shards(
     validator_indexes: dict[str, str],
     *,
     concurrency: int = 8,
+    recovery_blocks: dict[tuple[str, str], int] | None = None,
+    index_keys_by_url: dict[str, list[str]] | None = None,
 ) -> dict[tuple[str, str], RecoveredCommitment]:
     wanted = {
         (str(hotkey).strip(), str(element_id).strip())
@@ -187,16 +216,20 @@ async def recover_commitments_from_shards(
         return {}
 
     now = monotonic()
-    recovered_by_request = {
+    cached_by_request = {
         request: cached
         for request in wanted
         if (entry := _RECOVERY_CACHE.get(request)) is not None
         and now - entry[1] < RECOVERY_CACHE_TTL_S
+        and entry[2]
+        == (recovery_blocks.get(request) if recovery_blocks is not None else None)
         for cached in (entry[0],)
     }
-    wanted.difference_update(recovered_by_request)
-    if not wanted:
-        return recovered_by_request
+    if recovery_blocks is None:
+        wanted.difference_update(cached_by_request)
+        if not wanted:
+            return cached_by_request
+    recovered_by_request = dict(cached_by_request) if recovery_blocks is None else {}
 
     candidate_keys: dict[tuple[str, str], set[str]] = {request: set() for request in wanted}
     requests_by_path: dict[tuple[str, str], list[tuple[str, str]]] = {}
@@ -205,12 +238,19 @@ async def recover_commitments_from_shards(
             (_safe_element_id(element_id), hotkey),
             [],
         ).append((hotkey, element_id))
+    indexed_trigger_blocks: dict[str, set[int]] = {
+        _safe_element_id(element_id): set() for _, element_id in wanted
+    }
     for raw_index_url in validator_indexes.values():
         index_url = _active_index_url(raw_index_url)
         if not index_url:
             continue
-        data = await fetch_json_from_url(index_url)
-        for key in _index_keys(data, index_url):
+        if index_keys_by_url is not None and index_url in index_keys_by_url:
+            keys = index_keys_by_url[index_url]
+        else:
+            data = await fetch_json_from_url(index_url)
+            keys = _index_keys(data, index_url)
+        for key in keys:
             key_element, key_hotkey, key_commit_block = (
                 extract_element_miner_commit_from_key(key)
             )
@@ -218,8 +258,37 @@ async def recover_commitments_from_shards(
                 continue
             if "/evaluation/" not in urlparse(key).path:
                 continue
+            shard_block = extract_block_from_key(key)
+            if shard_block is None:
+                continue
+            if key_element in indexed_trigger_blocks:
+                indexed_trigger_blocks[key_element].add(shard_block)
             for request in requests_by_path.get((key_element, key_hotkey), []):
-                candidate_keys[request].add(key)
+                if (
+                    recovery_blocks is None
+                    or shard_block < recovery_blocks.get(request, 0)
+                ):
+                    candidate_keys[request].add(key)
+
+    triggers_by_element = {
+        element_id: tuple(sorted(blocks))
+        for element_id, blocks in indexed_trigger_blocks.items()
+    }
+
+    if recovery_blocks is not None:
+        for request, cached in cached_by_request.items():
+            keys = candidate_keys[request]
+            if cached.shard_key not in keys or any(
+                ((extract_block_from_key(key) or -1), key)
+                > (cached.shard_block, cached.shard_key)
+                for key in keys
+            ):
+                continue
+            recovered_by_request[request] = replace(
+                cached,
+                observed_trigger_blocks=triggers_by_element[_safe_element_id(request[1])],
+            )
+            candidate_keys.pop(request)
 
     semaphore = asyncio.Semaphore(max(1, int(concurrency)))
 
@@ -275,6 +344,16 @@ async def recover_commitments_from_shards(
         request = (recovered_hotkey, result.element_id)
         previous = recovered_by_request.get(request)
         if previous is None or result.shard_block > previous.shard_block:
+            result = replace(
+                result,
+                observed_trigger_blocks=triggers_by_element[
+                    _safe_element_id(result.element_id)
+                ],
+            )
             recovered_by_request[request] = result
-            _RECOVERY_CACHE[request] = (result, monotonic())
+            _RECOVERY_CACHE[request] = (
+                result,
+                monotonic(),
+                recovery_blocks.get(request) if recovery_blocks is not None else None,
+            )
     return recovered_by_request

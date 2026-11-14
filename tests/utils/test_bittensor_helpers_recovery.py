@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scorevision.utils import bittensor_helpers
+from scorevision.utils import bittensor_helpers, commit_recovery
 from scorevision.utils.commit_recovery import RecoveredCommitment
 
 
@@ -73,7 +73,7 @@ async def test_first_commit_block_recovers_original_block_for_tiebreak(monkeypat
     async def fake_validator_indexes(_netuid):
         return {"validator": "https://validator.example/manako/index.json"}
 
-    async def fake_recover(requests, _indexes):
+    async def fake_recover(requests, _indexes, **_kwargs):
         assert ("hk1", "element-a") in requests
         return {
             ("hk1", "element-a"): RecoveredCommitment(
@@ -113,6 +113,52 @@ async def test_first_commit_block_recovers_original_block_for_tiebreak(monkeypat
     )
 
     assert blocks == {"hk1": 123}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation_block, expired_expected", [(1, True), (2000, False)])
+async def test_first_commit_block_marks_expired_recovery_for_weights(
+    monkeypatch, activation_block, expired_expected
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", activation_block)
+    class RecoverySubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1"])
+
+    async def fake_get_subtensor():
+        return RecoverySubtensor()
+
+    async def fake_commitments(_subtensor, _netuid):
+        return {"hk1": [(1500, json.dumps({
+            "role": "miner_recover", "element_id": "element-a", "hotkey": "hk1"
+        }))]}
+
+    async def fake_indexes(_netuid):
+        return {"validator": "index"}
+
+    async def fake_recover(requests, _indexes, **kwargs):
+        assert kwargs["recovery_blocks"] == {("hk1", "element-a"): 1500}
+        return {("hk1", "element-a"): RecoveredCommitment(
+            model="org/model", revision="rev1", slug="slug1", chute_id="chute1",
+            element_id="element-a", commit_block=123, shard_block=300,
+            shard_key="shard.json",
+            observed_trigger_blocks=(300, 400, 600, 800, 900, 1100, 1200, 1400),
+        )}
+
+    monkeypatch.setattr(bittensor_helpers, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(bittensor_helpers, "get_all_revealed_commitments", fake_commitments)
+    monkeypatch.setattr(bittensor_helpers, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(bittensor_helpers, "get_validator_indexes_from_chain", fake_indexes)
+    monkeypatch.setattr(bittensor_helpers, "recover_commitments_from_shards", fake_recover)
+
+    expired = set()
+    blocks = await bittensor_helpers._first_commit_block_by_miner(
+        18, element_id="element-a", candidate_hotkeys={"hk1"},
+        expired_recovery_hotkeys=expired,
+    )
+
+    assert blocks == ({} if expired_expected else {"hk1": 123})
+    assert expired == ({"hk1"} if expired_expected else set())
 
 
 @pytest.mark.asyncio
@@ -188,7 +234,11 @@ async def test_first_commit_block_archive_backfill_uses_bittensor_hotkey_paramet
 
 
 @pytest.mark.asyncio
-async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(monkeypatch):
+@pytest.mark.parametrize("activation_block, accepted", [(1, False), (2000, True)])
+async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(
+    monkeypatch, activation_block, accepted
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", activation_block)
     class LiveSubtensor:
         async def metagraph(self, netuid, mechid=None):
             return SimpleNamespace(hotkeys=["hk1"])
@@ -208,7 +258,7 @@ async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(mo
         ):
             return [
                 (
-                    90,
+                    990,
                     json.dumps(
                         {
                             "role": "miner_recover",
@@ -226,14 +276,14 @@ async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(mo
         return {
             "hk1": [
                 (block, json.dumps({"role": "miner", "element_id": "element-b"}))
-                for block in range(100, 110)
+                for block in range(1000, 1010)
             ]
         }
 
     async def fake_validator_indexes(_netuid):
         return {"validator": "https://validator.example/manako/index.json"}
 
-    async def fake_recover(requests, _indexes):
+    async def fake_recover(requests, _indexes, **_kwargs):
         assert requests == {("hk1", "element-a")}
         return {
             ("hk1", "element-a"): RecoveredCommitment(
@@ -245,6 +295,7 @@ async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(mo
                 commit_block=42,
                 shard_block=89,
                 shard_key="shard.json",
+                observed_trigger_blocks=(89, 200, 300, 400, 500, 600, 700, 800),
             )
         }
 
@@ -278,7 +329,7 @@ async def test_first_commit_block_resolves_recovery_found_by_archive_backfill(mo
         element_id="element-a",
         candidate_hotkeys={"hk1"},
         backfill_allowed_hotkeys={"hk1"},
-        first_block=95,
+        first_block=995,
     )
 
-    assert blocks == {"hk1": 42}
+    assert blocks == ({"hk1": 42} if accepted else {})

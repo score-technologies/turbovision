@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scorevision.utils import miner_registry as registry
+from scorevision.utils import commit_recovery, miner_registry as registry
 from scorevision.utils.commit_recovery import RecoveredCommitment
 from scorevision.utils.compliance_failures import ComplianceFailureTuple
 from scorevision.utils.inactive_miners import InactiveMinerTuple
@@ -548,7 +548,19 @@ async def test_get_miners_from_registry_deduplicates_same_model_revision(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_get_miners_from_registry_recovers_commitment_from_public_shard(monkeypatch):
+@pytest.mark.parametrize(
+    "recovery_block, observed_triggers, activation_block, accepted",
+    [
+        (500, (499, 800, 1100, 1400, 1600), 1, True),
+        (1700, (499, 600, 800, 1000, 1200, 1400, 1500, 1600), 1, False),
+        (1700, (499, 600, 800, 1000, 1200, 1400, 1500, 1600), 2000, True),
+        (5000, (499, 800, 1100, 1400), 1, True),
+    ],
+)
+async def test_get_miners_from_registry_recovers_commitment_from_public_shard(
+    monkeypatch, recovery_block, observed_triggers, activation_block, accepted
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", activation_block)
     class RecoverySubtensor:
         async def metagraph(self, netuid, mechid=None):
             return SimpleNamespace(hotkeys=["hk1"])
@@ -557,7 +569,7 @@ async def test_get_miners_from_registry_recovers_commitment_from_public_shard(mo
             return {
                 "hk1": [
                     (
-                        500,
+                        recovery_block,
                         json.dumps(
                             {
                                 "role": "miner_recover",
@@ -575,7 +587,7 @@ async def test_get_miners_from_registry_recovers_commitment_from_public_shard(mo
     async def fake_validator_indexes(_netuid):
         return {"validator": "https://validator.example/manako/index.json"}
 
-    async def fake_recover(requests, _indexes):
+    async def fake_recover(requests, _indexes, **_kwargs):
         assert ("hk1", "PlayerDetect_v1@1.0") in requests
         return {
             ("hk1", "PlayerDetect_v1@1.0"): RecoveredCommitment(
@@ -587,6 +599,7 @@ async def test_get_miners_from_registry_recovers_commitment_from_public_shard(mo
                 commit_block=123,
                 shard_block=499,
                 shard_key="shard.json",
+                observed_trigger_blocks=observed_triggers,
             )
         }
 
@@ -610,13 +623,98 @@ async def test_get_miners_from_registry_recovers_commitment_from_public_shard(mo
         inactive_miner_tuples=set(),
     )
 
-    assert kept[0].block == 123
-    assert kept[0].model == "org/model"
+    if accepted:
+        assert kept[0].block == 123
+        assert kept[0].model == "org/model"
+    else:
+        assert kept == {}
     assert skipped == {}
 
 
 @pytest.mark.asyncio
-async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch):
+@pytest.mark.parametrize(
+    "later_triggers, accepted",
+    [
+        ((800, 1100, 1400, 1600, 1800, 2100), True),
+        ((800, 1100, 1400, 1600, 1800, 2100, 2400), False),
+    ],
+)
+async def test_registry_uses_real_index_to_count_triggers_after_data_pause(
+    monkeypatch, later_triggers, accepted
+):
+    commit_recovery._RECOVERY_CACHE.clear()
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", 1)
+    element_id = "PlayerDetect_v1@1.0"
+    shard_key = (
+        f"https://validator.example/manako/{element_id}/hk1/"
+        "000000123/evaluation/000000499-challenge.json"
+    )
+
+    class RecoverySubtensor:
+        async def metagraph(self, netuid, mechid=None):
+            return SimpleNamespace(hotkeys=["hk1"])
+
+        async def get_all_revealed_commitments(self, netuid):
+            return {"hk1": [(5000, json.dumps({
+                "role": "miner_recover", "element_id": element_id, "hotkey": "hk1"
+            }))]}
+
+    async def fake_get_subtensor():
+        return RecoverySubtensor()
+
+    async def fake_indexes(_netuid):
+        return {"validator": "https://validator.example/manako/index.json"}
+
+    async def fake_index(_url):
+        return [shard_key] + [
+            f"https://validator.example/manako/{element_id}/other/"
+            f"000000456/evaluation/{block:09d}-challenge.json"
+            for block in later_triggers
+        ] + [
+            "https://validator.example/manako/other-element/other/"
+            "000000456/evaluation/000004000-challenge.json"
+        ]
+
+    async def fake_lines(_public_url, key):
+        assert key == shard_key
+        return [{"hotkey": "validator", "signature": "signed", "payload": {
+            "element_id": element_id, "lane": "public",
+            "telemetry": {"miner": {
+                "hotkey": "hk1", "model": "org/model", "revision": "rev1",
+                "slug": "slug1", "chute_id": "chute1",
+                "commitment": {"element_id": element_id, "commit_block": 123},
+            }},
+        }}]
+
+    async def fake_gated(_model, _revision):
+        return False
+
+    async def fake_chute_info(_chute_id):
+        return {"slug": "slug1", "revision": "rev1"}
+
+    monkeypatch.setattr(registry, "get_settings", lambda: SimpleNamespace(SCOREVISION_MECHID=1))
+    monkeypatch.setattr(registry, "get_subtensor", fake_get_subtensor)
+    monkeypatch.setattr(registry, "get_validator_indexes_from_chain", fake_indexes)
+    monkeypatch.setattr(registry, "_hf_gated_or_inaccessible", fake_gated)
+    monkeypatch.setattr(registry, "fetch_chute_info", fake_chute_info)
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_index)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_lines)
+    monkeypatch.setattr("scorevision.utils.cloudflare_helpers._verify_signature", lambda *_args: True)
+
+    kept, _skipped = await registry.get_miners_from_registry(
+        18, element_id=element_id,
+        compliance_failure_tuples=set(), inactive_miner_tuples=set(),
+    )
+
+    assert (0 in kept) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation_block, accepted", [(1, False), (2000, True)])
+async def test_registry_resolves_recovery_found_by_archive_backfill(
+    monkeypatch, activation_block, accepted
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", activation_block)
     class LiveSubtensor:
         async def metagraph(self, netuid, mechid=None):
             return SimpleNamespace(hotkeys=["hk1"])
@@ -634,7 +732,7 @@ async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch)
                             }
                         ),
                     )
-                    for block in range(100, 110)
+                    for block in range(1000, 1010)
                 ]
             }
 
@@ -653,7 +751,7 @@ async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch)
         ):
             return [
                 (
-                    90,
+                    990,
                     json.dumps(
                         {
                             "role": "miner_recover",
@@ -673,7 +771,7 @@ async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch)
     async def fake_validator_indexes(_netuid):
         return {"validator": "https://validator.example/manako/index.json"}
 
-    async def fake_recover(requests, _indexes):
+    async def fake_recover(requests, _indexes, **_kwargs):
         assert requests == {("hk1", "element-a")}
         return {
             ("hk1", "element-a"): RecoveredCommitment(
@@ -685,6 +783,7 @@ async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch)
                 commit_block=42,
                 shard_block=89,
                 shard_key="shard.json",
+                observed_trigger_blocks=(89, 200, 300, 400, 500, 600, 700, 800),
             )
         }
 
@@ -712,11 +811,14 @@ async def test_registry_resolves_recovery_found_by_archive_backfill(monkeypatch)
     kept, skipped = await registry.get_miners_from_registry(
         18,
         element_id="element-a",
-        first_block=95,
+        first_block=995,
         compliance_failure_tuples=set(),
         inactive_miner_tuples=set(),
     )
 
-    assert kept[0].block == 42
-    assert kept[0].model == "org/model"
+    if accepted:
+        assert kept[0].block == 42
+        assert kept[0].model == "org/model"
+    else:
+        assert kept == {}
     assert skipped == {}

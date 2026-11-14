@@ -57,4 +57,10 @@ sv -v audit-validator spotcheck --once
 - Watch `central-weights` / `audit-spotcheck` logs for repeated failures.
 - Keep API keys and wallet access healthy and rotated.
 
+The public `commit_recover` deadline activates at chain block **9,504,379** in
+the code. Recoveries published before that block keep the previous rule;
+recoveries from that block onward expire after seven indexed evaluation triggers
+for their element. Publish the updated image before the activation block so
+both the runner and weights processes use the same policy.
+
 When these checks pass, your validator stack is correctly aligned with the current command and config model.

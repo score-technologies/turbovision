@@ -983,6 +983,7 @@ async def dataset_sv_multi(
     prefetch: int = 2,
     element_id: str | None = None,
     lane: str = "public",
+    index_keys_out: dict[str, list[str]] | None = None,
 ):
     if not validator_indexes:
         return
@@ -1005,6 +1006,8 @@ async def dataset_sv_multi(
             )
             VALIDATOR_DATASET_FETCH_ERRORS_TOTAL.labels(stage="index_fetch").inc()
             continue
+        if index_keys_out is not None:
+            index_keys_out[idx_url] = keys
         if wanted_seg:
             filtered_keys = []
             for u in keys:
