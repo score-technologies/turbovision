@@ -1,10 +1,11 @@
+import json
 from collections import deque
 from types import SimpleNamespace
 
 import pytest
 
 from scorevision.validator import winner as winner_mod
-
+from scorevision.validator.central.private_track import registry as private_registry_mod
 from scorevision.validator.winner import (
     _apply_recent_commit_initial_zero_challenge_filter,
     _apply_recent_commit_initial_zero_filter,
@@ -23,6 +24,111 @@ def test_compute_adaptive_delta_rel_with_baseline_theta():
         default_delta_rel=0.03, baseline_theta=0.3755112726134544
     )
     assert round(delta_rel, 6) == 0.090694
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old_ip", "old_port", "old_commit_block", "old_sample_block", "expected_old_score"),
+    [
+        ("0.0.0.0", 1, 210, 220, 0.45),
+        ("0.0.0.0", 0, 210, 220, None),
+        ("127.0.0.1", 8000, 150, 220, None),
+        ("127.0.0.1", 8000, 210, 150, None),
+        ("127.0.0.1", 8000, None, 220, None),
+    ],
+)
+async def test_private_winner_requires_valid_commitment_and_current_registration_scores(
+    monkeypatch, old_ip, old_port, old_commit_block, old_sample_block, expected_old_score
+):
+    settings = SimpleNamespace(
+        SCOREVISION_NETUID=44,
+        SCOREVISION_MECHID=1,
+        VALIDATOR_FALLBACK_UID=6,
+        SCOREVISION_WINDOW_TIEBREAK_ENABLE=False,
+    )
+    metagraph = SimpleNamespace(
+        hotkeys=["old", "current"],
+        axons=[
+            SimpleNamespace(ip=old_ip, port=old_port),
+            SimpleNamespace(ip="127.0.0.1", port=8001),
+        ],
+        block_at_registration=[200, 100],
+    )
+
+    def commit(block):
+        return (
+            block,
+            json.dumps(
+                {"role": "miner", "track": "private", "element_id": "football"}
+            ),
+        )
+
+    class FakeSubtensor:
+        async def metagraph(self, _netuid, mechid=None):
+            return metagraph
+
+        async def get_all_revealed_commitments(self, _netuid):
+            return {
+                "old": [commit(old_commit_block)] if old_commit_block is not None else [],
+                "current": [commit(110)],
+            }
+
+    async def fake_subtensor():
+        return FakeSubtensor()
+
+    async def fake_indexes(_netuid):
+        return {"validator": "index"}
+
+    async def fake_dataset(*_args, **_kwargs):
+        samples = [
+            ("old", 0.9, old_sample_block),
+            ("current", 0.5, 220),
+        ]
+        if old_ip == "0.0.0.0" and old_port == 1:
+            samples.append(("old", 0.0, 230))
+        for hotkey, score, block in samples:
+            yield {
+                "payload": {
+                    "element_id": "football",
+                    "lane": "private",
+                    "block": block,
+                    "telemetry": {"miner": {"hotkey": hotkey}},
+                    "metrics": {"composite_score": score},
+                }
+            }
+
+    async def fake_first_commit(_netuid, **_kwargs):
+        raise AssertionError("private scoring must not fetch commitments a second time")
+
+    monkeypatch.setattr(winner_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(private_registry_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(winner_mod, "get_subtensor", fake_subtensor)
+    monkeypatch.setattr(winner_mod, "get_validator_indexes_from_chain", fake_indexes)
+    monkeypatch.setattr(winner_mod, "dataset_sv_multi", fake_dataset)
+    monkeypatch.setattr(winner_mod, "_first_commit_block_by_miner", fake_first_commit)
+
+    async def fake_inactive():
+        return set()
+
+    monkeypatch.setattr(private_registry_mod, "fetch_inactive_miner_tuples", fake_inactive)
+
+    winner_uid, scores, _meta, rows = await winner_mod.get_winner_for_element(
+        element_id="football",
+        current_window_id="block-220",
+        tail=220,
+        m_min=1,
+        lane="private",
+    )
+
+    assert winner_uid == 1
+    assert scores == (
+        {0: expected_old_score, 1: 0.5}
+        if expected_old_score is not None
+        else {1: 0.5}
+    )
+    assert [row["hotkey"] for row in rows] == (
+        ["old", "current"] if expected_old_score is not None else ["current"]
+    )
 
 
 @pytest.mark.asyncio

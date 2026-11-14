@@ -20,6 +20,10 @@ from scorevision.utils.prometheus import (
 )
 from scorevision.utils.r2_public import extract_element_miner_commit_from_key
 from scorevision.utils.settings import get_settings
+from scorevision.validator.central.private_track.registry import (
+    _has_challenge_axon,
+    get_valid_private_commitments,
+)
 from scorevision.validator.models import OpenSourceMinerMeta
 from scorevision.validator.payload import (
     build_winner_meta,
@@ -385,6 +389,15 @@ async def get_winner_for_element(
     hk_to_uid = {
         hk: i for i, hk in enumerate(meta.hotkeys) if hk not in blacklisted_hotkeys
     }
+    if normalized_lane == "private":
+        valid_commitments = await get_valid_private_commitments(
+            subtensor, meta, blacklisted_hotkeys, element_id=element_id
+        )
+        hk_to_uid = {
+            hk: uid
+            for hk, uid in hk_to_uid.items()
+            if hk in valid_commitments and _has_challenge_axon(meta.axons[uid])
+        }
     uid_to_hk = {u: hk for hk, u in hk_to_uid.items()}
 
     validator_indexes = await get_validator_indexes_from_chain(netuid)
@@ -481,6 +494,12 @@ async def get_winner_for_element(
             if miner_meta:
                 miner_meta_by_hk[miner_meta.hotkey] = miner_meta
             block_int = _extract_sample_block(line, payload, telemetry)
+            if normalized_lane == "private" and (
+                block_int is None
+                or block_int < int(meta.block_at_registration[miner_uid])
+            ):
+                diagnostics["skip_before_registration"] += 1
+                continue
         except Exception:
             diagnostics["skip_parse_error"] += 1
             continue
@@ -505,18 +524,18 @@ async def get_winner_for_element(
         )
 
     unavailable_recoveries: set[str] = set()
-    first_commit_block_by_hk = await _first_commit_block_by_miner(
-        netuid,
-        element_id=element_id,
-        candidate_hotkeys={
-            uid_to_hk[uid] for uid in samples_by_miner.keys() if uid in uid_to_hk
-        },
-        first_block=first_block,
-        expired_recovery_hotkeys=(
-            unavailable_recoveries if normalized_lane == "public" else None
-        ),
-        index_keys_by_url=index_keys_by_url,
-    )
+    first_commit_block_by_hk = {}
+    if normalized_lane == "public":
+        first_commit_block_by_hk = await _first_commit_block_by_miner(
+            netuid,
+            element_id=element_id,
+            candidate_hotkeys={
+                uid_to_hk[uid] for uid in samples_by_miner.keys() if uid in uid_to_hk
+            },
+            first_block=first_block,
+            expired_recovery_hotkeys=unavailable_recoveries,
+            index_keys_by_url=index_keys_by_url,
+        )
     if unavailable_recoveries:
         excluded_uids = {
             hk_to_uid[hk] for hk in unavailable_recoveries if hk in hk_to_uid

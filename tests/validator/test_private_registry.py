@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from scorevision.utils.inactive_miners import InactiveMinerTuple
-from scorevision.validator.central.private_track.registry import get_registered_miners
+from scorevision.validator.central.private_track.registry import (
+    get_registered_miners,
+    get_valid_private_commitments,
+)
 
 
 class _FakeSubtensor:
@@ -17,7 +20,9 @@ class _FakeSubtensor:
 
 def _build_metagraph(hotkeys: list[str]):
     axons = [SimpleNamespace(ip="127.0.0.1", port=8000 + i) for i in range(len(hotkeys))]
-    return SimpleNamespace(hotkeys=hotkeys, axons=axons)
+    return SimpleNamespace(
+        hotkeys=hotkeys, axons=axons, block_at_registration=[0] * len(hotkeys)
+    )
 
 
 def _private_commit(
@@ -35,6 +40,50 @@ def _private_commit(
         "hotkey": "ignored-in-test",
     }
     return (block, json.dumps(payload))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [0, 1])
+async def test_reset_axon_is_challenged_but_zero_port_is_skipped(monkeypatch, port):
+    monkeypatch.setattr(
+        "scorevision.validator.central.private_track.registry.get_settings",
+        lambda: SimpleNamespace(SCOREVISION_NETUID=18),
+    )
+    metagraph = _build_metagraph(["hk1"])
+    metagraph.axons[0] = SimpleNamespace(ip="0.0.0.0", port=port)
+    subtensor = _FakeSubtensor({"hk1": [_private_commit(110, element_id="E1")]})
+
+    valid = await get_valid_private_commitments(
+        subtensor, metagraph, set(), element_id="E1", inactive_miner_tuples=set()
+    )
+    miners = await get_registered_miners(
+        subtensor, metagraph, set(), element_id="E1", inactive_miner_tuples=set()
+    )
+
+    assert valid["hk1"][0] == 110
+    assert [miner.hotkey for miner in miners] == (["hk1"] if port else [])
+
+
+@pytest.mark.asyncio
+async def test_private_registry_ignores_commit_from_previous_registration(monkeypatch):
+    monkeypatch.setattr(
+        "scorevision.validator.central.private_track.registry.get_settings",
+        lambda: SimpleNamespace(SCOREVISION_NETUID=18),
+    )
+    metagraph = _build_metagraph(["old", "current"])
+    metagraph.block_at_registration = [200, 100]
+    subtensor = _FakeSubtensor(
+        {
+            "old": [_private_commit(150, element_id="E1")],
+            "current": [_private_commit(150, element_id="E1")],
+        }
+    )
+
+    miners = await get_registered_miners(
+        subtensor, metagraph, set(), element_id="E1", inactive_miner_tuples=set()
+    )
+
+    assert [miner.hotkey for miner in miners] == ["current"]
 
 
 @pytest.mark.asyncio

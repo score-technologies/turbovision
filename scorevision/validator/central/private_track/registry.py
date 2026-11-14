@@ -63,33 +63,32 @@ def _pick_latest_private_commit_for_element(
     return best_block, best_obj
 
 
-async def get_registered_miners(
+def _has_challenge_axon(axon) -> bool:
+    return bool(axon.ip and axon.port)
+
+
+async def get_valid_private_commitments(
     subtensor: bt.AsyncSubtensor,
     metagraph,
     blacklist: set[str],
     element_id: str | None = None,
     inactive_miner_tuples: set[InactiveMinerTuple] | None = None,
-) -> list[RegisteredMiner]:
+) -> dict[str, tuple[int, dict]]:
     settings = get_settings()
     netuid = settings.SCOREVISION_NETUID
 
     if inactive_miner_tuples is None and element_id is not None:
         inactive_miner_tuples = await fetch_inactive_miner_tuples()
 
-    miners = []
-
     try:
         commits = await get_all_revealed_commitments(subtensor, netuid)
     except Exception as e:
         logger.error("Failed to fetch commitments: %s", e)
-        return []
+        return {}
 
+    valid: dict[str, tuple[int, dict]] = {}
     for uid, hotkey in enumerate(metagraph.hotkeys):
         if hotkey in blacklist:
-            continue
-
-        axon = metagraph.axons[uid]
-        if not axon.ip or not axon.port:
             continue
 
         commitment = commits.get(hotkey)
@@ -98,6 +97,13 @@ async def get_registered_miners(
 
         block, obj = _pick_latest_private_commit_for_element(commitment, element_id)
         if obj is None or block is None:
+            continue
+        if block < int(metagraph.block_at_registration[uid]):
+            logger.info(
+                "Private registry ignored hotkey=%s element_id=%s: commitment predates registration",
+                hotkey,
+                element_id,
+            )
             continue
         if is_inactive_miner_tuple(
             inactive_miner_tuples,
@@ -113,6 +119,34 @@ async def get_registered_miners(
             )
             continue
 
+        valid[hotkey] = (block, obj)
+
+    return valid
+
+
+async def get_registered_miners(
+    subtensor: bt.AsyncSubtensor,
+    metagraph,
+    blacklist: set[str],
+    element_id: str | None = None,
+    inactive_miner_tuples: set[InactiveMinerTuple] | None = None,
+) -> list[RegisteredMiner]:
+    valid_commitments = await get_valid_private_commitments(
+        subtensor,
+        metagraph,
+        blacklist,
+        element_id=element_id,
+        inactive_miner_tuples=inactive_miner_tuples,
+    )
+    miners = []
+    for uid, hotkey in enumerate(metagraph.hotkeys):
+        commitment = valid_commitments.get(hotkey)
+        if commitment is None:
+            continue
+        axon = metagraph.axons[uid]
+        if not _has_challenge_axon(axon):
+            continue
+        block, obj = commitment
         image_repo = str(obj.get("image_repo") or "")
         image_tag = str(obj.get("image_tag") or "")
         image_digest = str(obj.get("image_digest") or "")
