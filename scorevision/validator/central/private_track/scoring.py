@@ -9,7 +9,7 @@ from scorevision.utils.schemas import (
 )
 from scorevision.utils.settings import get_settings
 
-PRIVATE_SCORING_VERSION = 2
+PRIVATE_SCORING_VERSION = 3
 
 PillarScorer = Callable[[list[FramePrediction], list[FramePrediction]], float]
 
@@ -53,10 +53,25 @@ def find_best_match(
     return best_idx, best_decay
 
 
+def _deduplicate_aerial_duels(events: list[FramePrediction]) -> list[FramePrediction]:
+    seen_frames: set[int] = set()
+    deduplicated: list[FramePrediction] = []
+    for event in events:
+        if event.action == Action.AERIAL_DUEL.value:
+            if event.frame in seen_frames:
+                continue
+            seen_frames.add(event.frame)
+        deduplicated.append(event)
+    return deduplicated
+
+
 def _legacy_score_predictions(
     predictions: list[FramePrediction],
     ground_truth: list[FramePrediction],
 ) -> float:
+    predictions = _deduplicate_aerial_duels(predictions)
+    ground_truth = _deduplicate_aerial_duels(ground_truth)
+
     if not ground_truth:
         return 0.0
 

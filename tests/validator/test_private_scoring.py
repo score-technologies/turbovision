@@ -84,6 +84,42 @@ def test_score_predictions_unmatched_penalty():
         assert score == 0.0
 
 
+def test_duplicate_aerial_duel_predictions_on_same_frame_count_once():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="aerial_duel")]
+        preds = [FramePrediction(frame=25, action="aerial_duel") for _ in range(2)]
+
+        assert score_predictions(preds, gt) == 1.0
+        assert score_predictions(preds, gt, pillar_weights={"soccer_action": 1.0}) == 1.0
+
+
+def test_duplicate_aerial_duel_ground_truth_on_same_frame_counts_once():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="aerial_duel") for _ in range(2)]
+        preds = [FramePrediction(frame=25, action="aerial_duel")]
+
+        assert score_predictions(preds, gt) == 1.0
+
+
+def test_aerial_duels_on_different_frames_remain_distinct():
+    with _patch_settings():
+        gt = [
+            FramePrediction(frame=25, action="aerial_duel"),
+            FramePrediction(frame=26, action="aerial_duel"),
+        ]
+        preds = [FramePrediction(frame=25, action="aerial_duel")]
+
+        assert score_predictions(preds, gt) == 0.5
+
+
+def test_duplicate_other_action_predictions_on_same_frame_still_penalized():
+    with _patch_settings():
+        gt = [FramePrediction(frame=25, action="pass")]
+        preds = [FramePrediction(frame=25, action="pass") for _ in range(2)]
+
+        assert score_predictions(preds, gt) == 0.0
+
+
 def test_score_predictions_with_private_legacy_only():
     with _patch_settings():
         gt = [FramePrediction(frame=25, action="pass")]
