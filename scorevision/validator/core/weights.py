@@ -535,6 +535,9 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5CXLG3FexBG3fB8pMoebgSL9kuCoxeRJDpLG4d53hwGz2CbV",
     "5DCMq6Hy1LJETE9PRneNEvtwJQjiQZ8cBUWieCHisTQMTzXe",
     "5HmdoSmZnfAp1Xtd2RmeuAAhTUdQaHcQaFz9QDSkayXFrwTz",
+    "5DDW7LAzvkEfeGAL2evK7XYVvnTGjq5vAAyS7Z2ayB29TK9K",
+    "5H6fuFG4459GUZ1YRGczTLjc5G7hPUwAPf9L7MCkYrztKZrr",
+    "5HomKRtAKonHfGourbczW4cXr5LrrqFR764mJqukdX4vTKoD",
 }
 
 def _inactive_miners_for_element(
