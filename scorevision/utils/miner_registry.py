@@ -21,7 +21,7 @@ from scorevision.utils.bittensor_commitments import (
 )
 from scorevision.utils.commit_recovery import (
     is_recovery_commit,
-    is_timely_recovery,
+    is_timely_recovered_commitment,
     recover_commitments_from_shards,
 )
 from scorevision.utils.compliance_failures import (
@@ -1272,10 +1272,8 @@ async def get_miners_from_registry(
                         recovery_block,
                     )
                     continue
-                if not is_timely_recovery(
-                    recovered_commitment.shard_block,
-                    recovery_block,
-                    recovered_commitment.observed_trigger_blocks,
+                if not is_timely_recovered_commitment(
+                    recovered_commitment, recovery_block
                 ):
                     logger.info(
                         "[Registry] expired recovery uid=%s hotkey=%s element_id=%s recovery_block=%s shard_block=%s",
@@ -1424,10 +1422,8 @@ async def get_miners_from_registry(
                                     recovery_block,
                                 )
                                 continue
-                            if not is_timely_recovery(
-                                recovered_commitment.shard_block,
-                                recovery_block,
-                                recovered_commitment.observed_trigger_blocks,
+                            if not is_timely_recovered_commitment(
+                                recovered_commitment, recovery_block
                             ):
                                 logger.info(
                                     "[Registry] expired archive recovery uid=%s hotkey=%s element_id=%s recovery_block=%s shard_block=%s",

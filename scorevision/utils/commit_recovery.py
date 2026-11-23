@@ -5,7 +5,7 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from json import dumps
 from time import monotonic
-from typing import Iterable, Sequence
+from typing import Iterable, Literal, Sequence
 from urllib.parse import urlparse
 
 from scorevision.utils.r2_public import (
@@ -21,6 +21,8 @@ RECOVERY_COMMIT_ROLE = "miner_recover"
 RECOVERY_CACHE_TTL_S = 300.0
 MAX_RECOVERY_MISSED_TRIGGERS = 6
 RECOVERY_ACTIVATION_BLOCK = 9_504_379
+CONTINUITY_ACTIVATION_BLOCK = 9_566_400
+MAX_CONTINUITY_MISSED_TRIGGERS = 20
 
 
 def is_timely_recovery(
@@ -55,6 +57,7 @@ class RecoveredCommitment:
     shard_block: int
     shard_key: str
     observed_trigger_blocks: tuple[int, ...] = ()
+    proof_mode: Literal["prior", "continuity"] = "prior"
 
     def as_miner_commitment(self, hotkey: str) -> dict:
         return {
@@ -66,6 +69,32 @@ class RecoveredCommitment:
             "hotkey": hotkey,
             "element_id": self.element_id,
         }
+
+
+def is_timely_recovered_commitment(
+    commitment: RecoveredCommitment, recovery_block: int
+) -> bool:
+    if commitment.proof_mode == "prior":
+        return is_timely_recovery(
+            commitment.shard_block,
+            recovery_block,
+            commitment.observed_trigger_blocks,
+        )
+    triggers = commitment.observed_trigger_blocks
+    missed_limit = (
+        MAX_CONTINUITY_MISSED_TRIGGERS
+        if recovery_block < CONTINUITY_ACTIVATION_BLOCK
+        else MAX_RECOVERY_MISSED_TRIGGERS
+    )
+    return (
+        commitment.proof_mode == "continuity"
+        and commitment.commit_block < recovery_block < commitment.shard_block
+        and bool(triggers)
+        and recovery_block < triggers[0]
+        and triggers[-1] >= CONTINUITY_ACTIVATION_BLOCK
+        and len(triggers) - bisect_right(triggers, commitment.shard_block)
+        <= missed_limit
+    )
 
 
 _RECOVERY_CACHE: dict[
@@ -232,6 +261,7 @@ async def recover_commitments_from_shards(
     recovered_by_request = dict(cached_by_request) if recovery_blocks is None else {}
 
     candidate_keys: dict[tuple[str, str], set[str]] = {request: set() for request in wanted}
+    later_keys: dict[tuple[str, str], set[str]] = {request: set() for request in wanted}
     requests_by_path: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for hotkey, element_id in wanted:
         requests_by_path.setdefault(
@@ -241,6 +271,7 @@ async def recover_commitments_from_shards(
     indexed_trigger_blocks: dict[str, set[int]] = {
         _safe_element_id(element_id): set() for _, element_id in wanted
     }
+    first_active_indexed_block: int | None = None
     for raw_index_url in validator_indexes.values():
         index_url = _active_index_url(raw_index_url)
         if not index_url:
@@ -261,6 +292,11 @@ async def recover_commitments_from_shards(
             shard_block = extract_block_from_key(key)
             if shard_block is None:
                 continue
+            if (
+                first_active_indexed_block is None
+                or shard_block < first_active_indexed_block
+            ):
+                first_active_indexed_block = shard_block
             if key_element in indexed_trigger_blocks:
                 indexed_trigger_blocks[key_element].add(shard_block)
             for request in requests_by_path.get((key_element, key_hotkey), []):
@@ -269,11 +305,30 @@ async def recover_commitments_from_shards(
                     or shard_block < recovery_blocks.get(request, 0)
                 ):
                     candidate_keys[request].add(key)
+                else:
+                    later_keys[request].add(key)
 
     triggers_by_element = {
         element_id: tuple(sorted(blocks))
         for element_id, blocks in indexed_trigger_blocks.items()
     }
+
+    continuity_requests: set[tuple[str, str]] = set()
+    if recovery_blocks is not None:
+        for request, keys in candidate_keys.items():
+            recovery_block = recovery_blocks.get(request, 0)
+            triggers = triggers_by_element[_safe_element_id(request[1])]
+            if (
+                not keys
+                and later_keys[request]
+                and first_active_indexed_block is not None
+                and recovery_block < first_active_indexed_block
+                and triggers
+                and recovery_block < triggers[0]
+                and triggers[-1] >= CONTINUITY_ACTIVATION_BLOCK
+            ):
+                keys.update(later_keys[request])
+                continuity_requests.add(request)
 
     if recovery_blocks is not None:
         for request, cached in cached_by_request.items():
@@ -298,6 +353,9 @@ async def recover_commitments_from_shards(
         async with semaphore:
             lines = await fetch_shard_lines(key, key)
         hotkey, element_id = request
+        recovery_block = (
+            recovery_blocks.get(request) if recovery_blocks is not None else None
+        )
         recovered = [
             item
             for line in lines
@@ -311,8 +369,18 @@ async def recover_commitments_from_shards(
                 )
             )
             is not None
+            and (
+                request not in continuity_requests
+                or (
+                    recovery_block is not None
+                    and item.commit_block < recovery_block
+                )
+            )
         ]
-        return max(recovered, key=lambda item: item.shard_block, default=None)
+        latest = max(recovered, key=lambda item: item.shard_block, default=None)
+        if latest is not None and request in continuity_requests:
+            return replace(latest, proof_mode="continuity")
+        return latest
 
     async def _recover_request(
         request: tuple[str, str], keys: set[str]

@@ -63,4 +63,14 @@ recoveries from that block onward expire after seven indexed evaluation triggers
 for their element. Publish the updated image before the activation block so
 both the runner and weights processes use the same policy.
 
+From block **9,566,400**, a continuity rule also applies when a
+`miner_recover` predates the first evaluation in the active public index.
+The runner and weights process may use that miner's latest signed evaluation
+in the active index if it names an original commitment older than the recovery.
+The limit is 20 missed indexed element triggers for recoveries published before
+block 9,566,400 and six for recoveries published at or after that block. This
+lets later index compactions retain active recoveries without reading
+`indexpast.json`, provided the last signed evaluation remains in the active
+index.
+
 When these checks pass, your validator stack is correctly aligned with the current command and config model.

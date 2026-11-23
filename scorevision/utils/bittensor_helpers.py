@@ -19,7 +19,7 @@ from scorevision.utils.bittensor_commitments import (
 from scorevision.utils.commit_recovery import (
     RECOVERY_COMMIT_ROLE,
     is_recovery_commit,
-    is_timely_recovery,
+    is_timely_recovered_commitment,
     recover_commitments_from_shards,
 )
 
@@ -576,10 +576,8 @@ async def _first_commit_block_by_miner(
                                 recovery_block,
                             )
                             continue
-                        if not is_timely_recovery(
-                            recovered_commitment.shard_block,
-                            recovery_block,
-                            recovered_commitment.observed_trigger_blocks,
+                        if not is_timely_recovered_commitment(
+                            recovered_commitment, recovery_block
                         ):
                             if expired_recovery_hotkeys is not None:
                                 expired_recovery_hotkeys.add(hk)
@@ -744,10 +742,8 @@ async def _first_commit_block_by_miner(
                                     recovery_block,
                                 )
                                 continue
-                            if not is_timely_recovery(
-                                recovered_commitment.shard_block,
-                                recovery_block,
-                                recovered_commitment.observed_trigger_blocks,
+                            if not is_timely_recovered_commitment(
+                                recovered_commitment, recovery_block
                             ):
                                 if expired_recovery_hotkeys is not None:
                                     expired_recovery_hotkeys.add(hk_i)

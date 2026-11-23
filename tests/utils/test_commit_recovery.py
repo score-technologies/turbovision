@@ -137,6 +137,229 @@ async def test_recovery_only_uses_shards_before_recovery_block(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missed_triggers,accepted", [(20, True), (21, False)])
+async def test_pre_index_recovery_uses_recent_signed_continuity_shard(
+    monkeypatch, missed_triggers, accepted
+):
+    monkeypatch.setattr(commit_recovery, "RECOVERY_ACTIVATION_BLOCK", 500)
+    monkeypatch.setattr(commit_recovery, "CONTINUITY_ACTIVATION_BLOCK", 1000)
+    latest_key = SHARD_KEY.replace("000000999", "000001000")
+    trigger_keys = [
+        latest_key.replace("5Fminer", "other-miner").replace(
+            "000001000", f"{block:09d}"
+        )
+        for block in range(1100, 1100 + missed_triggers * 100, 100)
+    ]
+
+    async def fake_fetch_json(_url):
+        return [latest_key, *trigger_keys]
+
+    async def fake_fetch_lines(_public_url, key):
+        assert key == latest_key
+        return [_signed_line()]
+
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_fetch_json)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_fetch_lines)
+    monkeypatch.setattr(
+        "scorevision.utils.cloudflare_helpers._verify_signature",
+        lambda *_args: True,
+    )
+
+    recovered = await commit_recovery.recover_commitments_from_shards(
+        {(HOTKEY, ELEMENT_ID)},
+        {"validator": "https://validator.example/manako/index.json"},
+        recovery_blocks={(HOTKEY, ELEMENT_ID): 400},
+    )
+
+    proof = recovered[(HOTKEY, ELEMENT_ID)]
+    assert proof.proof_mode == "continuity"
+    assert commit_recovery.is_timely_recovered_commitment(proof, 400) is accepted
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_index_start_cannot_use_later_shard(monkeypatch):
+    monkeypatch.setattr(commit_recovery, "CONTINUITY_ACTIVATION_BLOCK", 1000)
+    later_key = SHARD_KEY.replace("000000999", "000001200")
+    older_other_element_key = (
+        "https://validator.example/manako/OtherElement/other-miner/"
+        "000000123/evaluation/000001000-challenge.json"
+    )
+    fetched = []
+
+    async def fake_fetch_json(_url):
+        return [older_other_element_key, later_key]
+
+    async def fake_fetch_lines(_public_url, key):
+        fetched.append(key)
+        return [_signed_line()]
+
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_fetch_json)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_fetch_lines)
+
+    recovered = await commit_recovery.recover_commitments_from_shards(
+        {(HOTKEY, ELEMENT_ID)},
+        {"validator": "https://validator.example/manako/index.json"},
+        recovery_blocks={(HOTKEY, ELEMENT_ID): 1100},
+    )
+
+    assert recovered == {}
+    assert fetched == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missed_triggers,accepted", [(6, True), (7, False)])
+async def test_post_activation_pre_index_recovery_keeps_six_trigger_limit(
+    monkeypatch, missed_triggers, accepted
+):
+    monkeypatch.setattr(commit_recovery, "CONTINUITY_ACTIVATION_BLOCK", 1000)
+    latest_key = SHARD_KEY.replace("000000999", "000001200")
+    trigger_keys = [
+        latest_key.replace("5Fminer", "other-miner").replace(
+            "000001200", f"{block:09d}"
+        )
+        for block in range(1300, 1300 + missed_triggers * 100, 100)
+    ]
+
+    async def fake_fetch_json(_url):
+        return [latest_key, *trigger_keys]
+
+    async def fake_fetch_lines(_public_url, key):
+        assert key == latest_key
+        return [_signed_line()]
+
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_fetch_json)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_fetch_lines)
+    monkeypatch.setattr(
+        "scorevision.utils.cloudflare_helpers._verify_signature",
+        lambda *_args: True,
+    )
+
+    recovered = await commit_recovery.recover_commitments_from_shards(
+        {(HOTKEY, ELEMENT_ID)},
+        {"validator": "https://validator.example/manako/index.json"},
+        recovery_blocks={(HOTKEY, ELEMENT_ID): 1100},
+    )
+
+    proof = recovered[(HOTKEY, ELEMENT_ID)]
+    assert proof.proof_mode == "continuity"
+    assert commit_recovery.is_timely_recovered_commitment(proof, 1100) is accepted
+
+
+@pytest.mark.asyncio
+async def test_reported_pre_index_recoveries_resolve_from_active_shards(monkeypatch):
+    cases = [
+        (
+            "5CStyAPJzcHkaHxVptqQVEdqLxmXWc2hjGyk4rurHhZSdZii",
+            "manak0/Detect-worksite-ppe-compliance-detection-probe-set",
+            9410558,
+            9523637,
+            9562800,
+        ),
+        (
+            "5DyJHRJipprzzVaBmT5mBsXPgePRUVyTBJ7wcw9d6pMqGDF4",
+            "manak0/Detect-Person",
+            9504665,
+            9518697,
+            9563100,
+        ),
+        (
+            "5Ff9ovzQsyzqTFzvpgsPgXWUZsW5zMhN1MeSRCrTpydvpMdE",
+            "manak0/Detect-beverage-detect",
+            9500177,
+            9522261,
+            9563100,
+        ),
+    ]
+    earliest_key = (
+        "https://validator.example/manako/other-element/other-miner/"
+        "000000123/evaluation/009527100-challenge.json"
+    )
+    keys = [earliest_key]
+    lines_by_key = {}
+    recovery_blocks = {}
+    for hotkey, element_id, commit_block, recovery_block, shard_block in cases:
+        request = (hotkey, element_id)
+        recovery_blocks[request] = recovery_block
+        safe_element = element_id.replace("/", "_")
+        key = (
+            f"https://validator.example/manako/{safe_element}/{hotkey}/"
+            f"{commit_block:09d}/evaluation/{shard_block:09d}-challenge.json"
+        )
+        keys.append(key)
+        lines_by_key[key] = [
+            _signed_line(
+                element_id=element_id,
+                hotkey=hotkey,
+                commit_block=commit_block,
+            )
+        ]
+        keys.extend(
+            f"https://validator.example/manako/{safe_element}/other-miner/"
+            f"000000123/evaluation/{block:09d}-challenge.json"
+            for block in range(9563400, 9566401, 300)
+        )
+
+    async def fake_fetch_json(_url):
+        return keys
+
+    async def fake_fetch_lines(_public_url, key):
+        return lines_by_key[key]
+
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_fetch_json)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_fetch_lines)
+    monkeypatch.setattr(
+        "scorevision.utils.cloudflare_helpers._verify_signature",
+        lambda *_args: True,
+    )
+
+    recovered = await commit_recovery.recover_commitments_from_shards(
+        recovery_blocks,
+        {"validator": "https://validator.example/manako/index.json"},
+        recovery_blocks=recovery_blocks,
+    )
+
+    assert set(recovered) == set(recovery_blocks)
+    for request, recovery_block in recovery_blocks.items():
+        proof = recovered[request]
+        assert proof.proof_mode == "continuity"
+        assert proof.commit_block < recovery_block < proof.shard_block
+        assert sum(
+            trigger > proof.shard_block for trigger in proof.observed_trigger_blocks
+        ) == 11
+        assert commit_recovery.is_timely_recovered_commitment(proof, recovery_block)
+
+
+@pytest.mark.asyncio
+async def test_continuity_shard_must_name_commit_before_recovery(monkeypatch):
+    monkeypatch.setattr(commit_recovery, "CONTINUITY_ACTIVATION_BLOCK", 1000)
+    later_commit_key = SHARD_KEY.replace("000000123", "000000500").replace(
+        "000000999", "000001000"
+    )
+
+    async def fake_fetch_json(_url):
+        return [later_commit_key]
+
+    async def fake_fetch_lines(_public_url, key):
+        assert key == later_commit_key
+        return [_signed_line(commit_block=500)]
+
+    monkeypatch.setattr(commit_recovery, "fetch_json_from_url", fake_fetch_json)
+    monkeypatch.setattr(commit_recovery, "fetch_shard_lines", fake_fetch_lines)
+    monkeypatch.setattr(
+        "scorevision.utils.cloudflare_helpers._verify_signature",
+        lambda *_args: True,
+    )
+
+    recovered = await commit_recovery.recover_commitments_from_shards(
+        {(HOTKEY, ELEMENT_ID)},
+        {"validator": "https://validator.example/manako/index.json"},
+        recovery_blocks={(HOTKEY, ELEMENT_ID): 400},
+    )
+
+    assert recovered == {}
+
+
+@pytest.mark.asyncio
 async def test_recovery_counts_other_miners_once_per_indexed_trigger(monkeypatch):
     other_key_1 = SHARD_KEY.replace("5Fminer", "other-miner").replace(
         "000000999", "000001100"
