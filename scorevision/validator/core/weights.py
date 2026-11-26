@@ -552,6 +552,18 @@ HARDCODED_BLACKLIST_HOTKEYS: set[str] = {
     "5HMwngMUtKb6RspeF4LhT2WJXbCmQCt7QirUMq4hHnzLtQch",
     "5DJ9qg3Z5yP5kH7mtFxLyw9uXdT2FuaVbsq47zxeT1uj1Tii",
     "5Fnpzk28FENYvn8FSegWuBFMCJ7wXUJAFemNLQXQsB97rKoU",
+    "5GMx4D8uAgmLPgV17toBNPQHMnqXuzWyQ41LSaQi52cgYL73",
+    "5HgF5SQgSrCfN1Czww7ZNvnhgk66vfMpDfyZtP3P1Cf1edfQ",
+    "5DyoSgvDtifyEGJnfY7cXAU4GiL9CfZVP36LEQK6wQvWcQjU",
+    "5GZJKRffiNKSEinEa7kfFnAi3n6yr5jyoc8okxEDj9mmQoSE",
+    "5DPtgUDomNAjwQ2Xd2UVmAMGkcR99Nk68FVyd53R9pQhRkxu",
+    "5EPDPkGTdk85hAb9tr87sMYy6mfG2zUNic9MiSQhkqYX36Tm",
+    "5CSkxVnUhUzvtMttZGAAAMf6Lstauy9QEX5a4Dyi8t9kbnAp",
+    "5HmAtDVBPJYnHUXBnkr9NquqyuFiqSQdjEkGXfvUqS1PsdF3",
+    "5HYrDTUmtC78H141muXdjveEemHTGvaCWFf28YxXDSaVC5zA",
+    "5DXTou2DUXweJyw7zkWPp9js57GZwJAGvsrQFLcqdadPQrf7",
+    "5H8izj776T7s5vJSH4T1E8S8s22pH6rJqE4YBvrb1Kf8RHvd",
+    "5DecygRnp2isFBL34fRXMBdqbPot3FvEQdCi5cjZHouKJ5C4",
 }
 
 def _inactive_miners_for_element(
