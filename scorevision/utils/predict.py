@@ -5,7 +5,7 @@ from random import uniform
 from logging import getLogger
 from typing import AsyncGenerator
 
-from asyncio import TimeoutError, sleep, gather
+from asyncio import TimeoutError, sleep, gather, wait_for
 from aiohttp import ClientError
 
 from scorevision.miner.open_source.chute_template.schemas import TVPredictInput, TVPredictOutput
@@ -13,11 +13,7 @@ from scorevision.utils.data_models import SVRunOutput, SVPredictResult
 from scorevision.utils.settings import get_settings
 from scorevision.utils.async_clients import get_async_client, get_semaphore
 from scorevision.utils.challenges import prepare_challenge_payload
-from scorevision.utils.chutes_helpers import (
-    get_chute_slug_and_id,
-    warmup_chute,
-    validate_chute_integrity,
-)
+from scorevision.utils.chutes_helpers import validate_chute_integrity
 from scorevision.utils.miner_registry import is_registry_bypass
 
 logger = getLogger(__name__)
@@ -157,53 +153,72 @@ async def predict_sv(
     last_err = None
 
     payload_json = payload.model_dump(mode="json")
-    for attempt in range(1, retries + 2):
+    cold_start_deadline = None
+    ordinary_failures = 0
+    attempt = 0
+    while True:
+        attempt += 1
         logger.info(f"Attempt {attempt} to {url}")
         t0_attempt = monotonic()
+        cold_start_response = False
         try:
-            async with semaphore:
-                async with session.post(
-                    url, headers=headers, json=payload_json
-                ) as response:
-                    logger.info(f"request status: {response.status}")
-                    text = await response.text()
-                    if response.status == 200:
-                        data = loads(text)  # TVPredictOutput
-                        return SVPredictResult(
-                            success=bool(data.get("success", True)),
-                            model=data.get("model"),
-                            latency_seconds=monotonic() - t0_attempt,
-                            predictions=data.get("predictions") or data.get("data"),
-                            error=data.get("error"),
-                            raw=data,
-                        )
-                    elif response.status == 429:
-                        last_err = f"busy:{text[:120]}"
-                        logger.error(last_err)
-                        raise RuntimeError("busy")
-                    elif 400 <= response.status < 500:
-                        last_err = f"{response.status}:{text[:300]}"
-                        logger.error(last_err)
-                        return SVPredictResult(
-                            success=False,
-                            model=None,
-                            latency_seconds=monotonic() - t0_attempt,
-                            predictions=None,
-                            error=last_err,
-                        )
-                    elif response.status == 503:
-                        last_err = f"chute cold:{text[:120]}"
-                        logger.error(last_err)
-                        if chute_id:
-                            await warmup_chute(chute_id=chute_id)
-                        raise RuntimeError(last_err)
-                    else:
-                        last_err = f"HTTP {response.status}: {text[:300]}"
-                        logger.error(last_err)
-                        raise RuntimeError(last_err)
+            async def request_once():
+                async with semaphore:
+                    async with session.post(
+                        url, headers=headers, json=payload_json
+                    ) as response:
+                        return response.status, await response.text()
+
+            if cold_start_deadline is None:
+                status, body = await request_once()
+            else:
+                remaining = cold_start_deadline - monotonic()
+                if remaining <= 0:
+                    break
+                status, body = await wait_for(request_once(), timeout=remaining)
+
+            text = body
+            if status == 200:
+                data = loads(text)  # TVPredictOutput
+                return SVPredictResult(
+                    success=bool(data.get("success", True)),
+                    model=data.get("model"),
+                    latency_seconds=monotonic() - t0_attempt,
+                    predictions=data.get("predictions") or data.get("data"),
+                    error=data.get("error"),
+                    raw=data,
+                )
+            elif status == 429:
+                last_err = f"busy:{text[:120]}"
+                logger.error(last_err)
+                raise RuntimeError("busy")
+            elif 400 <= status < 500:
+                last_err = f"{status}:{text[:300]}"
+                logger.error(last_err)
+                return SVPredictResult(
+                    success=False,
+                    model=None,
+                    latency_seconds=monotonic() - t0_attempt,
+                    predictions=None,
+                    error=last_err,
+                )
+            elif status == 503 and "no instances available" in text.lower():
+                cold_start_response = True
+                last_err = f"chute cold:{text[:120]}"
+                logger.warning(last_err)
+                if cold_start_deadline is None:
+                    cold_start_deadline = monotonic() + max(
+                        0, min(30, settings.SCOREVISION_COLD_START_TIMEOUT_S)
+                    )
+            else:
+                last_err = f"HTTP {status}: {text[:300]}"
+                logger.error(last_err)
+                raise RuntimeError(last_err)
 
         except TimeoutError as e:
-            last_err = f"timeout:{e}"
+            if cold_start_deadline is None or monotonic() < cold_start_deadline:
+                last_err = f"timeout:{e}"
+                cold_start_response = cold_start_deadline is not None
             logger.error(last_err)
         except ClientError as e:
             last_err = f"client_error:{type(e).__name__}:{e}"
@@ -212,11 +227,22 @@ async def predict_sv(
             last_err = f"error:{type(e).__name__}:{e}"
             logger.error(last_err)
 
-        if attempt <= retries:
-            sleep_s = backoff * (2 ** (attempt - 1))
-            sleep_s *= 1.0 + uniform(-0.15, 0.15)
+        if not cold_start_response:
+            ordinary_failures += 1
+            if ordinary_failures > retries:
+                break
+
+        if cold_start_deadline is not None and monotonic() >= cold_start_deadline:
+            break
+
+        sleep_s = backoff * (2 ** min(attempt - 1, 4))
+        sleep_s *= 1.0 + uniform(-0.15, 0.15)
+        sleep_s = max(0.05, sleep_s)
+        if cold_start_deadline is not None:
+            sleep_s = min(sleep_s, cold_start_deadline - monotonic())
+        if sleep_s > 0:
             logger.info(f"waiting for {sleep_s}s")
-            await sleep(max(0.05, sleep_s))
+            await sleep(sleep_s)
 
     return SVPredictResult(
         success=False,
